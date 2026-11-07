@@ -1,9 +1,12 @@
 package com.missyao.claudeworkbench;
 
 import android.content.ActivityNotFoundException;
+import android.content.ClipData;
+import android.content.ContentValues;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Environment;
+import android.provider.MediaStore;
 import android.provider.Settings;
 import android.webkit.JavascriptInterface;
 import android.webkit.MimeTypeMap;
@@ -15,7 +18,9 @@ import org.json.JSONObject;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
@@ -42,6 +47,111 @@ public class DownloadsBridge {
 
     private File indexFile() {
         return new File(dir(), "_index.json");
+    }
+
+    private String mimeOf(String name) {
+        int dot = name.lastIndexOf('.');
+        String ext = dot >= 0 ? name.substring(dot + 1).toLowerCase() : "";
+        switch (ext) {
+            case "md": case "markdown": return "text/plain";
+            case "txt": case "log": case "ini": case "conf": return "text/plain";
+            case "json": return "text/plain";
+            case "yaml": case "yml": return "text/plain";
+            case "xml": return "text/plain";
+            case "csv": return "text/plain";
+            case "js": case "mjs": return "text/plain";
+            case "ts": return "text/plain";
+            case "py": return "text/plain";
+            case "java": return "text/plain";
+            case "sh": return "text/plain";
+            case "html": case "htm": return "text/html";
+            case "css": return "text/plain";
+            case "zip": return "application/zip";
+            case "7z": return "application/x-7z-compressed";
+            case "rar": return "application/vnd.rar";
+            case "apk": return "application/vnd.android.package-archive";
+            case "pdf": return "application/pdf";
+            case "png": return "image/png";
+            case "jpg": case "jpeg": return "image/jpeg";
+            case "gif": return "image/gif";
+            case "webp": return "image/webp";
+            case "mp4": return "video/mp4";
+            case "mp3": return "audio/mpeg";
+            default: break;
+        }
+        String mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext);
+        return mime != null ? mime : "application/octet-stream";
+    }
+
+    /**
+     * Android 10+ 额外导出一份到系统「下载/Claude工作台」。
+     * App 私有目录里的 content:// 很多查看器（尤其 Google 系）不肯读，
+     * 导出公共副本后文件管理器和查看器都能直接打开。
+     */
+    private String exportToPublic(File src, String name) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return "";
+        Uri uri = null;
+        try {
+            ContentValues values = new ContentValues();
+            values.put(MediaStore.MediaColumns.DISPLAY_NAME, name);
+            values.put(MediaStore.MediaColumns.MIME_TYPE, mimeOf(name));
+            values.put(MediaStore.MediaColumns.RELATIVE_PATH,
+                Environment.DIRECTORY_DOWNLOADS + "/Claude工作台");
+            values.put(MediaStore.MediaColumns.IS_PENDING, 1);
+            uri = activity.getContentResolver()
+                .insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
+            if (uri == null) return "";
+            try (InputStream in = new FileInputStream(src);
+                 OutputStream out = activity.getContentResolver().openOutputStream(uri)) {
+                if (out == null) throw new IOException("无法写入系统下载目录");
+                byte[] buf = new byte[65536];
+                int n;
+                while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+            }
+            ContentValues done = new ContentValues();
+            done.put(MediaStore.MediaColumns.IS_PENDING, 0);
+            activity.getContentResolver().update(uri, done, null, null);
+            return uri.toString();
+        } catch (Exception e) {
+            if (uri != null) {
+                try { activity.getContentResolver().delete(uri, null, null); } catch (Exception ignored) { }
+            }
+            return "";
+        }
+    }
+
+    private void deletePublic(String publicUri) {
+        if (publicUri == null || publicUri.isEmpty()) return;
+        try {
+            activity.getContentResolver().delete(Uri.parse(publicUri), null, null);
+        } catch (Exception ignored) {
+        }
+    }
+
+    private String findPublicByPath(String path) {
+        synchronized (lock) {
+            JSONArray arr = readIndex();
+            for (int i = 0; i < arr.length(); i++) {
+                JSONObject o = arr.optJSONObject(i);
+                if (o != null && norm(o.optString("path")).equals(norm(path))) {
+                    return o.optString("publicUri", "");
+                }
+            }
+        }
+        return "";
+    }
+
+    private String findPublicBySource(String source) {
+        synchronized (lock) {
+            JSONArray arr = readIndex();
+            for (int i = 0; i < arr.length(); i++) {
+                JSONObject o = arr.optJSONObject(i);
+                if (o != null && norm(o.optString("source")).equals(norm(source))) {
+                    return o.optString("publicUri", "");
+                }
+            }
+        }
+        return "";
     }
 
     private String readAll(File f) {
@@ -151,6 +261,10 @@ public class DownloadsBridge {
                 part.delete();
             }
 
+            String oldPublic = findPublicBySource(source);
+            String publicUri = exportToPublic(target, target.getName());
+            if (!publicUri.isEmpty()) deletePublic(oldPublic);
+
             synchronized (lock) {
                 JSONArray arr = readIndex();
                 JSONArray next = new JSONArray();
@@ -166,6 +280,7 @@ public class DownloadsBridge {
                 o.put("path", target.getAbsolutePath());
                 o.put("size", target.length());
                 o.put("mtime", System.currentTimeMillis());
+                if (!publicUri.isEmpty()) o.put("publicUri", publicUri);
                 next.put(o);
                 writeIndex(next);
             }
@@ -225,12 +340,21 @@ public class DownloadsBridge {
         String name = f.getName();
         int dot = name.lastIndexOf('.');
         String ext = dot >= 0 ? name.substring(dot + 1).toLowerCase() : "";
-        String mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext);
-        if (mime == null) mime = "application/octet-stream";
-        final String mimeType = mime;
+        final String mimeType = mimeOf(name);
         boolean isApk = "apk".equals(ext);
 
-        Uri uri = Uri.parse("content://com.missyao.claudeworkbench.files/" + Uri.encode(name));
+        String publicUri = findPublicByPath(path);
+        if (!publicUri.isEmpty()) {
+            try (android.os.ParcelFileDescriptor p =
+                     activity.getContentResolver().openFileDescriptor(Uri.parse(publicUri), "r")) {
+                if (p == null) publicUri = "";
+            } catch (Exception e) {
+                publicUri = "";
+            }
+        }
+        Uri uri = publicUri.isEmpty()
+            ? Uri.parse("content://com.missyao.claudeworkbench.files/" + Uri.encode(name))
+            : Uri.parse(publicUri);
         activity.runOnUiThread(() -> {
             // 安装 APK 需要本 App 有“安装未知应用”权限，否则系统安装器会直接拒绝
             if (isApk && Build.VERSION.SDK_INT >= 26
@@ -252,6 +376,7 @@ public class DownloadsBridge {
             android.content.Intent intent = new android.content.Intent(android.content.Intent.ACTION_VIEW);
             intent.setDataAndType(uri, mimeType);
             intent.addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            intent.setClipData(ClipData.newRawUri("", uri));
 
             try {
                 if (isApk) {
@@ -266,6 +391,7 @@ public class DownloadsBridge {
                             android.content.Intent.ACTION_INSTALL_PACKAGE);
                         installer.setData(uri);
                         installer.addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                        installer.setClipData(ClipData.newRawUri("", uri));
                         activity.startActivity(installer);
                         return;
                     } catch (Exception ignored) {
@@ -283,8 +409,10 @@ public class DownloadsBridge {
     public boolean delete(String path) {
         File f = checkedFile(path);
         if (f == null) return false;
+        String publicUri = findPublicByPath(path);
         boolean ok = f.delete();
         if (ok) {
+            deletePublic(publicUri);
             synchronized (lock) {
                 JSONArray arr = readIndex();
                 JSONArray next = new JSONArray();
