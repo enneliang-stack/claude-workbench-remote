@@ -1,0 +1,15 @@
+# Android 构建产物/本机签名，不提交
+android/app/build/
+android/app/gen/
+android/app/dex/
+android/app/ClaudeWorkbench.apk
+android/app/keystore.jks
+*.jks
+*.keystore
+
+# Tailscale 安装包太大，放本地/发布附件，不进 git
+apk/Tailscale-*.apk
+
+# 本机令牌/数据
+data/
+*.log

@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0b0d10">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="工作台">
+<meta name="format-detection" content="telephone=no">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/icon-180.png">
+<link rel="icon" href="/icon-192.png" type="image/png">
+<title>Claude Code 工作台</title>
+<link rel="stylesheet" href="/m.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- 对话列表 -->
+  <section id="listScreen" class="screen">
+    <header class="hd">
+      <div class="hd-left">
+        <span id="connDot" class="conn-dot" title="连接状态"></span>
+        <h1>工作台</h1>
+      </div>
+      <div class="hd-right">
+        <button id="balanceBtn" class="balance-btn" type="button" title="查看 DeepSeek 余额">¥ --</button>
+        <button id="refreshBtn" class="icon-btn" title="刷新">↻</button>
+        <button id="newBtn" class="new-btn" title="新对话">＋</button>
+      </div>
+    </header>
+    <div class="search-wrap">
+      <input id="searchInput" type="search" placeholder="搜索对话" autocomplete="off" spellcheck="false">
+      <button id="downloadsBtn" type="button" class="downloads-btn" title="已下载文件">⇩</button>
+    </div>
+    <div id="connBanner" class="banner" hidden>连接已断开，正在重连… <button id="reconnectBtn" type="button" class="banner-btn">重连</button></div>
+    <div id="httpsTip" class="banner tip" hidden>局域网网页版不能安装成 App；请用 Tailscale 的 HTTPS 地址打开后再点「安装应用」。</div>
+    <main id="convList" class="conv-list"></main>
+    <div id="installTip" class="install-tip" hidden>点浏览器菜单 →「添加到主屏幕」，下次可直接从桌面打开</div>
+  </section>
+
+  <!-- 对话详情 -->
+  <section id="chatScreen" class="screen" hidden>
+    <header class="hd chat-hd">
+      <button id="backBtn" class="icon-btn back" title="返回">‹</button>
+      <div class="chat-title-wrap">
+        <div id="chatTitle" class="chat-title">对话</div>
+        <div id="chatMeta" class="chat-meta"></div>
+      </div>
+      <button id="chatMenuBtn" class="icon-btn" title="对话设置">⋮</button>
+      <button id="stopBtn" class="icon-btn stop" title="停止" hidden>■</button>
+    </header>
+    <div id="connBanner2" class="banner" hidden>连接已断开，正在重连… <button id="reconnectBtn2" type="button" class="banner-btn">重连</button></div>
+    <main id="messages" class="messages"></main>
+    <div id="runProgress" class="run-progress" hidden><span class="txt"></span></div>
+    <div id="panels" class="panels"></div>
+    <form id="composer" class="composer">
+      <div id="pendingFiles" class="pending-files" hidden></div>
+      <div id="pendingRefs" class="pending-refs" hidden></div>
+      <div id="pendingImages" class="pending-images" hidden></div>
+      <div class="composer-row">
+        <button id="attachBtn" type="button" class="attach-btn" title="添加图片" aria-label="添加图片">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 11.5l-8.5 8.5a5 5 0 0 1-7-7l8.5-8.5a3.5 3.5 0 0 1 5 5l-8.5 8.5a2 2 0 0 1-3-3l7.5-7.5"/></svg>
+        </button>
+        <input id="fileInput" type="file" accept="image/*" multiple hidden>
+        <input id="fileAnyInput" type="file" multiple hidden>
+        <textarea id="input" rows="1" placeholder="发消息…" enterkeyhint="send" autocomplete="off"></textarea>
+        <button id="sendBtn" type="submit" class="send-btn">发送</button>
+      </div>
+    </form>
+  </section>
+
+  <!-- 新对话 -->
+  <div id="sheet" class="sheet" hidden>
+    <div class="sheet-card">
+      <header class="sheet-hd">
+        <b>新对话</b>
+        <button id="sheetClose" class="icon-btn" title="关闭">×</button>
+      </header>
+      <div class="sheet-note">选择一个工作文件夹</div>
+      <div id="folderList" class="folder-list"></div>
+      <div class="path-row">
+        <input id="pathInput" placeholder="或输入文件夹路径" autocomplete="off" spellcheck="false">
+        <button id="pathGo" class="mini-btn">打开</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="chatSettings" class="sheet" hidden>
+    <div class="sheet-card">
+      <header class="sheet-hd">
+        <b>对话设置</b>
+        <button id="settingsClose" class="icon-btn" title="关闭">×</button>
+      </header>
+      <div class="settings-body">
+        <label class="set-row"><span>标题</span><input id="setTitle" type="text" placeholder="自动生成" autocomplete="off"></label>
+        <label class="set-row"><span>权限模式</span><select id="setMode"></select></label>
+        <label class="set-row"><span>模型</span><select id="setModel"></select></label>
+        <label class="set-row"><span>推理档位</span><select id="setEffort"></select></label>
+        <button id="settingsSave" type="button" class="btn primary wide">保存</button>
+        <button id="convDelete" type="button" class="btn danger wide">删除这个对话</button>
+        <div class="sheet-note">修改在发送下一条消息时生效；删除不可恢复。</div>
+      </div>
+    </div>
+  </div>
+
+  <div id="confirmDelete" class="sheet confirm-sheet" hidden>
+    <div class="confirm-card">
+      <b>删除这个对话？</b>
+      <p>会话记录会从本机删除，无法恢复。</p>
+      <div class="confirm-actions">
+        <button id="cancelDelete" type="button" class="btn">取消</button>
+        <button id="confirmDeleteBtn" type="button" class="btn danger-solid">删除</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="confirmStop" class="sheet confirm-sheet" hidden>
+    <div class="confirm-card">
+      <b>停止这一轮？</b>
+      <p>正在执行的步骤会被中断，已经生成的内容会保留。</p>
+      <div class="confirm-actions">
+        <button id="cancelStop" type="button" class="btn">取消</button>
+        <button id="confirmStopBtn" type="button" class="btn danger-solid">停止</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="attachSheet" class="sheet" hidden>
+    <div class="sheet-card">
+      <header class="sheet-hd">
+        <b>添加</b>
+        <button id="attachClose" class="icon-btn" title="关闭">×</button>
+      </header>
+      <div class="attach-actions">
+        <button id="pickImage" type="button" class="attach-action">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+          <span>从相册选图片</span>
+        </button>
+        <button id="pickRef" type="button" class="attach-action">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1.5 1.5"/><path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1.5-1.5"/></svg>
+          <span>引用其它对话</span>
+        </button>
+        <button id="pickFile" type="button" class="attach-action">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
+          <span>上传文件（任意类型）</span>
+        </button>
+        <button id="pickPcFile" type="button" class="attach-action">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+          <span>引用电脑上的文件</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div id="refSheet" class="sheet" hidden>
+    <div class="sheet-card">
+      <header class="sheet-hd">
+        <b>引用其它对话</b>
+        <button id="refClose" class="icon-btn" title="关闭">×</button>
+      </header>
+      <div class="sheet-note" id="refCount">未选择（最多 3 个）</div>
+      <div class="ref-search"><input id="refSearch" type="search" placeholder="搜索对话" autocomplete="off" spellcheck="false"></div>
+      <div id="refList" class="ref-list"></div>
+      <div class="ref-actions">
+        <button id="refCancel" type="button" class="btn">取消</button>
+        <button id="refConfirm" type="button" class="btn primary">引用</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="pcFileSheet" class="sheet" hidden>
+    <div class="sheet-card">
+      <header class="sheet-hd">
+        <b>引用电脑上的文件</b>
+        <button id="pcFileClose" class="icon-btn" title="关闭">×</button>
+      </header>
+      <div class="pc-path">
+        <button id="pcDrives" type="button" class="file-btn">磁盘</button>
+        <button id="pcUp" type="button" class="file-btn">上一级</button>
+        <span id="pcPath" class="pc-path-text"></span>
+      </div>
+      <div id="pcList" class="pc-list"></div>
+      <div class="ref-actions">
+        <button id="pcCancel" type="button" class="btn">取消</button>
+        <button id="pcConfirm" type="button" class="btn primary">引用</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="downloadsSheet" class="sheet" hidden>
+    <div class="sheet-card">
+      <header class="sheet-hd">
+        <b>已下载文件</b>
+        <button id="downloadsClose" class="icon-btn" title="关闭">×</button>
+      </header>
+      <div class="sheet-note" id="downloadsNote">文件保存在手机 App 的下载目录</div>
+      <div id="downloadsList" class="downloads-list"></div>
+    </div>
+  </div>
+
+  <div id="imgViewer" class="img-viewer" hidden>
+    <img id="imgViewerImg" alt="查看图片">
+    <button id="imgViewerClose" type="button" aria-label="关闭">×</button>
+  </div>
+
+  <div id="toast" class="toast" hidden></div>
+</div>
+<script>window.__GUI_TOKEN__ = "__TOKEN__";</script>
+<script src="/ref-digest.js"></script>
+<script src="/m.js"></script>
+</body>
+</html>

@@ -1,0 +1,696 @@
+--- a/claude-gui/server.js
++++ b/claude-gui/server.js
+@@ -59,7 +59,51 @@
+   }
+ }
+ 
+-const TOKEN = crypto.randomBytes(16).toString('hex');
++// 令牌持久化：远程页面/手机书签在客户端重启后仍然有效。
++// 本地界面仍然通过 index.html 注入拿到它；非本机请求必须显式带令牌。
++function loadOrCreateToken() {
++  const file = path.join(DATA_DIR, 'gui-token.json');
++  try {
++    const data = JSON.parse(fs.readFileSync(file, 'utf8'));
++    const token = typeof data.token === 'string' ? data.token.trim() : '';
++    if (token.length >= 16) return token;
++  } catch { /* 首次运行或文件损坏时重新生成 */ }
++  const token = crypto.randomBytes(16).toString('hex');
++  try {
++    fs.mkdirSync(DATA_DIR, { recursive: true });
++    fs.writeFileSync(
++      file,
++      JSON.stringify({ token, createdAt: new Date().toISOString() }, null, 2) + '\n',
++      'utf8'
++    );
++  } catch (e) { console.error('[token] 保存失败：' + e.message); }
++  return token;
++}
++
++const TOKEN = loadOrCreateToken();
++
++// 远程访问开关：默认关闭，只监听 127.0.0.1。
++// 打开后监听 0.0.0.0，但非本机请求（静态文件也包含）一律要求令牌。
++const REMOTE_FILE = path.join(DATA_DIR, 'remote.json');
++const RUNTIME_FILE = path.join(DATA_DIR, 'runtime.json');
++
++function readRemoteEnabled() {
++  try {
++    const data = JSON.parse(fs.readFileSync(REMOTE_FILE, 'utf8'));
++    return data.enabled === true;
++  } catch {
++    return false;
++  }
++}
++
++function writeRemoteEnabled(enabled) {
++  try {
++    fs.mkdirSync(DATA_DIR, { recursive: true });
++    fs.writeFileSync(REMOTE_FILE, JSON.stringify({ enabled: !!enabled }, null, 2) + '\n', 'utf8');
++  } catch (e) { console.error('[remote] 保存配置失败：' + e.message); }
++}
++
++let remoteEnabled = readRemoteEnabled();
+ const PERMISSION_MODES = ['bypassPermissions', 'auto', 'acceptEdits', 'plan'];
+ // Claude Code 的推理档位（--effort）。空字符串表示不传，跟随 settings.json 的 CLAUDE_CODE_EFFORT_LEVEL
+ const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
+@@ -87,6 +131,7 @@
+ const MAX_IMAGE_B64 = 5 * 1024 * 1024;
+ const MAX_TOTAL_IMAGE_B64 = 24 * 1024 * 1024;
+ const MAX_CHAT_BODY = 32 * 1024 * 1024;
++const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
+ 
+ // ---------------------------------------------------------------- 状态
+ 
+@@ -190,7 +235,28 @@
+   '.png': 'image/png',
+   '.ico': 'image/x-icon',
+   '.woff2': 'font/woff2',
+-  '.json': 'application/json; charset=utf-8'
++  '.json': 'application/json; charset=utf-8',
++  '.webmanifest': 'application/manifest+json; charset=utf-8'
++};
++
++// 手机下载生成文件时用的常见类型
++const DOWNLOAD_MIME = {
++  '.apk': 'application/vnd.android.package-archive',
++  '.zip': 'application/zip',
++  '.pdf': 'application/pdf',
++  '.md': 'text/markdown; charset=utf-8',
++  '.txt': 'text/plain; charset=utf-8',
++  '.log': 'text/plain; charset=utf-8',
++  '.csv': 'text/csv; charset=utf-8',
++  '.doc': 'application/msword',
++  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
++  '.xls': 'application/vnd.ms-excel',
++  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
++  '.ppt': 'application/vnd.ms-powerpoint',
++  '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
++  '.mp4': 'video/mp4',
++  '.mp3': 'audio/mpeg',
++  '.wav': 'audio/wav'
+ };
+ 
+ function json(res, obj, code = 200) {
+@@ -227,6 +293,118 @@
+   });
+ }
+ 
++// ---------------------------------------------------------------- 远程访问
++
++function isLoopback(req) {
++  const addr = (req.socket && req.socket.remoteAddress) || '';
++  return addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1';
++}
++
++function cookieValue(req, name) {
++  const raw = req.headers.cookie || '';
++  for (const part of raw.split(';')) {
++    const i = part.indexOf('=');
++    if (i < 0) continue;
++    if (part.slice(0, i).trim() !== name) continue;
++    try { return decodeURIComponent(part.slice(i + 1).trim()); } catch { return ''; }
++  }
++  return '';
++}
++
++/** API / SSE / 静态资源共用的令牌来源：请求头、查询参数、登录后写入的 Cookie */
++function requestToken(req, url) {
++  return String(
++    req.headers['x-gui-token'] ||
++    (url && url.searchParams.get('token')) ||
++    cookieValue(req, 'gui_token') ||
++    ''
++  );
++}
++
++/** 本机所有可被手机访问的 IPv4 地址（Tailscale 的 100.x 单独标出来） */
++function localAddresses() {
++  const out = [];
++  for (const [name, list] of Object.entries(os.networkInterfaces())) {
++    for (const a of list || []) {
++      if (a.family !== 'IPv4' || a.internal) continue;
++      out.push({
++        name,
++        address: a.address,
++        tailscale: a.address.startsWith('100.'),
++        url: `http://${a.address}:${SERVER_PORT}/`
++      });
++    }
++  }
++  return out;
++}
++
++function remoteUrls() {
++  if (!remoteEnabled) return [];
++  const token = encodeURIComponent(TOKEN);
++  return localAddresses().map(a => ({
++    ...a,
++    // /m/index.html 在新旧版本的服务器上都能直接打开手机版
++    url: `${a.url}m/index.html?token=${token}`,
++    desktopUrl: `${a.url}?token=${token}`,
++    loginUrl: a.url
++  }));
++}
++
++function serveRemoteLogin(res, pathname, badToken) {
++  const action = pathname.startsWith('/m') ? pathname : pathname === '/remote' ? '/remote' : '/';
++  const html = `<!doctype html>
++<html lang="zh-CN"><head><meta charset="utf-8">
++<meta name="viewport" content="width=device-width,initial-scale=1">
++<meta name="color-scheme" content="dark">
++<title>工作台 · 远程访问</title>
++<style>
++  :root { color-scheme: dark; }
++  body { margin:0; min-height:100vh; display:grid; place-items:center; background:#0c0e11;
++         color:#e8e6e3; font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif; }
++  form { width:min(92vw,360px); background:#14171c; border:1px solid #262b33; border-radius:14px;
++         padding:24px; box-shadow:0 18px 50px rgba(0,0,0,.45); }
++  h1 { font-size:17px; margin:0 0 6px; }
++  p { margin:0 0 16px; color:#9aa3ad; font-size:13px; }
++  .err { color:#e0766b; margin:0 0 12px; font-size:13px; }
++  input { width:100%; box-sizing:border-box; padding:11px 12px; border-radius:9px; border:1px solid #303743;
++          background:#0c0e11; color:#e8e6e3; font:inherit; }
++  button { width:100%; margin-top:12px; padding:11px 12px; border:0; border-radius:9px; cursor:pointer;
++           background:#e08a5f; color:#1b120c; font:600 15px/1 inherit; }
++  code { color:#c9d1d9; word-break:break-all; }
++</style></head>
++<body><form method="get" action="${action}">
++  <h1>远程访问工作台</h1>
++  <p>输入电脑上 <code>claude-gui\\data\\gui-token.json</code> 里的令牌。</p>
++  ${badToken ? '<p class="err">令牌不正确，请重新输入。</p>' : ''}
++  <input name="token" type="password" autocomplete="current-password" placeholder="访问令牌" autofocus>
++  <button type="submit">进入</button>
++</form></body></html>`;
++  res.writeHead(200, {
++    'content-type': 'text/html; charset=utf-8',
++    'cache-control': 'no-store',
++    'x-frame-options': 'DENY',
++    'referrer-policy': 'no-referrer'
++  });
++  res.end(html);
++}
++
++// 桌宠 sidecar 只监听 127.0.0.1，手机访问不到；由工作台服务代理余额查询
++const PET_PORTS = Array.from({ length: 10 }, (_, i) => 4780 + i);
++
++async function findPetSidecar() {
++  for (const port of PET_PORTS) {
++    try {
++      const res = await fetch(`http://127.0.0.1:${port}/api/health`, {
++        signal: AbortSignal.timeout(400)
++      });
++      if (!res.ok) continue;
++      const data = await res.json();
++      if (data && data.app === 'dsh-pet-bridge') return `http://127.0.0.1:${port}`;
++    } catch { /* 试下一个端口 */ }
++  }
++  return '';
++}
++
+ async function readdirSafe(dir) {
+   try {
+     return await fsp.readdir(dir, { withFileTypes: true });
+@@ -1052,15 +1230,43 @@
+   return out;
+ }
+ 
++// 解析结果按文件 mtime/size 缓存：手机分页时不用每次重新解析整份长转录
++const transcriptCache = new Map();
++const TRANSCRIPT_CACHE_MAX = 4;
++
+ async function readTranscript(file) {
+-  const text = await fsp.readFile(file, 'utf8');
+-  const parsed = parseTranscript(text);
++  let stat = null;
++  try { stat = await fsp.stat(file); } catch { /* 文件可能刚被删除 */ }
++
++  let parsed = null;
++  if (stat) {
++    const cached = transcriptCache.get(file);
++    if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
++      parsed = cached.parsed;
++      transcriptCache.delete(file);
++      transcriptCache.set(file, cached);
++    }
++  }
++
++  if (!parsed) {
++    const text = await fsp.readFile(file, 'utf8');
++    parsed = parseTranscript(text);
++    if (stat) {
++      transcriptCache.set(file, { mtimeMs: stat.mtimeMs, size: stat.size, parsed });
++      while (transcriptCache.size > TRANSCRIPT_CACHE_MAX) {
++        transcriptCache.delete(transcriptCache.keys().next().value);
++      }
++    }
++  }
++
+   const all = loadTurnMeta();
+   for (const m of parsed.messages) {
+     if (m.role !== 'assistant') continue;
+     const rec = all[m.id];
+     if (rec) {
+       m.meta = { duration: rec.duration, costUsd: rec.costUsd, usage: rec.usage, ts: rec.ts };
++    } else {
++      delete m.meta;
+     }
+   }
+   return {
+@@ -1070,6 +1276,46 @@
+   };
+ }
+ 
++function trimText(v, n) {
++  return typeof v === 'string' && v.length > n ? v.slice(0, n) + '\n…' : v;
++}
++
++function lightInput(input) {
++  if (!input || typeof input !== 'object') return input;
++  const out = { ...input };
++  for (const k of ['content', 'new_string', 'old_string', 'prompt', 'task', 'text', 'description']) {
++    if (typeof out[k] === 'string' && out[k].length > 2000) {
++      out[k] = out[k].slice(0, 2000) + '\n…';
++    }
++  }
++  if (Array.isArray(out.edits)) {
++    out.edits = out.edits.map(e => e && typeof e === 'object'
++      ? { ...e, old_string: trimText(e.old_string, 2000), new_string: trimText(e.new_string, 2000) }
++      : e);
++  }
++  return out;
++}
++
++/** 手机端只需要看摘要：截断工具结果/思考/大段输入，减少长对话加载量 */
++function lightenMessages(messages) {
++  return messages.map(m => {
++    if (!m || m.role !== 'assistant' || !Array.isArray(m.blocks)) return m;
++    return {
++      ...m,
++      blocks: m.blocks.map(b => {
++        if (!b) return b;
++        if (b.type === 'tool_use') {
++          return { ...b, input: lightInput(b.input), result: trimText(b.result, 2000) };
++        }
++        if (b.type === 'thinking') {
++          return { ...b, thinking: trimText(b.thinking, 4000), text: trimText(b.text, 4000) };
++        }
++        return b;
++      })
++    };
++  });
++}
++
+ // ---------------------------------------------------------------- 技能 / MCP 管理
+ 
+ const CLAUDE_DIR = path.join(HOME, '.claude');
+@@ -2453,7 +2699,7 @@
+   ].filter(q => fs.existsSync(q.path));
+ }
+ 
+-async function browseDir(dir) {
++async function browseDir(dir, includeFiles = false) {
+   const target = dir ? path.resolve(dir) : '';
+   const quick = quickLinks();
+   if (!target) {
+@@ -2473,11 +2719,20 @@
+   const parent = path.dirname(target);
+   const entries = [];
+   for (const d of await readdirSafe(target)) {
+-    if (!d.isDirectory()) continue;
+     if (d.name === '$RECYCLE.BIN' || d.name === 'System Volume Information') continue;
+-    entries.push({ name: d.name, path: path.join(target, d.name), isDir: true, hidden: d.name.startsWith('.') });
++    const full = path.join(target, d.name);
++    if (d.isDirectory()) {
++      entries.push({ name: d.name, path: full, isDir: true, hidden: d.name.startsWith('.') });
++    } else if (includeFiles && d.isFile()) {
++      let size = 0;
++      try { size = (await fsp.stat(full)).size; } catch { /* ignore */ }
++      entries.push({ name: d.name, path: full, isDir: false, size, hidden: d.name.startsWith('.') });
++    }
+   }
+-  entries.sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
++  entries.sort((a, b) => {
++    if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
++    return a.name.localeCompare(b.name, 'zh-CN');
++  });
+ 
+   return {
+     path: target,
+@@ -2646,9 +2901,173 @@
+ 
+   if (p === '/api/ping') return json(res, { app: 'claude-gui', port: SERVER_PORT });
+ 
+-  const token = req.headers['x-gui-token'] || url.searchParams.get('token');
++  const token = requestToken(req, url);
+   if (token !== TOKEN) return json(res, { error: '未授权' }, 401);
+ 
++  if (p === '/api/upload' && req.method === 'POST') {
++    const id = url.searchParams.get('id') || '';
++    const conv = lookupConv(id);
++    if (!conv) return json(res, { error: '会话不存在' }, 404);
++    let cwdStat;
++    try { cwdStat = await fsp.stat(conv.cwd); } catch { return json(res, { error: '对话文件夹不存在' }, 400); }
++    if (!cwdStat.isDirectory()) return json(res, { error: '对话文件夹不存在' }, 400);
++
++    const len = Number(req.headers['content-length'] || 0);
++    if (len > MAX_UPLOAD_BYTES) return json(res, { error: '文件超过 100MB' }, 413);
++
++    let rawName = String(req.headers['x-file-name'] || '');
++    try { rawName = decodeURIComponent(rawName); } catch { /* 保持原样 */ }
++    const safeName = (path.basename(rawName).replace(/[\\/:*?"<>|\r\n]/g, '_').trim() || 'upload').slice(0, 120);
++
++    const dir = path.join(conv.cwd, '.workbench-uploads');
++    try {
++      await fsp.mkdir(dir, { recursive: true });
++    } catch (e) {
++      return json(res, { error: '无法创建上传目录：' + e.message }, 500);
++    }
++
++    const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
++    const ext = path.extname(safeName);
++    const stem = safeName.slice(0, safeName.length - ext.length) || 'upload';
++    let target = path.join(dir, `${stamp}-${stem}${ext}`);
++    for (let i = 2; fs.existsSync(target); i++) {
++      target = path.join(dir, `${stamp}-${stem}-${i}${ext}`);
++    }
++    const part = target + '.part';
++
++    let size = 0;
++    let over = false;
++    try {
++      await new Promise((resolve, reject) => {
++        const ws = fs.createWriteStream(part);
++        req.on('data', chunk => {
++          size += chunk.length;
++          if (size > MAX_UPLOAD_BYTES && !over) {
++            over = true;
++            ws.destroy();
++          }
++        });
++        req.on('error', reject);
++        ws.on('error', reject);
++        ws.on('finish', resolve);
++        req.pipe(ws);
++      });
++    } catch (e) {
++      try { await fsp.unlink(part); } catch { /* ignore */ }
++      if (over) return json(res, { error: '文件超过 100MB' }, 413);
++      return json(res, { error: '上传失败：' + e.message }, 500);
++    }
++
++    if (over) {
++      try { await fsp.unlink(part); } catch { /* ignore */ }
++      return json(res, { error: '文件超过 100MB' }, 413);
++    }
++
++    try {
++      await fsp.rename(part, target);
++      const st = await fsp.stat(target);
++      return json(res, {
++        ok: true,
++        path: target,
++        name: safeName,
++        storedName: path.basename(target),
++        size: st.size
++      });
++    } catch (e) {
++      try { await fsp.unlink(part); } catch { /* ignore */ }
++      return json(res, { error: '保存失败：' + e.message }, 500);
++    }
++  }
++
++  if (p === '/api/download' && req.method === 'GET') {
++    const id = url.searchParams.get('id') || '';
++    const rawPath = url.searchParams.get('path') || '';
++    const conv = lookupConv(id);
++    if (!conv) return json(res, { error: '会话不存在' }, 404);
++
++    let targetReal;
++    let stat;
++    try {
++      const cwdReal = fs.realpathSync(conv.cwd);
++      const target = path.resolve(conv.cwd, rawPath);
++      targetReal = fs.realpathSync(target);
++      const rel = path.relative(cwdReal, targetReal);
++      if (rel.startsWith('..') || path.isAbsolute(rel)) {
++        return json(res, { error: '只能下载当前对话目录内的文件' }, 403);
++      }
++      stat = fs.statSync(targetReal);
++      if (!stat.isFile()) return json(res, { error: '不是文件' }, 400);
++    } catch {
++      return json(res, { error: '文件不存在' }, 404);
++    }
++
++    const name = path.basename(targetReal);
++    const ext = path.extname(targetReal).toLowerCase();
++    const type = MIME[ext] || DOWNLOAD_MIME[ext] || 'application/octet-stream';
++    const fallback = name.replace(/[^\x20-\x7E]/g, '_').replace(/["\\]/g, '_');
++    res.writeHead(200, {
++      'content-type': type,
++      'content-length': stat.size,
++      'content-disposition':
++        `attachment; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(name)}`,
++      'cache-control': 'no-store',
++      'x-content-type-options': 'nosniff'
++    });
++    const stream = fs.createReadStream(targetReal);
++    stream.on('error', () => { try { res.destroy(); } catch { /* ignore */ } });
++    stream.pipe(res);
++    return;
++  }
++
++  if (p === '/api/balance' && req.method === 'GET') {
++    const petBase = await findPetSidecar();
++    if (!petBase) return json(res, { ok: false, error: '桌宠服务未启动' }, 503);
++    try {
++      // 页面首屏用缓存（不触发 DeepSeek 请求），只有点余额刷新时才 forced
++      const refresh = url.searchParams.get('refresh') === '1' ? '1' : '0';
++      const r = await fetch(petBase + '/api/balance?refresh=' + refresh + '&bubble=0', {
++        signal: AbortSignal.timeout(15000)
++      });
++      const data = await r.json().catch(() => ({}));
++      return json(res, data, r.ok ? 200 : 502);
++    } catch (e) {
++      return json(res, { ok: false, error: e.message || '查询余额失败' }, 502);
++    }
++  }
++
++  if (p === '/api/remote' && req.method === 'GET') {
++    return json(res, {
++      enabled: remoteEnabled,
++      port: SERVER_PORT,
++      loopback: isLoopback(req),
++      urls: remoteUrls()
++    });
++  }
++
++  if (p === '/api/remote' && req.method === 'POST') {
++    let body;
++    try { body = await readJson(req); } catch (e) { return json(res, { error: e.message }, 400); }
++    const enabled = !!body.enabled;
++    const changed = enabled !== remoteEnabled;
++    if (changed) {
++      remoteEnabled = enabled;
++      writeRemoteEnabled(enabled);
++    }
++    // 先回包，再重绑端口：closeAllConnections() 会把当前这条请求也断掉。
++    const result = { ok: true, enabled: remoteEnabled, changed, urls: remoteUrls() };
++    json(res, result);
++    if (changed) {
++      setTimeout(() => {
++        applyRemoteBind(remoteEnabled).catch(err => {
++          console.error('[remote] 切换监听地址失败：' + err.message);
++          remoteEnabled = !remoteEnabled;
++          writeRemoteEnabled(remoteEnabled);
++        });
++      }, 150);
++    }
++    return;
++  }
++
+   if (p === '/api/browser/open' && req.method === 'POST') {
+     try {
+       const result = await openChromeBrowser();
+@@ -2780,6 +3199,27 @@
+         compacted = r.compacted;
+       } catch (e) { console.error('[read]', e.message); }
+     }
++
++    // 手机端分页：默认不传 limit 保持电脑端行为（返回全部）。
++    // 手机传 limit + light，只返回最后一页并截断工具大字段。
++    const light = url.searchParams.get('light') === '1';
++    const limitParam = url.searchParams.get('limit');
++    if (light) messages = lightenMessages(messages);
++    const total = messages.length;
++    let start = 0;
++    let end = total;
++    let hasMore = false;
++    if (!handoff && limitParam != null) {
++      const limit = Math.max(1, Math.min(100, Number(limitParam) || 30));
++      const beforeRaw = url.searchParams.get('before');
++      if (beforeRaw != null && beforeRaw !== '') {
++        end = Math.max(0, Math.min(total, Number(beforeRaw) || 0));
++      }
++      start = Math.max(0, end - limit);
++      hasMore = start > 0;
++      messages = messages.slice(start, end);
++    }
++
+     const s = state.conversations[id];
+     const liveRunner = runners.get(id);
+     const running = !!(liveRunner && liveRunner.busy);
+@@ -2792,6 +3232,10 @@
+       effort: conv.effort,
+       permissionMode: conv.permissionMode,
+       messages,
++      start,
++      end,
++      total,
++      hasMore,
+       contextTokens,
+       compacted,
+       running,
+@@ -2981,7 +3425,7 @@
+   if (p === '/api/fs' && req.method === 'GET') {
+     try {
+       const dir = url.searchParams.get('path') || '';
+-      return json(res, await browseDir(dir));
++      return json(res, await browseDir(dir, url.searchParams.get('files') === '1'));
+     } catch (e) {
+       return json(res, { error: e.message }, 400);
+     }
+@@ -3047,8 +3491,24 @@
+   return json(res, { error: '未知接口' }, 404);
+ }
+ 
+-async function serveStatic(req, res, pathname) {
+-  let rel = pathname === '/' ? '/index.html' : pathname;
++async function serveStatic(req, res, url) {
++  const pathname = url.pathname;
++  const loopback = isLoopback(req);
++  const isPage = pathname === '/' || pathname === '/m' || pathname === '/m/index.html' ||
++    pathname === '/remote' || pathname === '/index.html' || pathname === '/m.html';
++  // 手机/平板（非本机）默认进移动版；桌面端仍然用完整工作台
++  const isMobilePage = pathname === '/m' || pathname === '/m/index.html' || pathname === '/remote' ||
++    (!loopback && (pathname === '/' || pathname === '/index.html'));
++  const rel = isMobilePage ? '/m.html' : (isPage ? '/index.html' : pathname);
++
++  // 非本机请求：静态资源也要令牌，否则局域网里任何人都能拿到注入了令牌的页面
++  if (!loopback && requestToken(req, url) !== TOKEN) {
++    if (isPage) return serveRemoteLogin(res, pathname, !!url.searchParams.get('token'));
++    res.writeHead(401, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
++    res.end('需要访问令牌');
++    return;
++  }
++
+   const file = path.join(PUBLIC_DIR, decodeURIComponent(rel));
+   if (file !== PUBLIC_DIR && !file.startsWith(PUBLIC_DIR + path.sep)) {
+     res.writeHead(403); res.end('Forbidden'); return;
+@@ -3057,14 +3517,22 @@
+   let data;
+   try { data = await fsp.readFile(file); } catch { res.writeHead(404); res.end('Not Found'); return; }
+ 
+-  if (path.basename(file) === 'index.html') {
+-    data = Buffer.from(data.toString('utf8').replace('__TOKEN__', TOKEN), 'utf8');
++  // 页面和 PWA manifest 都需要令牌：只有通过鉴权的请求才会走到这里
++  const base = path.basename(file);
++  if (base === 'index.html' || base === 'm.html' || base === 'manifest.webmanifest') {
++    const text = data.toString('utf8').replace(/__TOKEN__/g, TOKEN);
++    data = Buffer.from(text, 'utf8');
+   }
+ 
+-  res.writeHead(200, {
++  const headers = {
+     'content-type': MIME[path.extname(file).toLowerCase()] || 'application/octet-stream',
+     'cache-control': 'no-cache'
+-  });
++  };
++  // 页面用 ?token= 打开一次后写入 Cookie，后续 app.js / styles.css / manifest 由浏览器自动带上
++  if (!loopback && url.searchParams.get('token')) {
++    headers['set-cookie'] = `gui_token=${encodeURIComponent(TOKEN)}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax`;
++  }
++  res.writeHead(200, headers);
+   res.end(data);
+ }
+ 
+@@ -3073,7 +3541,7 @@
+   try {
+     if (url.pathname.startsWith('/api/')) return await handleApi(req, res, url);
+     if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405); res.end(); return; }
+-    return await serveStatic(req, res, url.pathname);
++    return await serveStatic(req, res, url);
+   } catch (e) {
+     console.error('[http]', e);
+     if (!res.headersSent) json(res, { error: e.message }, 500);
+@@ -3081,6 +3549,42 @@
+   }
+ });
+ 
++function writeRuntime() {
++  try {
++    fs.writeFileSync(RUNTIME_FILE, JSON.stringify({
++      pid: process.pid,
++      port: SERVER_PORT,
++      host: remoteEnabled ? '0.0.0.0' : '127.0.0.1',
++      remote: remoteEnabled,
++      updatedAt: new Date().toISOString()
++    }, null, 2) + '\n', 'utf8');
++  } catch { /* 仅用于给脚本读端口，写失败不影响服务 */ }
++}
++
++let rebindChain = Promise.resolve();
++
++/** 运行时切换监听地址：远程开 → 0.0.0.0，关 → 127.0.0.1 */
++function applyRemoteBind(enabled) {
++  const host = enabled ? '0.0.0.0' : '127.0.0.1';
++  const run = async () => {
++    await new Promise(resolve => {
++      try { server.close(() => resolve()); } catch { resolve(); }
++      // SSE / keep-alive 连接会拖住 close 回调，必须主动断掉；界面会自动重连
++      if (typeof server.closeAllConnections === 'function') server.closeAllConnections();
++    });
++    await new Promise((resolve, reject) => {
++      const onError = err => { server.removeListener('listening', onListen); reject(err); };
++      const onListen = () => { server.removeListener('error', onError); resolve(); };
++      server.once('error', onError);
++      server.once('listening', onListen);
++      server.listen(SERVER_PORT, host);
++    });
++    writeRuntime();
++  };
++  rebindChain = rebindChain.then(run, run);
++  return rebindChain;
++}
++
+ // ---------------------------------------------------------------- 启动
+ 
+ let SERVER_PORT = Number(process.env.PORT || 4711);
+@@ -3229,15 +3733,27 @@
+       const onListen = () => { server.removeListener('error', onError); resolve('ok'); };
+       server.once('error', onError);
+       server.once('listening', onListen);
+-      server.listen(port, '127.0.0.1');
++      server.listen(port, remoteEnabled ? '0.0.0.0' : '127.0.0.1');
+     });
+ 
+     if (ok === 'ok') {
+       SERVER_PORT = port;
+       const url = `http://127.0.0.1:${port}/`;
++      writeRuntime();
+       console.log('');
+       console.log('  Claude Code 工作台已启动');
+       console.log(`  ${url}`);
++      if (remoteEnabled) {
++        const urls = remoteUrls();
++        if (urls.length) {
++          console.log('');
++          console.log('  远程访问已开启（手机与本机需在同一局域网或 Tailscale）：');
++          for (const u of urls) console.log(`  ${u.url}`);
++        } else {
++          console.log('');
++          console.log('  远程访问已开启，但没有检测到可用的局域网 IPv4 地址。');
++        }
++      }
+       console.log('');
+       console.log('  关闭这个窗口即可停止服务。');
+       console.log('');
