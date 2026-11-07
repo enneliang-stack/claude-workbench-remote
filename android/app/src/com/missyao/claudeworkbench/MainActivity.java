@@ -104,7 +104,7 @@ public class MainActivity extends Activity {
             public void onPageFinished(WebView view, String url) {
                 // 只有真正加载出工作台页面才算成功；WebView 的黑色错误页不会取消超时
                 view.evaluateJavascript(
-                    "(function(){return !!(document.getElementById('listScreen')||document.getElementById('chatScreen')||document.getElementById('app'));})()",
+                    "(function(){return !!(document.getElementById('listScreen')||document.getElementById('chatScreen')||document.getElementById('app')||document.querySelector('input[name=token]'));})()",
                     value -> {
                         if ("true".equals(value)) {
                             cancelLoadTimeout();
