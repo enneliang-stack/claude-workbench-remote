@@ -13,3 +13,5 @@ apk/Tailscale-*.apk
 # 本机令牌/数据
 data/
 *.log
+
+android/app/*.idsig

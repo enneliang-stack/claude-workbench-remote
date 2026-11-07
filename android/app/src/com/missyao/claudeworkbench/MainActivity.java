@@ -315,8 +315,8 @@ public class MainActivity extends Activity {
                 input.setError("地址格式不对");
                 return;
             }
-            // 只填 host 时补上手机版路径；已有 /m/ 的原样使用
-            if (!raw.contains("/m/")) {
+            // 只填 host 时补上手机版路径；已有 /m/ 或 /m? 的原样使用
+            if (!raw.contains("/m/") && !raw.contains("/m?")) {
                 String base = raw;
                 String query = "";
                 int q = raw.indexOf('?');
@@ -397,14 +397,15 @@ public class MainActivity extends Activity {
         errorView.setVisibility(View.VISIBLE);
     }
 
-    /** WebView 的黑色错误页不会触发 onPageFinished 成功判断，用超时兜底继续回退 */
+    /** WebView 的黑色错误页不会触发 onPageFinished 成功判断，用超时兜底显示错误页 */
     private void startLoadTimeout() {
         cancelLoadTimeout();
         loadTimeout = () -> {
             loadTimeout = null;
             tryNextUrl();
         };
-        handler.postDelayed(loadTimeout, 7000);
+        // 通用版只有一个地址，手机流量/Tailscale 中转时可能比较慢，给 20 秒
+        handler.postDelayed(loadTimeout, 20000);
     }
 
     private void cancelLoadTimeout() {
