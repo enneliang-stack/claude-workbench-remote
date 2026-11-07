@@ -29,6 +29,18 @@ apk/                       通用版 APK、Tailscale APK、安装说明
 
 前提：已经装好 Claude 工作台客户端 **1.1.23**，并且客户端能正常启动。
 
+客户端本体（不含远程功能）从这里装：
+
+- 全量一键部署 **1.1.21**（646 MB，包含 Python 3.13、PowerShell 7.6.9、jq、Electron；
+  安装时自动配置环境）：
+  <https://github.com/enneliang-stack/claude-workbench-update/releases/tag/v1.1.21>
+  - 国内加速直链：
+    <https://ghfast.top/https://github.com/enneliang-stack/claude-workbench-update/releases/download/v1.1.21/ClaudeWorkbench-Setup-1.1.21.exe>
+- 装完后用客户端的「更新」按钮升级到 **1.1.23**（或者用 1.1.23 离线更新包）。
+  1.1.23 是客户端增量更新（约 4.3 MB，不含 Python/PowerShell/jq）；
+  新用户就是「1.1.21 全量包 → 1.1.23 更新」。
+- 客户端 1.1.23 装好后再运行下面的远程安装器。
+
 1. 把整个仓库下载/解压到任意目录（不要只拿 `server.js`）。
 2. 双击 `install\一键安装手机远程控制.cmd`。
    - 安装器会自动找 `E:\AI_Claude\claude-gui`、用户目录下的 `AI_Claude\claude-gui` 等常见位置；
