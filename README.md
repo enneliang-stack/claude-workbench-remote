@@ -6,6 +6,14 @@
 需要的人可以单独下载这个仓库，运行一次安装器，把远程功能叠加到自己的
 Claude 工作台客户端上；主客户端以后升级不会自动带这套功能，也不会把它发给朋友。
 
+## 下载
+
+- GitHub 仓库：<https://github.com/enneliang-stack/claude-workbench-remote>
+- 国内加速整包（推荐发给国内用户）：
+  <https://ghfast.top/https://github.com/enneliang-stack/claude-workbench-remote/archive/refs/heads/main.zip>
+- 通用版 APK 直链（国内加速）：
+  <https://ghfast.top/https://raw.githubusercontent.com/enneliang-stack/claude-workbench-remote/main/apk/Claude%E5%B7%A5%E4%BD%9C%E5%8F%B0-%E9%80%9A%E7%94%A8%E7%89%88-1.0.11.apk>
+
 ## 目录
 
 ```
