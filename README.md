@@ -18,8 +18,8 @@ Claude 工作台客户端上；主客户端以后升级不会自动带这套功�
 
 ```
 overlay/claude-gui/        手机页、图标、远程开关（复制到客户端目录）
-server/                    server-1.1.23-remote.js（适配 1.1.23 的远程版服务端）
-patch/                     server-1.1.23-remote.patch（干净版 → 远程版，供维护者参考）
+server/                    server-1.1.28-remote.js（适配 1.1.28 的远程版服务端）
+patch/                     server-1.1.28-remote.patch（干净版 → 远程版，供维护者参考）
 install/                   一键安装器
 android/                   Android 壳源码（通用版，不含任何个人令牌）
 apk/                       通用版 APK、Tailscale APK、安装说明
@@ -27,7 +27,7 @@ apk/                       通用版 APK、Tailscale APK、安装说明
 
 ## 安装（其他用户）
 
-前提：已经装好 Claude 工作台客户端 **1.1.23**，并且客户端能正常启动。
+前提：已经装好 Claude 工作台客户端 **1.1.28**，并且客户端能正常启动。
 
 客户端本体（不含远程功能）从这里装：
 
@@ -36,17 +36,17 @@ apk/                       通用版 APK、Tailscale APK、安装说明
   <https://github.com/enneliang-stack/claude-workbench-update/releases/tag/v1.1.21>
   - 国内加速直链：
     <https://ghfast.top/https://github.com/enneliang-stack/claude-workbench-update/releases/download/v1.1.21/ClaudeWorkbench-Setup-1.1.21.exe>
-- 装完后用客户端的「更新」按钮升级到 **1.1.23**（或者用 1.1.23 离线更新包）。
-  1.1.23 是客户端增量更新（约 4.3 MB，不含 Python/PowerShell/jq）；
-  新用户就是「1.1.21 全量包 → 1.1.23 更新」。
-- 客户端 1.1.23 装好后再运行下面的远程安装器。
+- 装完后用客户端的「更新」按钮升级到 **1.1.28**（或者用 1.1.28 离线更新包）。
+  1.1.28 是客户端增量更新（约 4.5 MB，不含 Python/PowerShell/jq）；
+  新用户就是「1.1.21 全量包 → 1.1.28 更新」。
+- 客户端 1.1.28 装好后再运行下面的远程安装器。
 
 1. 把整个仓库下载/解压到任意目录（不要只拿 `server.js`）。
 2. 双击 `install\一键安装手机远程控制.cmd`。
    - 安装器会自动找 `E:\AI_Claude\claude-gui`、用户目录下的 `AI_Claude\claude-gui` 等常见位置；
    - 找不到时会提示输入客户端目录；
    - 安装前会备份 `server.js` 和会被覆盖的手机页到 `data\backups\remote-install-*`；
-   - 如果客户端版本不是 1.1.23，会拒绝安装（避免把不匹配的服务端换上去）。
+   - 如果客户端版本不是 1.1.28，会拒绝安装（避免把不匹配的服务端换上去）。
 3. 从托盘退出工作台，再双击客户端的 `启动界面.cmd` 重新打开。
 4. 双击客户端的 `远程访问.cmd`，窗口会打印手机地址（带 token）。
 5. 手机安装 `apk\Claude工作台-通用版-1.0.11.apk`；第一次打开把第 4 步的地址粘贴进去。

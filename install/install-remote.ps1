@@ -1,4 +1,4 @@
-﻿# 一键安装手机远程控制（工作台客户端 1.1.23 适配版）
+﻿# 一键安装手机远程控制（工作台客户端 1.1.28 适配版）
 # 只改客户端目录里的 server.js 和手机页/远程工具，不动 data、对话记录和 API Key。
 param(
   [string]$AppDir = '',
@@ -9,8 +9,8 @@ $ErrorActionPreference = 'Stop'
 
 $repo = Split-Path -Parent $PSScriptRoot
 $overlay = Join-Path $repo 'overlay\claude-gui'
-$serverFile = Join-Path $repo 'server\server-1.1.23-remote.js'
-$expectedVersion = '1.1.23'
+$serverFile = Join-Path $repo 'server\server-1.1.28-remote.js'
+$expectedVersion = '1.1.28'
 
 if (-not (Test-Path -LiteralPath $serverFile)) { throw "找不到远程版 server.js：$serverFile" }
 if (-not (Test-Path -LiteralPath $overlay)) { throw "找不到 overlay 目录：$overlay" }
