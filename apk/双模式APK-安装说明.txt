@@ -1,18 +1,26 @@
 Claude 工作台 · 双模式 APK（电脑远程 + 手机本地 + 无障碍手机控制）
 ====================================================================
 
-文件：Claude工作台-双模式-2.4.16-内置环境.apk（约 194 MB）
+文件：Claude工作台-双模式-2.4.17-内置环境.apk（约 194 MB）
 包名：com.missyao.claudeworkbench
-版本：2.4.16（versionCode 57）
+版本：2.4.17（versionCode 58）
 最低系统：Android 8.0（API 26）
 架构：仅 arm64（近几年的 64 位安卓手机）
 签名：和旧版同一签名，可以直接覆盖安装；
       手机上原来的电脑端地址会保留。
-SHA-256：2a6ba4c3cc36b169eb8ac241faa1327dc7d933d309d35a4d7268812865812bfc
+SHA-256：92b89a3ae7833a2429416a08e48d42eacb7981328eacf0da51596f7f0f4721f1
 
-精简更新包（仅 App，适合已装环境）：Claude工作台-双模式-2.4.16-精简测试.apk
-大小约 8.1 MB，SHA-256：882721255ca9d73f4eeb58289f177e7dd7a0734a7146db435227749aa30b483c
+精简更新包（仅 App，适合已装环境）：Claude工作台-双模式-2.4.17-精简测试.apk
+大小约 8.1 MB，SHA-256：9393e6be95a36d53ae698f0ce6ecb7d6ac9c2865f09516806674a23dfefca007
 发布到 GitHub Release 时分别命名为 ClaudeWorkbench-full.apk / ClaudeWorkbench-slim.apk。
+
+2.4.17 隐私修正
+---------------
+- 移除 2.4.16 安装包连接电脑示例里的真实局域网 IP 和 Tailscale IP，
+  改成 192.168.x.x / 100.x.x.x 占位。
+- 已确认安装包内不含 API Key、Tailscale auth key、实际访问 token、对话记录；
+  手机端环境、离线 Alpine/Node/Claude 包均为通用内容。
+- 保留 2.4.16 全部功能；已装环境用户可用精简包更新，约 8 MB。
 
 2.4.16 改进
 -----------

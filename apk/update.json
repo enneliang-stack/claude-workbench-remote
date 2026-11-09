@@ -1,9 +1,9 @@
 {
-  "versionCode": 57,
-  "versionName": "2.4.16",
+  "versionCode": 58,
+  "versionName": "2.4.17",
   "apk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/latest/download/ClaudeWorkbench-full.apk",
-  "sha256": "2a6ba4c3cc36b169eb8ac241faa1327dc7d933d309d35a4d7268812865812bfc",
+  "sha256": "92b89a3ae7833a2429416a08e48d42eacb7981328eacf0da51596f7f0f4721f1",
   "slimApk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/latest/download/ClaudeWorkbench-slim.apk",
-  "slimSha256": "882721255ca9d73f4eeb58289f177e7dd7a0734a7146db435227749aa30b483c",
-  "notes": "2.4.16：生成文件支持直接打开和 App 内看位置；过程收起浮钮优化；插话/停止可拖动吸附；任务完成提示常驻；引用菜单精简。已装手机端环境的用户更新约 8 MB，新用户用完整包（约 194 MB，内置 Alpine/Node/Claude Code）。"
+  "slimSha256": "9393e6be95a36d53ae698f0ce6ecb7d6ac9c2865f09516806674a23dfefca007",
+  "notes": "2.4.17：隐私修正——移除 2.4.16 示例中的真实局域网/Tailscale IP，只保留 192.168.x.x / 100.x.x.x 占位。保留 2.4.16 的生成文件打开/位置、过程收起、可拖动插话/停止、完成提示和 full/slim 更新。安装包里不含 API Key、Tailscale auth key 或实际 token。"
 }

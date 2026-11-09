@@ -13,12 +13,14 @@ Claude 工作台客户端上；主客户端以后升级不会自动带这套功�
   <https://ghfast.top/https://github.com/enneliang-stack/claude-workbench-remote/archive/refs/heads/main.zip>
 - 通用版 APK 直链（国内加速）：
   <https://ghfast.top/https://raw.githubusercontent.com/enneliang-stack/claude-workbench-remote/main/apk/Claude%E5%B7%A5%E4%BD%9C%E5%8F%B0-%E9%80%9A%E7%94%A8%E7%89%88-1.0.11.apk>
-- **双模式 APK（2.4.16 完整内置环境）**：
-  `apk/Claude工作台-双模式-2.4.16-内置环境.apk`（约 194 MB）
+- **双模式 APK（2.4.17 完整内置环境）**：
+  `apk/Claude工作台-双模式-2.4.17-内置环境.apk`（约 194 MB）
+  - 2.4.17：隐私修正，移除安装包里示例用的真实局域网/Tailscale IP；
+    确认不含 API Key、Tailscale auth key、实际 token 或对话记录。
   - 2.4.16：生成文件支持直接打开和 App 内「位置」；过程收起单浮钮；
     插话/停止可拖动吸附；任务完成提示常驻；引用菜单精简。
   - 完整包仍内置 Alpine、Node/npm、Claude Code，新用户首次安装无需
-    下载环境；已装环境的用户可用 2.4.16 精简包（约 8 MB）。
+    下载环境；已装环境的用户可用 2.4.17 精简包（约 8 MB）。
   - 检查更新支持 full/slim 双通道（`apk/update.json`）。
   - 完整包超过 GitHub 普通文件 100 MB 限制，发布用 Releases，
     见 `apk/更新发布说明.txt`。
