@@ -13,6 +13,75 @@ Claude 工作台客户端上；主客户端以后升级不会自动带这套功�
   <https://ghfast.top/https://github.com/enneliang-stack/claude-workbench-remote/archive/refs/heads/main.zip>
 - 通用版 APK 直链（国内加速）：
   <https://ghfast.top/https://raw.githubusercontent.com/enneliang-stack/claude-workbench-remote/main/apk/Claude%E5%B7%A5%E4%BD%9C%E5%8F%B0-%E9%80%9A%E7%94%A8%E7%89%88-1.0.11.apk>
+- **双模式 APK（2.4.16 完整内置环境）**：
+  `apk/Claude工作台-双模式-2.4.16-内置环境.apk`（约 194 MB）
+  - 2.4.16：生成文件支持直接打开和 App 内「位置」；过程收起单浮钮；
+    插话/停止可拖动吸附；任务完成提示常驻；引用菜单精简。
+  - 完整包仍内置 Alpine、Node/npm、Claude Code，新用户首次安装无需
+    下载环境；已装环境的用户可用 2.4.16 精简包（约 8 MB）。
+  - 检查更新支持 full/slim 双通道（`apk/update.json`）。
+  - 完整包超过 GitHub 普通文件 100 MB 限制，发布用 Releases，
+    见 `apk/更新发布说明.txt`。
+- **双模式 APK（2.4.5）**：`apk/Claude工作台-双模式-2.4.5.apk`
+  - 2.4.5：隐私加固——密码框内容不再返回给模型，卡号/身份证长数字打码，
+    验证码界面隐藏数字，密码/支付/转账等界面拒绝截图并交还用户。
+  - 2.4.4：运行中顶部细状态条改为不可点击（触摸全部穿透，AI 可以正常点
+    它后面的输入框/按钮）；停止/插话/继续收进屏幕右侧的小按钮。
+    「任务已完成」面板和输入框仍可点击。
+  - 2.4.3：无障碍不用每次重开。用一次 ADB 授权
+    `pc/授权无障碍自动保持.cmd` 后，系统收回无障碍时 App 会在启动和开机时
+    自动写回；未授权仍和以前一样在系统设置里开启。
+  - 2.4.2：完成提示新增「发消息」和绿色 ✓：点发消息在当前页面弹输入框，
+    发完直接用 `/api/chat` 给该对话续一轮；点 ✓ 收起提示；点提示本身
+    仍打开 App 对应对话。
+  - 2.4.1：「任务已完成」悬浮窗常驻，直到在 App 手机端打开对应对话才消失；
+    完成后只显示状态，不再显示插话/停止；点击悬浮窗直接打开 App 当前对话；
+    悬浮窗插话直接叠在当前操作的页面（需“显示在其他应用上层”权限），
+    不再跳回 App 手机端；修复任务结束后仍被判为运行中（runner.busy）。
+  - 2.4.0：修复任务结束后悬浮窗仍显示进行中（改为 runner.busy 判定）；
+    切回 App 手机页/电脑端页自动隐藏并清除完成提示；对话删除从常驻 ×
+    改为长按确认删除。
+  - 2.3.9：内置 Tailscale 增加 `TS_PREFER_DERP=2`（SFO），IPv4-only Wi-Fi 下
+    中继从 hkg 改走 sfo，避开电脑到香港的高延迟；直连尝试不变。
+  - 2.3.8：清理命令扩大为匹配任何 `node …server.js`；启动服务后必须页面返回
+    `workbench-phone` 标记才采用该端口，旧 Node 的登录页不会被当成手机端，
+    App 会自动使用新 server 实际监听的端口；ASSET_VERSION 22。
+  - 2.3.7：修复清理旧 Node 时 pkill 误杀执行它的 proot 包装进程；改为只匹配
+    Node 自身命令行，旧进程占着 4712 的问题才能真正清掉；ASSET_VERSION 21。
+  - 2.3.6：启动手机端前 `pkill` 旧 `node server.js`，修复旧进程占着 4712
+    导致新 server 换端口、App 仍连旧登录页的问题；ASSET_VERSION 20。
+  - 2.3.5：修复手机环境里的 server.js 没刷新：copyAssets 改为对比 APK 内
+    server.js/m.html/phone-mcp.js，文件不一致就强制重新部署；server 启动日志会
+    打印版本标识，方便确认运行的是新文件。
+  - 2.3.4：修复手机端启动后返回「工作台 · 远程访问」登录页：手机端服务只监听
+    127.0.0.1，IS_PHONE 直接视为 loopback，静态页/API 不再被登录页挡住；
+    电脑端/手机端按系统返回直接回主页，不再退回另一个模式。
+  - 2.3.3：修复手机端页面校验在主线程发 HTTP 导致的
+    `NetworkOnMainThreadException`；校验/探测移到后台线程，手机端可正常进入。
+  - 2.3.2：修复手机端启动后「手机端页面校验失败」：手机端页面/校验带本机 token，
+    ASSET_VERSION 17 强制刷新手机环境 public，校验失败日志会打印状态码和页面开头。
+  - 2.3.1：修复 App 内下载生成文件时「不允许的下载地址」（放行 127.0.0.1
+    的手机端 4712 / 内置 Tailscale 代理 4720 / 电脑端 4711 端口）。
+  - 2.3.0：修复手机端误显示电脑端页面；新建对话只保留文件夹选择；对话列表
+    可直接删除；文件夹可删除；手机端默认低档位并可在对话顶部切换；
+    设置里可清空数据/卸载；手机控制读屏更省节点；新增无障碍悬浮窗，
+    显示状态并支持停止/插话（状态/停止免权限；浮窗插话需系统悬浮窗权限，
+    未授权自动转聊天页输入；插话时暂停自动化，不会误点输入法）。
+  - 2.2.4：电脑端页面资源在手机代理内缓存 10 分钟并 gzip；5G 下直接启动内置
+    Tailscale（不再先等家里 Wi-Fi 超时），并按上次使用记录在 App 启动时预连接；
+    日志显示直连/中继；代理连接复用。
+  - 启动先到主页，可选「电脑端」（原来的远程模式，行为不变）或「手机端」
+    （在手机本地用 proot + Alpine 跑 Node 和 Claude Code，不依赖电脑）。
+  - 手机控制：开启无障碍后，Claude 可以通过 phone_* MCP 工具读取屏幕、
+    点按、输入、滑动、打开 App；密码/支付/转账/验证码会交还用户。
+  - 电脑端可一次配置多个地址（家里 Wi-Fi + Tailscale），App 按当前网络
+    自动探测可用地址，换网络不用重新填。2.2.0 起支持内置 Tailscale（tsnet），
+    不用安装 Tailscale App、不占 Android VPN。
+  - 安装进度实时可见；GCS 下载过慢会自动切换 claude.ai / npm 国内镜像。
+  - 手机端首次安装约 500 MB，需 1.8 GB 空间；详细步骤见
+    `apk/双模式APK-安装说明.txt`。
+  - 使用前提：手机为 arm64、Android 8+；DeepSeek API Key。
+  - 手机端只监听 127.0.0.1，不影响电脑端和主客户端更新包。
 
 ## 目录
 
@@ -21,8 +90,10 @@ overlay/claude-gui/        手机页、图标、远程开关（复制到客户�
 server/                    server-1.1.28-remote.js（适配 1.1.28 的远程版服务端）
 patch/                     server-1.1.28-remote.patch（干净版 → 远程版，供维护者参考）
 install/                   一键安装器
-android/                   Android 壳源码（通用版，不含任何个人令牌）
-apk/                       通用版 APK、Tailscale APK、安装说明
+android/                   Android 双模式源码（电脑远程 + 手机本地）
+phone/                     手机端资源生成脚本和设计说明（Alpine/proot/Node）
+pc/                        PC 端公网 IPv6 直连、无障碍一次性授权脚本
+apk/                       双模式 APK、通用版 APK、安装说明
 ```
 
 ## 安装（其他用户）
@@ -53,6 +124,26 @@ apk/                       通用版 APK、Tailscale APK、安装说明
    也可以不用 APK：手机 Chrome 打开第 4 步的 HTTPS 地址，菜单里选「安装应用」。
 
 关闭远程访问：双击客户端的 `关闭远程访问.cmd`。
+
+## 手机 5G 加速：IPv6 直连
+
+手机 5G 的运营商 NAT 通常是对称型，Tailscale 打不了 IPv4 洞，只能走 SFO 中继，
+页面加载会有约 300ms 的额外往返。电脑 IPv4 如果是 CGNAT（本机路由器 WAN 是
+100.66.x.x），端口映射也没用。
+
+如果电脑和手机都有公网 IPv6，Tailscale 会优先直连。电脑网卡的 IPv6 协议
+可能默认关闭，运行：
+
+```text
+pc\开启IPv6直连.cmd
+```
+
+脚本只开启已连接物理网卡的 `ms_tcpip6`，不做端口映射。输出里出现
+240e / 2001 开头的地址、`tailscale netcheck` 显示 `IPv6: yes` 后，手机打开
+电脑端，App 日志应显示「直连」。本机已验证 Tailscale 状态里出现
+`claude-phone active; direct [240e:...]`。
+
+如果路由器没有下发公网 IPv6，需要在路由器后台开启 IPv6 / IPv6 双栈。
 
 ## APK 说明
 

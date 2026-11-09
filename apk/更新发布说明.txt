@@ -1,0 +1,60 @@
+Claude 工作台 · 双模式 APK 更新发布
+====================================
+
+App 的「设置与日志 → 检查更新」会读取：
+
+https://raw.githubusercontent.com/enneliang-stack/claude-workbench-remote/main/apk/update.json
+
+读取失败时会自动尝试 ghfast.top 加速镜像。
+
+当前已准备 2.4.16（versionCode 57）：
+- 完整包：apk/release/ClaudeWorkbench-full.apk
+  SHA-256 = 2a6ba4c3cc36b169eb8ac241faa1327dc7d933d309d35a4d7268812865812bfc
+- 精简包：apk/release/ClaudeWorkbench-slim.apk
+  SHA-256 = 882721255ca9d73f4eeb58289f177e7dd7a0734a7146db435227749aa30b483c
+两个文件都上传到同一个 Release，asset 名保持上面文件名。
+
+清单里的 apk 使用「最新 Release 的固定资产名」，所以以后更新只需要：
+
+1. 构建完整 APK：bash android/app/build.sh
+   构建精简 APK：SLIM=1 bash android/app/build.sh
+2. 分别重命名为 ClaudeWorkbench-full.apk 和 ClaudeWorkbench-slim.apk。
+3. 在 GitHub 仓库的 Releases 里新建一个 release（标签建议 v版本号），
+   上传这两个 APK 后发布。
+4. 修改 apk/update.json：
+   - versionCode：必须大于旧版（Android 用它判断）
+   - versionName：显示给用户的版本
+   - apk / sha256：完整包（含 Alpine/Node/Claude 环境）
+   - slimApk / slimSha256：精简包（只含 App，约 8 MB）
+   - notes：更新说明
+5. 提交并推送 apk/update.json 到 main 分支。
+
+2.4.8 起支持「精简更新」：
+- 手机上已经装好手机端环境（LocalEngine.isInstalled=true）的用户，
+  检查更新会自动下载 slimApk，约 8 MB，不用每次下 194 MB 全量包；
+- 没装环境/新用户才会用 apk 完整包，避免出现只装 App 却跑不起来。
+- 发布 2.4.8 以后每个版本建议同时上传：
+  ClaudeWorkbench-full.apk（新用户/无环境）
+  ClaudeWorkbench-slim.apk（已装环境，日常更新）
+  两个 asset 的 versionCode 相同，只是是否带离线环境资源。
+
+注意：2.4.6/2.4.7 的旧版还没有双通道逻辑，它们会下载 apk 全量包；
+从 2.4.8 起后续更新才会自动走 slimApk。
+
+注意：
+- Release 资产名必须是 ClaudeWorkbench-full.apk，固定下载地址才是：
+  https://github.com/enneliang-stack/claude-workbench-remote/releases/latest/download/ClaudeWorkbench-full.apk
+- 完整 APK 约 194 MB，超过 GitHub 普通文件的 100 MB 限制，不能直接
+  commit 进 git；必须走 Releases（单文件上限 2 GB）。
+- APK 必须继续用同一个签名证书，否则 Android 会拒绝覆盖安装。
+- 清单里的 sha256 必须和上传的 APK 完全一致，否则 App 会拒绝安装下载的文件。
+- 如果仓库默认分支不是 main，需要同步修改 MainActivity 里的
+  UPDATE_MANIFEST_URL。
+
+本地构建完整 APK 前需要准备（这些大文件不进 git）：
+- phone/claude-musl.tgz：Claude Code linux-arm64-musl 的 npm 包
+  （@anthropic-ai/claude-code-linux-arm64-musl，约 144 MB）
+- phone/offline-apk/*.apk：运行 python phone/fetch-offline-packages.py 生成
+- phone/alpine-minirootfs-3.24.2-aarch64.tar.gz：同脚本自动下载
+
+生成后运行 android/app/build.sh 即可得到内置完整环境的 APK。

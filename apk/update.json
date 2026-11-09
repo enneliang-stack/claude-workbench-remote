@@ -1,0 +1,9 @@
+{
+  "versionCode": 57,
+  "versionName": "2.4.16",
+  "apk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/latest/download/ClaudeWorkbench-full.apk",
+  "sha256": "2a6ba4c3cc36b169eb8ac241faa1327dc7d933d309d35a4d7268812865812bfc",
+  "slimApk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/latest/download/ClaudeWorkbench-slim.apk",
+  "slimSha256": "882721255ca9d73f4eeb58289f177e7dd7a0734a7146db435227749aa30b483c",
+  "notes": "2.4.16：生成文件支持直接打开和 App 内看位置；过程收起浮钮优化；插话/停止可拖动吸附；任务完成提示常驻；引用菜单精简。已装手机端环境的用户更新约 8 MB，新用户用完整包（约 194 MB，内置 Alpine/Node/Claude Code）。"
+}
