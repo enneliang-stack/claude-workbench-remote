@@ -1,9 +1,9 @@
 {
-  "versionCode": 65,
-  "versionName": "2.4.24",
+  "versionCode": 66,
+  "versionName": "2.4.25",
   "apk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.21/ClaudeWorkbench-full.apk",
   "sha256": "4177f27dc3e3446f50130fb2ea3cbfc5731578247a37fc7eba2314162342e53e",
   "slimApk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/latest/download/ClaudeWorkbench-slim.apk",
-  "slimSha256": "f9820d27594bd8b25046b60650ca9feed42c2a1cdbc27e55edaec8f1a955012d",
-  "notes": "2.4.24：内置 Tailscale 连接超时后自动重试一次，不用再重启 App；日志默认只看报错，复制时也只复制报错，取消勾选可查看全部；日志页自动刷新不再把正在上滑的页面拉回顶部。保留 2.4.23 的通知栏任务状态和本机任务悬浮窗。完整包保持 2.4.21，已装环境直接装精简包。"
+  "slimSha256": "e73c952f7e4bed63340794c82429e1f614b47a2faefdff45c09a793913bf1b4d",
+  "notes": "2.4.25：修复压缩上下文被误当成引用卡片——摘要正文里只是提到 <gui-reference-context> 标签时，不再把后面的内容截掉并显示成“引用对话”；真正的压缩摘要仍只显示“上下文对话已压缩”一行。保留 2.4.24 的 Tailscale 自动重试、只看报错日志和滚动修复。完整包保持 2.4.21，已装环境直接装精简包。"
 }

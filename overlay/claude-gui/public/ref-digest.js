@@ -46,16 +46,19 @@
       .replace(/<\/gui-reference-context>/gi, '＜/gui-reference-context＞');
   }
 
+  // 只认完整、独立成行的引用块。摘要正文里可能只是用反引号提到
+  // <gui-reference-context> 这个标签，不能把它当成引用块截断正文。
+  const REF_BLOCK_RE = /(?:^|\n)<gui-reference-context>[ \t]*\r?\n[\s\S]*?\r?\n<\/gui-reference-context>[ \t]*(?=\r?\n|$)/i;
+
   function stripBlock(text) {
     let t = String(text == null ? '' : text);
     t = t.replace(/\r\n/g, '\n');
-    t = t.replace(/\n?<gui-reference-context>[\s\S]*?<\/gui-reference-context>\n?/gi, '\n');
-    t = t.replace(/\n?<gui-reference-context>[\s\S]*$/i, '\n');
+    t = t.replace(REF_BLOCK_RE, '\n');
     return t.replace(/\n{3,}/g, '\n\n').trim();
   }
 
   function hasBlock(text) {
-    return /<gui-reference-context>/i.test(String(text || ''));
+    return REF_BLOCK_RE.test(String(text || ''));
   }
 
   function oneLine(s) {

@@ -646,10 +646,13 @@
   }
 
   function isCompactSummaryMessage(m) {
-    if (!m || !m.compactSummary) return false;
-    // 引用其它对话的消息里可能夹带旧摘要；这种消息必须正常显示
-    if (/<gui-reference-context>/i.test(String(m.text || ''))) return false;
-    return true;
+    if (!m) return false;
+    const text = String(m.text || '');
+    // 只有完整、独立成行的引用块才算引用；摘要正文里可能只是提到这个标签。
+    const refBlock = /(?:^|\n)<gui-reference-context>[ \t]*\r?\n[\s\S]*?\r?\n<\/gui-reference-context>[ \t]*(?=\r?\n|$)/i;
+    if (refBlock.test(text)) return false;
+    if (m.compactSummary || m.isCompactSummary) return true;
+    return /^\s*(?:This session is being continued|The summary below covers)/i.test(text);
   }
 
   function sameUserPayload(a, b) {

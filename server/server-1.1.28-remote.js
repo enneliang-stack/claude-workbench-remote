@@ -1001,9 +1001,14 @@ async function backfillTitles() {
  * 真正的压缩摘要只在开头出现；引用其它对话的消息里可能夹带旧摘要，
  * 不能让整条用户消息被误判成摘要隐藏掉。
  */
+function hasRefContextBlock(text) {
+  // 只认完整、独立成行的引用块。压缩摘要正文里可能只是提到这个标签。
+  return /(?:^|\n)<gui-reference-context>[ \t]*\r?\n[\s\S]*?\r?\n<\/gui-reference-context>[ \t]*(?=\r?\n|$)/i.test(String(text || ''));
+}
+
 function looksLikeCompactSummaryText(text) {
   const s = String(text || '');
-  if (/<gui-reference-context>/i.test(s)) return false;
+  if (hasRefContextBlock(s)) return false;
   return /^\s*(?:This session is being continued|The summary below covers)/i.test(s);
 }
 
@@ -1119,7 +1124,7 @@ function parseTranscript(text) {
       if (o.origin && o.origin.kind && o.origin.kind !== 'human') continue;
 
       lastAssistant = null;
-      const compactSummary = !/<gui-reference-context>/i.test(textPart) &&
+      const compactSummary = !hasRefContextBlock(textPart) &&
         (!!o.isCompactSummary || looksLikeCompactSummaryText(textPart));
       messages.push({
         id: o.uuid, role: 'user', text: textPart,
