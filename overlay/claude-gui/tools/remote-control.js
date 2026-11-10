@@ -14,6 +14,7 @@
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
+const os = require('os');
 
 const ROOT = path.join(__dirname, '..');
 const DATA = path.join(ROOT, 'data');
@@ -63,6 +64,30 @@ function request(method, pathname, body) {
   });
 }
 
+function publicIPv6() {
+  for (const list of Object.values(os.networkInterfaces())) {
+    for (const a of list || []) {
+      if (a.family !== 'IPv6' || a.internal) continue;
+      const addr = String(a.address || '').split('%')[0];
+      if (!addr || addr === '::1') continue;
+      if (addr.startsWith('fe80') || addr.startsWith('fd')) continue;
+      return addr;
+    }
+  }
+  return '';
+}
+
+function printIPv6Hint() {
+  const ip = publicIPv6();
+  if (ip) {
+    console.log(`  公网 IPv6：${ip}`);
+    console.log('  手机 5G 也有 IPv6 时，内置 Tailscale 会优先直连（比中继快很多）。');
+  } else {
+    console.log('  电脑没有公网 IPv6：手机 5G 只能走 Tailscale 中继，延迟较高。');
+    console.log('  可运行 claude-remote\\pc\\开启IPv6直连.cmd 开启，然后重启远程访问。');
+  }
+}
+
 function printUrls(data) {
   const urls = data && Array.isArray(data.urls) ? data.urls : [];
   if (!urls.length) {
@@ -101,6 +126,7 @@ function printUrls(data) {
       if (!data || !data.ok) throw new Error((data && data.error) || r.raw || '开启失败');
       console.log('远程访问已开启。手机打开下面任一地址（需与电脑在同一 Wi-Fi 或 Tailscale）：');
       printUrls(data);
+      printIPv6Hint();
       console.log('');
       console.log('首次打开会写入登录 Cookie，之后可以收藏 /m 或添加到主屏幕。');
     } else if (cmd === 'off' || cmd === 'disable' || cmd === 'stop') {
@@ -117,7 +143,10 @@ function printUrls(data) {
       const data = r.data;
       if (!data) throw new Error(r.raw || '无法读取状态');
       console.log(`远程访问：${data.enabled ? '已开启' : '未开启'}`);
-      if (data.enabled) printUrls(data);
+      if (data.enabled) {
+        printUrls(data);
+        printIPv6Hint();
+      }
     }
   } catch (e) {
     console.error('操作失败：' + e.message);

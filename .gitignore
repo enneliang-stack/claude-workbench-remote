@@ -15,3 +15,32 @@ data/
 *.log
 
 android/app/*.idsig
+
+# 手机端资源由 phone/build-phone-assets.py 在构建时生成
+android/app/assets/phone/
+
+# tsproxy 的 Windows 测试产物，不提交
+phone/tsproxy/tsproxy-windows.exe
+
+# Go vendor（构建时由 build-tsproxy.ps1 重新生成并 patch）
+phone/tsproxy/vendor/
+
+# 内置 Claude Code 主程序包（约 144 MB，由本地脚本放入，不进 git）
+phone/claude-musl.tgz
+
+# 完整离线安装包（约 180 MB，构建前生成，不进 git）
+phone/offline-apk/
+phone/alpine-minirootfs-*.tar.gz
+
+# 完整离线 APK 太大，走 GitHub Releases，不进 git
+apk/Claude工作台-双模式-*-内置环境.apk
+
+# 上传 GitHub Releases 的暂存目录（大文件不进 git）
+apk/release/
+
+# 所有 APK 走 GitHub Releases，不进 git
+apk/*.apk
+
+# Python 缓存
+__pycache__/
+*.pyc

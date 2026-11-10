@@ -1,11 +1,17 @@
 package com.missyao.claudeworkbench;
 
+import android.app.AlertDialog;
 import android.content.ActivityNotFoundException;
 import android.content.ClipData;
+import android.content.ComponentName;
 import android.content.ContentValues;
+import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Environment;
+import android.provider.DocumentsContract;
 import android.provider.MediaStore;
 import android.provider.Settings;
 import android.webkit.JavascriptInterface;
@@ -21,9 +27,12 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 
 /**
  * 手机端下载管理：只操作 App 自己的 external files/downloads/shared 目录，
@@ -35,6 +44,210 @@ public class DownloadsBridge {
 
     public DownloadsBridge(MainActivity activity) {
         this.activity = activity;
+    }
+
+    /** 手机端页面右下角的「返回主页」按钮 */
+    @JavascriptInterface
+    public void goHome() {
+        activity.runOnUiThread(activity::showHome);
+    }
+
+    /** 悬浮窗插话后，手机端页面发送成功时通知控制层恢复自动化。 */
+    @JavascriptInterface
+    public void phoneSent() {
+        PhoneControlServer.clearPause();
+    }
+
+    /** 手机端聊天页当前显示的对话；用于“任务已完成”悬浮窗在用户查看后消失。 */
+    @JavascriptInterface
+    public void phoneChatVisible(String id) {
+        PhoneControlServer.onPhoneChatVisible(id);
+    }
+
+    @JavascriptInterface
+    public void phoneChatEntered(String id) {
+        PhoneControlServer.onPhoneChatEntered(id);
+    }
+
+    @JavascriptInterface
+    public void phoneChatHidden() {
+        PhoneControlServer.onPhoneChatHidden();
+    }
+
+    /** 直接打开手机本机文件（/sdcard、/workspace 等），不复制到下载目录。 */
+    @JavascriptInterface
+    public boolean openLocal(String path, String name) {
+        final Uri uri = DownloadProvider.localUri(activity, path);
+        if (uri == null) return false;
+        String display = name != null && !name.isEmpty() ? name : path;
+        final String mimeType = mimeOf(display);
+        activity.runOnUiThread(() -> {
+            // 优先直接用 WPS/vivo Office/Word 这类文档应用打开，
+            // 跳过“在文件管理中显示”这种会转去 Google 的入口。
+            if (tryPreferredViewer(uri, mimeType)) return;
+            if (showOpenChooser(uri, mimeType)) return;
+            Toast.makeText(activity, "没有能打开这个文件的应用", Toast.LENGTH_LONG).show();
+        });
+        return true;
+    }
+
+    private Intent localViewIntent(Uri uri, String mimeType) {
+        Intent intent = new Intent(Intent.ACTION_VIEW);
+        intent.setDataAndType(uri, mimeType);
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        intent.setClipData(ClipData.newRawUri("", uri));
+        return intent;
+    }
+
+    private boolean tryPreferredViewer(Uri uri, String mimeType) {
+        try {
+            PackageManager pm = activity.getPackageManager();
+            List<ResolveInfo> apps = pm.queryIntentActivities(localViewIntent(uri, mimeType), 0);
+            for (ResolveInfo ri : apps) {
+                if (ri == null || ri.activityInfo == null || ri.activityInfo.name == null) continue;
+                String pkg = ri.activityInfo.packageName == null
+                    ? "" : ri.activityInfo.packageName.toLowerCase();
+                String label = String.valueOf(ri.loadLabel(pm)).toLowerCase();
+                if (pkg.equals(activity.getPackageName())) continue;
+                if (pkg.contains("documentsui") || pkg.contains("nbu.files")
+                        || pkg.contains("intentresolver") || pkg.contains("browser")
+                        || pkg.contains("chrome") || pkg.contains("lark")
+                        || pkg.contains("filemanager") || pkg.contains("filebrowser")
+                        || label.contains("文件") || label.contains("浏览器")
+                        || label.contains("飞书") || label.contains("google")) continue;
+                if (label.contains("wps") || label.contains("office")
+                        || label.contains("word") || label.contains("文档")
+                        || label.contains("办公") || label.contains("vivo")) {
+                    Intent direct = localViewIntent(uri, mimeType);
+                    direct.setComponent(new ComponentName(
+                        ri.activityInfo.packageName, ri.activityInfo.name));
+                    activity.startActivity(direct);
+                    return true;
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return false;
+    }
+
+    private boolean showOpenChooser(Uri uri, String mimeType) {
+        try {
+            activity.startActivity(Intent.createChooser(localViewIntent(uri, mimeType), "打开文件"));
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /** 打开手机自己的文件管理器（尽量选非 Google 的），让用户直接看到生成目录。 */
+    @JavascriptInterface
+    public boolean openLocalLocation(String path) {
+        String p = path == null ? "" : path.trim();
+        if (p.endsWith("/") && p.length() > 1) p = p.substring(0, p.length() - 1);
+        final String target = p;
+        activity.runOnUiThread(() -> showLocalFolderDialog(target));
+        return true;
+    }
+
+    /** 直接在 App 里列出这个本机文件夹，点文件就打开；不依赖系统文件管理器的深链接。 */
+    private void showLocalFolderDialog(String path) {
+        String p = path == null ? "" : path.trim();
+        File dir = DownloadProvider.resolveLocalDir(activity, p);
+        if (dir == null) {
+            int slash = p.lastIndexOf('/');
+            if (slash > 0) {
+                p = p.substring(0, slash);
+                dir = DownloadProvider.resolveLocalDir(activity, p);
+            }
+        }
+        if (dir == null) {
+            Toast.makeText(activity, "文件夹不存在：" + p, Toast.LENGTH_LONG).show();
+            return;
+        }
+        final String guestDir = p;
+        File[] files = dir.listFiles();
+        if (files == null) {
+            Toast.makeText(activity, "无法读取文件夹：" + p, Toast.LENGTH_LONG).show();
+            return;
+        }
+        Arrays.sort(files, (a, b) -> {
+            if (a.isDirectory() != b.isDirectory()) return a.isDirectory() ? -1 : 1;
+            return a.getName().compareToIgnoreCase(b.getName());
+        });
+        final List<File> entries = new ArrayList<>();
+        final List<String> labels = new ArrayList<>();
+        String parent = parentGuest(guestDir);
+        if (parent != null) {
+            entries.add(null);
+            labels.add("⬆  上一级");
+        }
+        for (File f : files) {
+            if (f.getName().startsWith(".")) continue;
+            entries.add(f);
+            labels.add((f.isDirectory() ? "📁  " : "📄  ") + f.getName()
+                + (f.isDirectory() ? "  ·  文件夹" : "  ·  " + fmtSize(f.length())));
+        }
+        new AlertDialog.Builder(activity)
+            .setTitle("位置  " + guestDir)
+            .setItems(labels.toArray(new String[0]), (d, which) -> {
+                File f = entries.get(which);
+                if (f == null) {
+                    showLocalFolderDialog(parent);
+                    return;
+                }
+                String child = guestDir.endsWith("/")
+                    ? guestDir + f.getName() : guestDir + "/" + f.getName();
+                if (f.isDirectory()) showLocalFolderDialog(child);
+                else openLocal(child, f.getName());
+            })
+            .setPositiveButton("关闭", null)
+            .show();
+    }
+
+    private String parentGuest(String p) {
+        int slash = p.lastIndexOf('/');
+        if (slash <= 0) return null;
+        String parent = p.substring(0, slash);
+        if (parent.isEmpty()) return null;
+        return DownloadProvider.resolveLocalDir(activity, parent) != null ? parent : null;
+    }
+
+    private static String fmtSize(long n) {
+        if (n < 1024) return n + " B";
+        if (n < 1024 * 1024) return String.format(java.util.Locale.ROOT, "%.1f KB", n / 1024.0);
+        return String.format(java.util.Locale.ROOT, "%.1f MB", n / 1024.0 / 1024.0);
+    }
+
+    /** 在系统文件管理器里打开 /sdcard 下的文件夹；App 私有目录会提示不可见。 */
+    @JavascriptInterface
+    public boolean openLocalFolder(String path) {
+        String p = path == null ? "" : path.trim();
+        if (p.endsWith("/") && p.length() > 1) p = p.substring(0, p.length() - 1);
+        String rel = null;
+        if (p.startsWith("/sdcard/")) {
+            rel = p.substring("/sdcard/".length());
+        } else if (p.startsWith("/storage/emulated/0/")) {
+            rel = p.substring("/storage/emulated/0/".length());
+        }
+        if (rel != null && !rel.isEmpty()) {
+            final Uri uri = DocumentsContract.buildDocumentUri(
+                "com.android.externalstorage.documents", "primary:" + rel);
+            activity.runOnUiThread(() -> {
+                Intent intent = new Intent(Intent.ACTION_VIEW);
+                intent.setDataAndType(uri, "vnd.android.document/directory");
+                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                try {
+                    activity.startActivity(intent);
+                } catch (Exception e) {
+                    Toast.makeText(activity, "没有能打开文件夹的应用", Toast.LENGTH_LONG).show();
+                }
+            });
+            return true;
+        }
+        activity.runOnUiThread(() -> Toast.makeText(activity,
+            "这个文件夹在 App 私有工作区，系统文件管理器看不到；可以用「打开」查看文件",
+            Toast.LENGTH_LONG).show());
+        return true;
     }
 
     private File dir() {
@@ -77,6 +290,13 @@ public class DownloadsBridge {
             case "webp": return "image/webp";
             case "mp4": return "video/mp4";
             case "mp3": return "audio/mpeg";
+            case "doc": return "application/msword";
+            case "docx": return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+            case "xls": return "application/vnd.ms-excel";
+            case "xlsx": return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+            case "ppt": return "application/vnd.ms-powerpoint";
+            case "pptx": return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+            case "epub": return "application/epub+zip";
             default: break;
         }
         String mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext);
@@ -216,9 +436,18 @@ public class DownloadsBridge {
         try {
             URL u = new URL(url);
             String host = u.getHost();
-            if (host == null || !(host.endsWith(".ts.net") || host.startsWith("100.")
+            String scheme = u.getProtocol();
+            boolean web = "http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme);
+            boolean loopback = "127.0.0.1".equals(host) || "localhost".equalsIgnoreCase(host)
+                    || "::1".equals(host) || "[::1]".equals(host);
+            if (loopback) {
+                // 只放行本机页面/内置 Tailscale 代理使用的端口（4711 电脑端、4712 手机端、4720 代理）。
+                int p = u.getPort();
+                loopback = p >= 4711 && p <= 4740;
+            }
+            if (!web || host == null || !(host.endsWith(".ts.net") || host.startsWith("100.")
                     || host.startsWith("192.168.") || host.startsWith("10.")
-                    || host.startsWith("172."))) {
+                    || host.startsWith("172.") || loopback)) {
                 notifyPage(source, false, "不允许的下载地址");
                 return;
             }

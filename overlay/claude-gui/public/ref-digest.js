@@ -98,7 +98,7 @@
         if (!raw) continue;
         if (/^<(command-name|local-command|system-reminder)/i.test(raw.trim())) continue;
         if (/^\[Request interrupted/i.test(raw.trim())) continue;
-        const isSummary = /This session is being continued|The summary below covers/i.test(raw);
+        const isSummary = /^\s*(?:This session is being continued|The summary below covers)/i.test(raw);
         if (isSummary) {
           turns.push({ summary: true, user: raw, assistant: [], tools: [], ts: m.ts });
           cur = null;

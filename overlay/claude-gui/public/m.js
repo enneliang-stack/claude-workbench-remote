@@ -32,6 +32,7 @@
     askOther: null,
     askTimer: null,
     pendingEcho: null,      // 新消息的 user_echo 可能先于 run_start 到达
+    deleteId: null,         // 当前要删除的对话（列表删除或对话设置删除）
     pendingImages: [],      // 已选、待发送的图片
     pendingRefs: [],        // 已引用、待发送的其它对话
     refSel: new Map(),
@@ -237,7 +238,40 @@
             `<div class="conv-top"><span class="conv-title">${escapeHtml(c.title || '未命名对话')}</span>` +
             `<span class="conv-time">${escapeHtml(convTime(c.updatedAt))}</span></div>` +
             `<div class="conv-sub"><span class="conv-preview">${escapeHtml(c.preview || '')}</span>${badges.join('')}</div>`;
-          row.onclick = () => openConv(c.id);
+          // 删除不在列表里常驻 ×；长按对话行约 550ms 再确认删除。
+          let pressTimer = null;
+          let longPressed = false;
+          const clearPress = () => {
+            if (pressTimer) {
+              clearTimeout(pressTimer);
+              pressTimer = null;
+            }
+          };
+          const startPress = () => {
+            longPressed = false;
+            clearPress();
+            pressTimer = setTimeout(() => {
+              longPressed = true;
+              askDeleteConv(c.id);
+            }, 550);
+          };
+          row.addEventListener('touchstart', startPress, { passive: true });
+          row.addEventListener('touchend', clearPress);
+          row.addEventListener('touchcancel', clearPress);
+          row.addEventListener('touchmove', clearPress, { passive: true });
+          row.addEventListener('mousedown', startPress);
+          row.addEventListener('mouseup', clearPress);
+          row.addEventListener('mouseleave', clearPress);
+          row.addEventListener('contextmenu', e => e.preventDefault());
+          row.onclick = e => {
+            if (longPressed) {
+              longPressed = false;
+              e.preventDefault();
+              e.stopPropagation();
+              return;
+            }
+            openConv(c.id);
+          };
           sec.appendChild(row);
         }
       }
@@ -254,6 +288,15 @@
   function showChat(on) {
     $('#listScreen').hidden = on;
     $('#chatScreen').hidden = !on;
+    if (!on) {
+      const collapseBtn = document.getElementById('processCollapseBtn');
+      if (collapseBtn) collapseBtn.hidden = true;
+      try {
+        if (window.AndroidDownloads && AndroidDownloads.phoneChatHidden) {
+          AndroidDownloads.phoneChatHidden();
+        }
+      } catch { /* 非 App 环境 */ }
+    }
   }
 
   function saveDraft(id) {
@@ -292,6 +335,7 @@
     S.conv = null;
     S.live = null;
     S.running = false;
+    stopLivePolling();
     S.pendingPerm = null;
     S.pendingAsk = null;
     S.askSel = null;
@@ -318,6 +362,11 @@
       const data = await api('/api/conversation?id=' + encodeURIComponent(id) + '&limit=30&light=1', { timeout: 30000 });
       renderConversation(data);
       restoreDraft(id);
+      try {
+        if (window.AndroidDownloads && AndroidDownloads.phoneChatEntered) {
+          AndroidDownloads.phoneChatEntered(S.convId || '');
+        }
+      } catch { /* 非 App 环境 */ }
     } catch (e) {
       toast('打开失败：' + e.message, 'err');
       closeChat(false);
@@ -334,6 +383,7 @@
     S.conv = null;
     S.live = null;
     S.running = false;
+    stopLivePolling();
     S.pendingPerm = null;
     S.pendingAsk = null;
     S.askSel = null;
@@ -368,11 +418,17 @@
     if (S.pendingAsk) initAskState();
 
     $('#chatTitle').textContent = data.title || '未命名对话';
+    try {
+      if (window.AndroidDownloads && AndroidDownloads.phoneChatVisible) {
+        AndroidDownloads.phoneChatVisible(data.id || '');
+      }
+    } catch { /* 非 App 环境 */ }
     updateHeader();
     updateComposer();
     renderMessages(true);
     renderPanels();
-    if (S.running) syncProgressFromLive(); else setRunProgress('', '');
+    if (S.running) { syncProgressFromLive(); startLivePolling(); }
+    else { setRunProgress('', ''); stopLivePolling(); }
   }
 
   /** readTranscript 只会在压缩后填 contextTokens；没压缩过的会话用最后一条 usage 估算 */
@@ -401,6 +457,43 @@
     if (S.pendingAsk) parts.push('<span class="wait">等待回答</span>');
     else if (S.pendingPerm) parts.push('<span class="wait">等待确认</span>');
     $('#chatMeta').innerHTML = parts.join(' · ');
+    updateQuickEffort();
+  }
+
+  function updateQuickEffort() {
+    const sel = $('#quickEffort');
+    if (!sel) return;
+    const levels = (S.boot && S.boot.settings && S.boot.settings.effortLevels) ||
+      ['low', 'medium', 'high', 'xhigh', 'max'];
+    if (!sel.dataset.filled) {
+      fillSelect(sel, [{ value: '', label: '默认' }].concat(
+        levels.map(e => ({ value: e, label: EFFORT_LABELS[e] || e }))
+      ));
+      sel.dataset.filled = '1';
+    }
+    const cur = (S.conv && S.conv.effort) ||
+      (S.boot && S.boot.settings && S.boot.settings.defaultEffort) || '';
+    sel.value = levels.includes(cur) ? cur : '';
+    sel.title = '推理档位：' + (sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].text : '默认');
+  }
+
+  async function changeQuickEffort() {
+    if (!S.convId) return;
+    const sel = $('#quickEffort');
+    const effort = sel ? sel.value : '';
+    try {
+      const data = await api('/api/conversation?id=' + encodeURIComponent(S.convId), {
+        method: 'PATCH',
+        body: JSON.stringify({ effort })
+      });
+      const conv = (data && data.conversation) || {};
+      if (S.conv) S.conv.effort = conv.effort != null ? conv.effort : effort;
+      updateHeader();
+      toast('推理档位：' + (effort ? (EFFORT_LABELS[effort] || effort) : '默认'));
+    } catch (e) {
+      toast(e.message, 'err');
+      updateHeader();
+    }
   }
 
   function updateComposer() {
@@ -505,6 +598,7 @@
     live.id = 'liveTurn';
     box.appendChild(live);
     if (S.live) renderLiveTurn();
+    else if (S.pendingEcho) live.appendChild(userNode(S.pendingEcho));
 
     if (anchor) {
       // 往上补了内容：保持当前正在看的那一段不动
@@ -514,6 +608,7 @@
     } else {
       box.scrollTop = oldTop;
     }
+    scheduleProcessCollapseUpdate();
   }
 
   function userTextInfo(text) {
@@ -540,8 +635,52 @@
     return el('div', 'compact-divider', '——上下文对话已压缩——');
   }
 
+  // 长消息（例如一整段 App 日志）默认收起，和电脑端保持一致。
+  const LONG_USER_TEXT_CHARS = 1200;
+  const LONG_USER_TEXT_LINES = 16;
+
+  function isLongUserText(text) {
+    const s = String(text || '');
+    return s.length > LONG_USER_TEXT_CHARS || s.split('\n').length > LONG_USER_TEXT_LINES;
+  }
+
+  function isCompactSummaryMessage(m) {
+    if (!m || !m.compactSummary) return false;
+    // 引用其它对话的消息里可能夹带旧摘要；这种消息必须正常显示
+    if (/<gui-reference-context>/i.test(String(m.text || ''))) return false;
+    return true;
+  }
+
+  function sameUserPayload(a, b) {
+    if (!a || !b) return false;
+    if (!!a.steer !== !!b.steer) return false;
+    if (String(a.text || '') !== String(b.text || '')) return false;
+    const ai = Array.isArray(a.images) ? a.images.length : 0;
+    const bi = Array.isArray(b.images) ? b.images.length : 0;
+    return ai === bi;
+  }
+
+  /** 发送成功后先本地画出自己的消息，不依赖 SSE 回显；回显到了再去重。 */
+  function appendSentUser(msg) {
+    if (!msg || !S.convId) return;
+    if (S.running && S.live) {
+      if ((S.live.users || []).some(u => sameUserPayload(u, msg))) return;
+      S.live.users.push({ ...msg, optimistic: true, afterBlocks: (S.live.blocks || []).length });
+    } else {
+      if (S.pendingEcho && sameUserPayload(S.pendingEcho, msg)) return;
+      S.pendingEcho = { ...msg, optimistic: true };
+    }
+    const box = $('#liveTurn');
+    if (box) {
+      box.appendChild(userNode(msg));
+      maybeScroll();
+    } else {
+      renderMessages();
+    }
+  }
+
   function userNode(m) {
-    if (m.compactSummary) {
+    if (isCompactSummaryMessage(m)) {
       // 压缩摘要不在手机上调出整段总结，只留一条分隔线
       return compactDividerNode();
     }
@@ -569,6 +708,17 @@
       textEl.innerHTML = formatText(info.text);
       enhanceCodeBlocks(textEl);
       d.appendChild(textEl);
+      if (isLongUserText(info.text)) {
+        textEl.classList.add('collapsed');
+        const label = `展开全部 · ${info.text.length.toLocaleString()} 字`;
+        const btn = el('button', 'utext-expand', label);
+        btn.type = 'button';
+        btn.onclick = () => {
+          const collapsed = textEl.classList.toggle('collapsed');
+          btn.textContent = collapsed ? label : '收起';
+        };
+        d.appendChild(btn);
+      }
     }
     return d;
   }
@@ -725,14 +875,17 @@
     if (!p || p.includes('://')) return '';
     p = p.replace(/[ \t]+$/, '');
     p = p.replace(/[ \t]*[.,;:!?)\]}>》】”’。，；：、]+$/, '');
-    if (!/^(?:[A-Za-z]:[\\/]|\\\\)/.test(p)) return '';
+    // 电脑是盘符路径，手机是 /sdcard、/workspace 等绝对路径。
+    if (!/^(?:[A-Za-z]:[\\/]|\\\\|\/(?:sdcard|storage\/emulated|workspace|root|tmp|opt)\/)/.test(p)) {
+      return '';
+    }
     if (/[<>{}*|?]/.test(p)) return '';
     const name = artifactSplit(p).name;
     if (!name || !/\.[A-Za-z0-9]{1,10}$/.test(name)) return '';
     return p;
   }
 
-  /** 从最终结论里提取“生成的文件”，和电脑端规则一致 */
+  /** 从最终结论里提取“生成的文件”，电脑/手机路径都支持 */
   function extractArtifactPaths(text) {
     const src = String(text || '');
     if (!src) return [];
@@ -747,14 +900,14 @@
       const parts = artifactSplit(p);
       out.push({ path: p, name: parts.name, dir: parts.dir });
     };
-    const quoted = /[`"'“”‘’]([A-Za-z]:[\\/][^`"'“”‘’\r\n]+)[`"'“”‘’]/g;
+    const quoted = /[`"'“”‘’]((?:[A-Za-z]:[\\/]|\\\\|\/(?:sdcard|storage\/emulated|workspace|root|tmp|opt)\/)[^`"'“”‘’\r\n]+)[`"'“”‘’]/g;
     for (const m of src.matchAll(quoted)) add(m[1]);
-    const bare = /(?:[A-Za-z]:[\\/]|\\\\)[^\s`"'“”‘’<>|?*，。；：、（）【】《》]+/g;
+    const bare = /(?:[A-Za-z]:[\\/]|\\\\|\/(?:sdcard|storage\/emulated|workspace|root|tmp|opt)\/)[^\s`"'“”‘’<>|?*，。；：、（）【】《》]+/g;
     for (const m of src.matchAll(bare)) add(m[0]);
     return out.slice(0, 6);
   }
 
-  /** 生成的文件：只列出文件名/目录，手机端不提供打开、打开文件夹 */
+  /** 生成的文件：手机端提供「打开」，直接读取本机原文件 */
   function artifactNode(files) {
     const card = el('div', 'artifact-card');
     const head = el('div', 'artifact-card-head');
@@ -767,9 +920,18 @@
       const row = el('div', 'artifact-row');
       row.dataset.source = f.path;
       row.dataset.name = f.name;
+      row.dataset.dir = f.dir || f.path;
       const main = el('div', 'artifact-main');
       main.appendChild(el('div', 'artifact-name', f.name));
-      main.appendChild(el('div', 'artifact-dir', f.dir || f.path));
+      const downloaded = downloadFor(f.path);
+      main.appendChild(el('div', 'artifact-dir',
+        downloaded ? downloadedDir(downloaded) : (f.dir || f.path)));
+      if (canOpenLocal()) {
+        main.style.cursor = 'pointer';
+        main.onclick = () => {
+          if (!openLocalFile(f)) startDownload(f, null);
+        };
+      }
       row.appendChild(main);
       const actions = el('div', 'artifact-actions');
       row.appendChild(actions);
@@ -798,8 +960,57 @@
     return (S.downloads || []).find(d => normPath(d.source) === key) || null;
   }
 
+  function downloadedDir(d) {
+    if (!d) return '';
+    if (d.publicUri) return '手机 · 下载/Claude工作台/' + (d.name || '');
+    return d.path ? '手机 · ' + d.path : '';
+  }
+
+  /** 只有手机端页面才直接打开本机文件；App 里的远程电脑端仍走原下载逻辑。 */
+  function isPhonePage() {
+    return !!document.querySelector('meta[name="workbench-phone"]');
+  }
+
+  function canOpenLocal() {
+    return isPhonePage() && window.AndroidDownloads && AndroidDownloads.openLocal;
+  }
+
+  function openLocalFile(f) {
+    if (!canOpenLocal()) return false;
+    try {
+      return !!AndroidDownloads.openLocal(f.path, f.name);
+    } catch {
+      return false;
+    }
+  }
+
+  function openLocalLocation(f) {
+    if (!canOpenLocal() || !AndroidDownloads.openLocalLocation) return false;
+    try {
+      return !!AndroidDownloads.openLocalLocation(f.dir || f.path);
+    } catch {
+      return false;
+    }
+  }
+
   function renderArtifactActions(actions, f) {
     actions.innerHTML = '';
+    // 手机本机文件直接打开；失败则回退到下载（远程电脑端的 Windows 路径也走下载）。
+    if (canOpenLocal()) {
+      const open = el('button', 'file-btn primary', '打开');
+      open.type = 'button';
+      open.onclick = () => {
+        if (!openLocalFile(f)) startDownload(f, open);
+      };
+      const loc = el('button', 'file-btn', '位置');
+      loc.type = 'button';
+      loc.title = '在手机文件管理器中打开所在文件夹';
+      loc.onclick = () => {
+        if (!openLocalLocation(f)) toast('没有找到文件管理器', 'err');
+      };
+      actions.append(open, loc);
+      return;
+    }
     const d = downloadFor(f.path);
     if (d) {
       const open = el('button', 'file-btn', '打开');
@@ -842,6 +1053,13 @@
 
   function updateArtifactActions() {
     document.querySelectorAll('#messages .artifact-row[data-source]').forEach(row => {
+      const d = downloadFor(row.dataset.source);
+      const dir = row.querySelector('.artifact-dir');
+      if (dir) {
+        dir.textContent = d
+          ? downloadedDir(d)
+          : (row.dataset.dir || row.dataset.source);
+      }
       const actions = row.querySelector('.artifact-actions');
       if (!actions) return;
       renderArtifactActions(actions, {
@@ -968,6 +1186,13 @@
       const stat = el('span', 'edit-stat');
       stat.innerHTML = `<span class="edit-add">+${f.added}</span> <span class="edit-del">-${f.removed}</span>`;
       row.appendChild(stat);
+      row.title = '打开 ' + f.path;
+      row.style.cursor = 'pointer';
+      row.onclick = () => {
+        if (!openLocalFile({ path: f.path, name: parts.name, dir: parts.dir })) {
+          startDownload({ path: f.path, name: parts.name, dir: parts.dir }, null);
+        }
+      };
       list.appendChild(row);
     });
 
@@ -1039,17 +1264,120 @@
       if (f) files.add(f);
     }
 
-    const c = el('button', 'collapse-btn', '收起');
-    c.type = 'button';
-    c.onclick = e => {
-      e.preventDefault();
-      e.stopPropagation();
-      d.open = false;
-    };
-    body.appendChild(c);
     d.append(sum, body);
     meta.textContent = processMetaText(blocks.length, files);
+    d.addEventListener('toggle', scheduleProcessCollapseUpdate);
     return d;
+  }
+
+  // ---------------------------------------------------------------- 浮动的「收起过程」
+
+  let processCollapseTarget = null;
+  let processCollapseRaf = 0;
+
+  function ensureProcessCollapseButton() {
+    let btn = document.getElementById('processCollapseBtn');
+    if (btn) return btn;
+    btn = el('button', 'process-collapse-btn');
+    btn.id = 'processCollapseBtn';
+    btn.type = 'button';
+    btn.hidden = true;
+    btn.title = '收起上方已经滑出视口的过程';
+    btn.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 15l6-6 6 6"/></svg><span>收起</span>';
+    btn.addEventListener('click', collapseProcessAbove);
+    const host = document.getElementById('chatScreen') || document.body;
+    host.appendChild(btn);
+    return btn;
+  }
+
+  function findProcessToCollapse() {
+    const box = document.getElementById('messages');
+    if (!box) return null;
+    const top = box.getBoundingClientRect().top;
+    const acts = box.querySelectorAll('details.process[open]');
+    let target = null;
+    for (const el of acts) {
+      const summary = el.querySelector(':scope > summary');
+      if (!summary) continue;
+      if (summary.getBoundingClientRect().bottom > top + 4) continue;
+      // 过程框整体已经滑出上方就不再显示，只处理仍有一截在视口里的过程。
+      if (el.getBoundingClientRect().bottom <= top + 4) continue;
+      target = el;
+    }
+    return target;
+  }
+
+  function updateProcessCollapseButton() {
+    const btn = ensureProcessCollapseButton();
+    const box = document.getElementById('messages');
+    if (!box) {
+      btn.hidden = true;
+      return;
+    }
+    const target = findProcessToCollapse();
+    processCollapseTarget = target;
+    btn.hidden = !target;
+    if (!target) return;
+
+    const br = box.getBoundingClientRect();
+    const ar = target.getBoundingClientRect();
+    const btnH = btn.offsetHeight || 30;
+    const gap = 8;
+    const visibleTop = Math.max(ar.top, br.top);
+    const visibleBottom = Math.min(ar.bottom, br.bottom);
+    // 过程框快划完、可视高度不够时直接隐藏，避免被挤到相邻消息上。
+    if (visibleBottom - visibleTop < btnH + gap * 2) {
+      btn.hidden = true;
+      processCollapseTarget = null;
+      return;
+    }
+    const minCenter = visibleTop + gap + btnH / 2;
+    const maxCenter = visibleBottom - gap - btnH / 2;
+    const center = Math.max(minCenter, Math.min(maxCenter, br.top + br.height * 0.7));
+    // 放在过程框内部的右侧，避免像之前那样卡在边框上、里外不分。
+    const btnW = btn.offsetWidth || 62;
+    btn.style.left = Math.round(Math.max(br.left + 6, ar.right - btnW - 10)) + 'px';
+    btn.style.top = Math.round(center - btnH / 2) + 'px';
+  }
+
+  function scheduleProcessCollapseUpdate() {
+    if (processCollapseRaf) return;
+    processCollapseRaf = requestAnimationFrame(() => {
+      processCollapseRaf = 0;
+      updateProcessCollapseButton();
+    });
+  }
+
+  function collapseProcessAbove() {
+    const target = processCollapseTarget;
+    if (!target || !target.open || !target.isConnected) {
+      scheduleProcessCollapseUpdate();
+      return;
+    }
+    const box = document.getElementById('messages');
+    if (!box) return;
+    const top = box.getBoundingClientRect().top;
+    const rect = target.getBoundingClientRect();
+    const inside = rect.bottom > top + 4;
+    const beforeScroll = box.scrollTop;
+    const beforeHeight = box.scrollHeight;
+
+    target.open = false;
+    requestAnimationFrame(() => {
+      if (inside) {
+        // 正滑在过程正文里：收起后把过程标题带到视口顶部，避免停在空白处
+        const summary = target.querySelector(':scope > summary');
+        if (summary) {
+          const delta = summary.getBoundingClientRect().top - top - 8;
+          box.scrollTop = Math.max(0, box.scrollTop + delta);
+        }
+      } else {
+        // 过程整体在上方：按被移除的高度补偿，保持当前位置
+        const removed = Math.max(0, beforeHeight - box.scrollHeight);
+        box.scrollTop = Math.max(0, beforeScroll - removed);
+      }
+      scheduleProcessCollapseUpdate();
+    });
   }
 
   /** 极简 markdown：标题/列表/引用/加粗/行内 code/代码块，和电脑端观感一致 */
@@ -1237,22 +1565,15 @@
     sum.append(label, meta, state);
 
     const body = el('div', 'process-body');
-    const c = el('button', 'collapse-btn', '收起');
-    c.type = 'button';
-    c.onclick = e => {
-      e.preventDefault();
-      e.stopPropagation();
-      d.open = false;
-    };
-    body.appendChild(c);
     d.append(sum, body);
+    d.addEventListener('toggle', scheduleProcessCollapseUpdate);
     box.appendChild(d);
 
     S.liveProcessEl = d;
     S.liveProcessBody = body;
     S.liveProcessMeta = meta;
     S.liveProcessState = state;
-    S.liveProcessCollapse = c;
+    S.liveProcessCollapse = null;
     S.liveProcessCount = 0;
     S.liveProcessFiles = new Set();
     return d;
@@ -1493,21 +1814,36 @@
         updateHeader();
         updateComposer();
         setRunProgress('正在思考…', 'thinking');
+        startLivePolling();
         scheduleBootRefresh();
         break;
       }
 
       case 'user_echo': {
         const msg = ev.message || {};
+        let alreadyShown = false;
         if (S.running && S.live) {
-          S.live.users.push({ ...msg, afterBlocks: (S.live.blocks || []).length });
+          const users = S.live.users || (S.live.users = []);
+          const i = users.findIndex(u => u.optimistic && sameUserPayload(u, msg));
+          if (i >= 0) {
+            // 本地已经先画过这条消息，只把服务端的 id/时间补进去，不再插一个气泡
+            users[i] = { ...msg, afterBlocks: users[i].afterBlocks || 0 };
+            alreadyShown = true;
+          } else {
+            users.push({ ...msg, afterBlocks: (S.live.blocks || []).length });
+          }
+        } else if (S.pendingEcho && S.pendingEcho.optimistic && sameUserPayload(S.pendingEcho, msg)) {
+          S.pendingEcho = msg;
+          alreadyShown = true;
         } else {
           S.pendingEcho = msg;
         }
-        const box = $('#liveTurn');
-        if (box) {
-          box.appendChild(userNode(msg));
-          maybeScroll();
+        if (!alreadyShown) {
+          const box = $('#liveTurn');
+          if (box) {
+            box.appendChild(userNode(msg));
+            maybeScroll();
+          }
         }
         break;
       }
@@ -1584,6 +1920,7 @@
 
       case 'run_end':
         S.running = false;
+        stopLivePolling();
         syncLiveCursor();
         closeStopConfirm();
         setRunProgress('', '');
@@ -1641,6 +1978,85 @@
       renderConversation(data);
     } catch { /* 下次事件再试 */ }
     finally { refreshing = false; }
+  }
+
+  // SSE 在手机网络/内置 Tailscale 代理上偶尔会「连接还在、事件不到」，
+  // 又不会触发 onerror。运行中额外轮询实时快照，保证阶段总结和状态能更新。
+  let livePollTimer = null;
+  let livePolling = false;
+  let lastLiveSeq = -1;
+  let lastSseAt = 0;
+
+  function stopLivePolling() {
+    if (livePollTimer) { clearInterval(livePollTimer); livePollTimer = null; }
+    livePolling = false;
+    lastLiveSeq = -1;
+  }
+
+  function startLivePolling() {
+    if (livePollTimer) return;
+    livePollTimer = setInterval(pollLiveSnapshot, 1800);
+    pollLiveSnapshot();
+  }
+
+  async function pollLiveSnapshot() {
+    if (livePolling || !S.convId || !S.running || document.hidden) return;
+    // SSE 还在正常推事件时不重复重建 DOM；超过 4 秒没事件才启用轮询兜底
+    if (Date.now() - lastSseAt < 4000) return;
+    livePolling = true;
+    const wantId = S.convId;
+    try {
+      const data = await api('/api/conversation?id=' + encodeURIComponent(wantId) +
+        '&limit=1&light=1', { timeout: 8000 });
+      if (!S.convId || S.convId !== wantId) return;
+      if (!data.running) {
+        if (S.running) {
+          S.running = false;
+          S.live = null;
+          stopLivePolling();
+          syncLiveCursor();
+          closeStopConfirm();
+          setRunProgress('', '');
+          updateHeader();
+          updateComposer();
+          refreshConversation();
+        }
+        return;
+      }
+      const live = data.live;
+      if (!live) return;
+      const seq = Number.isFinite(live.seq) ? live.seq : -1;
+      if (seq >= 0 && seq === lastLiveSeq) return;
+      lastLiveSeq = seq;
+
+      const oldPerm = S.pendingPerm;
+      const oldAsk = S.pendingAsk;
+      S.running = true;
+      S.live = live;
+      S.pendingPerm = live.permission || null;
+      S.pendingAsk = live.ask || null;
+      if (data.contextTokens > 0 && S.conv) S.conv.contextTokens = data.contextTokens;
+
+      const changed = JSON.stringify(oldPerm) !== JSON.stringify(S.pendingPerm) ||
+        JSON.stringify(oldAsk) !== JSON.stringify(S.pendingAsk);
+      if (changed) {
+        if (S.pendingAsk) initAskState();
+        else { S.askSel = null; S.askOther = null; }
+        renderPanels();
+      }
+      const oldProc = document.querySelector('#liveTurn details.process');
+      const procOpen = oldProc ? oldProc.open : null;
+      renderLiveTurn();
+      if (procOpen != null) {
+        const nextProc = document.querySelector('#liveTurn details.process');
+        if (nextProc) nextProc.open = procOpen;
+      }
+      updateHeader();
+      updateComposer();
+      syncProgressFromLive();
+      maybeScroll();
+    } catch { /* 下次再试，SSE 正常时不受影响 */ }
+    finally { livePolling = false; }
   }
 
   /** 上滑到顶部时，按 before 游标补更早的一页 */
@@ -2133,6 +2549,7 @@
     const btn = $('#sendBtn');
     btn.disabled = true;
     const wasRunning = S.running;
+    let sentSteer = wasRunning;
     const sendConvId = S.convId;
     try {
       let finalText = text;
@@ -2179,6 +2596,7 @@
         } catch (e) {
           if (e.notRunning || /刚刚结束/.test(e.message)) {
             await api('/api/chat', { method: 'POST', body, timeout: 120000 });
+            sentSteer = false;
             S.running = true;
             updateComposer();
           } else {
@@ -2192,6 +2610,7 @@
           // 状态显示没在跑、但服务端其实还在跑：退化成插话，避免消息丢失
           if (/还在处理中/.test(e.message)) {
             await api('/api/steer', { method: 'POST', body, timeout: 120000 });
+            sentSteer = true;
           } else {
             throw e;
           }
@@ -2210,6 +2629,20 @@
       renderPendingFiles();
       autoGrow();
       maybeScroll(true);
+      startLivePolling();
+      // SSE 可能正在重连；发送成功后先在本地画出这条消息，回显到了会去重
+      appendSentUser({
+        id: 'local' + Date.now(),
+        role: 'user',
+        text: finalText,
+        images: images.length ? images : undefined,
+        steer: sentSteer,
+        ts: new Date().toISOString()
+      });
+      // 悬浮窗插话时 App 会先暂停手机操作；消息发出后通知 App 继续。
+      try {
+        if (window.AndroidDownloads && AndroidDownloads.phoneSent) AndroidDownloads.phoneSent();
+      } catch { /* 非 App 环境 */ }
     } catch (e) {
       // 让未上传成功的文件回到可重试状态
       for (const f of S.pendingFiles) {
@@ -2565,8 +2998,10 @@
     }
   }
 
-  function askDeleteConv() {
-    if (!S.convId) return;
+  function askDeleteConv(id) {
+    const target = id || S.convId;
+    if (!target) return;
+    S.deleteId = target;
     $('#confirmDelete').hidden = false;
   }
 
@@ -2575,13 +3010,19 @@
   }
 
   async function deleteConversation() {
+    const id = S.deleteId || S.convId;
+    if (!id) return;
     closeDeleteConfirm();
-    if (!S.convId) return;
     try {
-      await api('/api/conversation?id=' + encodeURIComponent(S.convId), { method: 'DELETE' });
-      closeChatSettings();
-      closeChat(false);
+      await api('/api/conversation?id=' + encodeURIComponent(id), { method: 'DELETE' });
+      const wasCurrent = S.convId === id;
+      S.deleteId = null;
+      if (wasCurrent) {
+        closeChatSettings();
+        closeChat(false);
+      }
       toast('对话已删除');
+      loadBoot().catch(() => {});
     } catch (e) {
       toast(e.message, 'err');
     }
@@ -2614,6 +3055,7 @@
     S.es = es;
     es.onopen = () => {
       clearTimeout(reconnectTimer);
+      lastSseAt = Date.now();
       const wasDown = S.wasDown;
       S.wasDown = false;
       setConn(true);
@@ -2628,6 +3070,7 @@
       scheduleReconnect();
     };
     es.onmessage = e => {
+      lastSseAt = Date.now();
       try { handleEvent(JSON.parse(e.data)); } catch { /* 忽略坏事件 */ }
     };
   }
@@ -2656,10 +3099,12 @@
     $('#confirmStop').addEventListener('click', e => {
       if (e.target === $('#confirmStop')) closeStopConfirm();
     });
+    const quickEffort = $('#quickEffort');
+    if (quickEffort) quickEffort.onchange = changeQuickEffort;
     $('#chatMenuBtn').onclick = openChatSettings;
     $('#settingsClose').onclick = closeChatSettings;
     $('#settingsSave').onclick = saveChatSettings;
-    $('#convDelete').onclick = askDeleteConv;
+    $('#convDelete').onclick = () => askDeleteConv(S.convId);
     $('#cancelDelete').onclick = closeDeleteConfirm;
     $('#confirmDeleteBtn').onclick = deleteConversation;
     $('#chatSettings').addEventListener('click', e => {
@@ -2753,6 +3198,7 @@
     $('#messages').addEventListener('touchstart', holdAutoScroll, { passive: true });
     $('#messages').addEventListener('wheel', holdAutoScroll, { passive: true });
     $('#messages').addEventListener('scroll', () => {
+      scheduleProcessCollapseUpdate();
       const m = $('#messages');
       if (m.scrollTop < 90 && S.conv && S.conv.hasMore && !S.loadingOlder) {
         loadOlderMessages();
@@ -2760,6 +3206,7 @@
     }, { passive: true });
 
     window.addEventListener('resize', syncViewportHeight);
+    window.addEventListener('resize', scheduleProcessCollapseUpdate);
     if (window.visualViewport) {
       window.visualViewport.addEventListener('resize', syncViewportHeight);
       window.visualViewport.addEventListener('scroll', syncViewportHeight);
@@ -2792,7 +3239,10 @@
       if (document.hidden) return;
       if (!S.conn) hardReconnect();
       loadBoot().catch(() => {});
-      if (S.convId) refreshConversation();
+      if (S.convId) {
+        refreshConversation();
+        if (S.running) startLivePolling();
+      }
     });
   }
 
@@ -2833,6 +3283,35 @@
       navigator.serviceWorker.register('/sw.js').catch(() => {});
     }
   }
+
+  // 从悬浮窗/外部打开指定对话。
+  window.addEventListener('hashchange', () => {
+    const m = location.hash.match(/^#c=(.+)$/);
+    if (!m) return;
+    let id;
+    try { id = decodeURIComponent(m[1]); } catch { id = m[1]; }
+    if (id && id !== S.convId) openConv(id);
+  });
+
+  // App 切到后台/回到前台时同步聊天页可见状态。
+  document.addEventListener('visibilitychange', () => {
+    try {
+      if (!window.AndroidDownloads) return;
+      if (document.hidden) {
+        if (AndroidDownloads.phoneChatHidden) AndroidDownloads.phoneChatHidden();
+        return;
+      }
+      const c = document.getElementById('chatScreen');
+      if (c && !c.hidden) {
+        if (AndroidDownloads.phoneChatVisible) {
+          AndroidDownloads.phoneChatVisible(S.convId || '');
+        }
+        if (AndroidDownloads.phoneChatEntered) {
+          AndroidDownloads.phoneChatEntered(S.convId || '');
+        }
+      }
+    } catch { /* 非 App 环境 */ }
+  });
 
   // 调试入口：控制台里可以看状态；不影响正常使用
   window.__m = S;

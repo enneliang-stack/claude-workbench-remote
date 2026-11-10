@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Claude 工作台</string>
+    <string name="accessibility_description">允许 Claude 在本机任务中读取当前屏幕、点按和输入。密码框会被拒绝；支付、转账和验证码请自己操作。</string>
 </resources>

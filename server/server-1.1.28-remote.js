@@ -997,6 +997,16 @@ async function backfillTitles() {
   }
 }
 
+/**
+ * 真正的压缩摘要只在开头出现；引用其它对话的消息里可能夹带旧摘要，
+ * 不能让整条用户消息被误判成摘要隐藏掉。
+ */
+function looksLikeCompactSummaryText(text) {
+  const s = String(text || '');
+  if (/<gui-reference-context>/i.test(s)) return false;
+  return /^\s*(?:This session is being continued|The summary below covers)/i.test(s);
+}
+
 /** 把一个会话文件解析成前端可直接渲染的消息数组 */
 function parseTranscript(text) {
   const messages = [];
@@ -1109,8 +1119,8 @@ function parseTranscript(text) {
       if (o.origin && o.origin.kind && o.origin.kind !== 'human') continue;
 
       lastAssistant = null;
-      const compactSummary = !!o.isCompactSummary ||
-        /This session is being continued|The summary below covers/i.test(textPart);
+      const compactSummary = !/<gui-reference-context>/i.test(textPart) &&
+        (!!o.isCompactSummary || looksLikeCompactSummaryText(textPart));
       messages.push({
         id: o.uuid, role: 'user', text: textPart,
         images: images.length ? images : undefined,
@@ -1179,8 +1189,7 @@ function handoffMessages(messages, maxMessages = 40, maxChars = 20000) {
   let summary = null;
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i];
-    if (m.role === 'user' &&
-        /This session is being continued|The summary below covers/i.test(m.text || '')) {
+    if (m.role === 'user' && looksLikeCompactSummaryText(m.text)) {
       summary = m;
       break;
     }
@@ -3381,10 +3390,31 @@ async function handleApi(req, res, url) {
     return json(res, { ok: true });
   }
 
+  if (p === '/api/phone/current' && req.method === 'GET') {
+    if (!IS_PHONE) return json(res, { error: '仅手机端可用' }, 404);
+    // runners 里可能还留着已经结束的 Runner；必须看 busy，不能只看 key 是否存在。
+    const active = [];
+    for (const [id, r] of runners) {
+      if (r && r.busy) active.push(id);
+    }
+    return json(res, {
+      ok: true,
+      id: active[0] || '',
+      running: active.length > 0,
+      count: active.length
+    });
+  }
+
   if (p === '/api/stop' && req.method === 'POST') {
     const body = await readJson(req);
-    const r = runners.get(String(body.id || ''));
-    if (r) r.stop();
+    const id = String(body.id || '');
+    if (id) {
+      const r = runners.get(id);
+      if (r) r.stop();
+    } else {
+      // 悬浮窗「停止」：没有指定会话时停掉当前所有运行中的会话。
+      for (const r of runners.values()) r.stop();
+    }
     return json(res, { ok: true });
   }
 
@@ -3440,6 +3470,29 @@ async function handleApi(req, res, url) {
       return json(res, { ok: true, path: target });
     } catch (e) {
       return json(res, { error: e.code === 'EEXIST' ? '文件夹已存在' : e.message }, 400);
+    }
+  }
+
+  if (p === '/api/fs/delete' && req.method === 'POST') {
+    if (!IS_PHONE) return json(res, { error: '当前模式不允许删除文件夹' }, 403);
+    const body = await readJson(req);
+    const target = path.resolve(String(body.path || ''));
+    const roots = ['/workspace', '/sdcard'].map(r => path.resolve(r));
+    const root = roots.find(r => target === r || target.startsWith(r + path.sep));
+    if (!root) return json(res, { error: '只能删除手机工作区或存储里的文件夹' }, 400);
+    if (target === root) return json(res, { error: '不能删除根目录' }, 400);
+    const rel = path.relative(root, target);
+    if (rel.split(path.sep).includes('Android')) {
+      return json(res, { error: '不能删除 Android 系统目录' }, 400);
+    }
+    let st;
+    try { st = await fsp.lstat(target); } catch { return json(res, { error: '文件夹不存在' }, 400); }
+    if (!st.isDirectory() && !st.isSymbolicLink()) return json(res, { error: '不是文件夹' }, 400);
+    try {
+      await fsp.rm(target, { recursive: st.isDirectory(), force: false });
+      return json(res, { ok: true, path: target });
+    } catch (e) {
+      return json(res, { error: '删除失败：' + e.message }, 500);
     }
   }
 

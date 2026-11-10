@@ -1,9 +1,9 @@
 {
-  "versionCode": 58,
-  "versionName": "2.4.17",
+  "versionCode": 60,
+  "versionName": "2.4.19",
   "apk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/latest/download/ClaudeWorkbench-full.apk",
-  "sha256": "92b89a3ae7833a2429416a08e48d42eacb7981328eacf0da51596f7f0f4721f1",
+  "sha256": "57d57ba0d446ef686db501d9f4f136140cfe5276ab1e764ff593001609732ba9",
   "slimApk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/latest/download/ClaudeWorkbench-slim.apk",
-  "slimSha256": "9393e6be95a36d53ae698f0ce6ecb7d6ac9c2865f09516806674a23dfefca007",
-  "notes": "2.4.17：隐私修正——移除 2.4.16 示例中的真实局域网/Tailscale IP，只保留 192.168.x.x / 100.x.x.x 占位。保留 2.4.16 的生成文件打开/位置、过程收起、可拖动插话/停止、完成提示和 full/slim 更新。安装包里不含 API Key、Tailscale auth key 或实际 token。"
+  "slimSha256": "9fc12a315468f446812fc84e63e0a2cff9329b512a287ade98a7cc8a4f1d8adc",
+  "notes": "2.4.19：修复手机页进度不同步——手机网络/内置 Tailscale 代理下 SSE 偶尔「连接还在、事件不到」，阶段总结、运行状态和进度提示不更新，必须切出对话再切回；现在运行中额外轮询实时快照，SSE 正常时不重复刷新，断线也能持续更新。保留 2.4.18 的引用消息、长消息收起、发送立即显示修复。已装环境用精简包约 8MB，新用户用完整包。"
 }

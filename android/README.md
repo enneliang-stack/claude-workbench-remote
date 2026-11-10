@@ -1,6 +1,26 @@
-# Android 通用版 APK 源码
+# Android 双模式 APK 源码
 
-这个壳只是 WebView；手机页面本身由电脑实时提供。
+App 启动后先到主页，可以选两种模式：
+
+- **电脑端**：原来的 WebView 远程模式，加载电脑上「远程访问.cmd」打印的地址；
+  手机页面由电脑实时提供，这部分行为不变。
+- **手机端**：在手机本地用 proot + Alpine 跑 Node 和 Claude Code，
+  WebView 打开 `127.0.0.1` 上的同一套手机页；首次使用需下载约 500 MB 运行时。
+
+手机端相关代码：
+
+- `src/.../MainActivity.java`：主页、模式切换、WebView、安装/配置/日志界面。
+- `src/.../LocalEngine.java`：Alpine 下载解压、proot 启动、Node/Claude Code 安装。
+- `src/.../EngineService.java`：前台服务与提醒，防止手机端被系统杀掉。
+- `src/.../LocalConfig.java`：DeepSeek 地址/Key/模型、存储权限、Claude 配置写入。
+- `src/.../PhoneAccessibilityService.java`：无障碍服务入口。
+- `src/.../PhoneControlServer.java`：本机 127.0.0.1 控制接口（读屏/点按/输入/打开 App）。
+- `res/xml/accessibility_service_config.xml`：无障碍能力声明。
+- `assets/phone/`：由 `phone/build-phone-assets.py` 从 PC 版生成的手机端服务端、
+  `phone-mcp.js`、MCP 配置、手机文件夹选择器，以及内置 Tailscale 的 `tsproxy` 二进制。
+- `libs/arm64-v8a/`：proot 运行库（来源与许可见 `assets/licenses/NOTICE.md`）。
+- `assets/licenses/`：第三方许可证。
+
 通用版不内置任何人的地址/token，首次打开让用户粘贴自己的连接地址。
 
 ## 构建
