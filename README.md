@@ -1,29 +1,32 @@
-# Claude 工作台 · 手机远程控制（独立包）
+# Claude 工作台 · 手机 App / APK
 
-这个仓库只放**手机页 / 远程访问 / Android APK**相关的改动，和主客户端更新包隔离。
-朋友用不到手机远程控制，所以主客户端的「一键更新包」里不包含这里的任何文件或代码。
+1.2.0 起手机功能已经并入主客户端，本仓库不再提供「在电脑上叠加远程功能」的安装器。
+现在这里负责：
 
-需要的人可以单独下载这个仓库，运行一次安装器，把远程功能叠加到自己的
-Claude 工作台客户端上；主客户端以后升级不会自动带这套功能，也不会把它发给朋友。
+- Android App 源码与构建（`android/`、`phone/`）
+- 手机页源文件（`overlay/claude-gui/public/`，构建时打进 APK）
+- 手机本机 server（`server/`，构建时生成 `assets/phone/server.js`）
+- APK Release 和 `apk/update.json`
 
-## 下载
+电脑端使用方式：安装 1.2.0+ 的统一客户端，侧栏「手机连接」里开启访问并复制地址；
+手机 App 粘贴地址即可。同一 Wi-Fi 不需要 Tailscale 账号。
 
-- GitHub 仓库：<https://github.com/enneliang-stack/claude-workbench-remote>
-- 国内加速整包（推荐发给国内用户）：
-  <https://ghfast.top/https://github.com/enneliang-stack/claude-workbench-remote/archive/refs/heads/main.zip>
-- 通用版 APK 直链（国内加速）：
-  <https://ghfast.top/https://raw.githubusercontent.com/enneliang-stack/claude-workbench-remote/main/apk/Claude%E5%B7%A5%E4%BD%9C%E5%8F%B0-%E9%80%9A%E7%94%A8%E7%89%88-1.0.11.apk>
-- **双模式 APK（2.4.17 完整内置环境）**：
-  `apk/Claude工作台-双模式-2.4.17-内置环境.apk`（约 194 MB）
-  - 2.4.17：隐私修正，移除安装包里示例用的真实局域网/Tailscale IP；
-    确认不含 API Key、Tailscale auth key、实际 token 或对话记录。
-  - 2.4.16：生成文件支持直接打开和 App 内「位置」；过程收起单浮钮；
-    插话/停止可拖动吸附；任务完成提示常驻；引用菜单精简。
-  - 完整包仍内置 Alpine、Node/npm、Claude Code，新用户首次安装无需
-    下载环境；已装环境的用户可用 2.4.17 精简包（约 8 MB）。
-  - 检查更新支持 full/slim 双通道（`apk/update.json`）。
-  - 完整包超过 GitHub 普通文件 100 MB 限制，发布用 Releases，
-    见 `apk/更新发布说明.txt`。
+## 最新 APK（2.4.19）
+
+- 完整包（新用户/未装环境）：`ClaudeWorkbench-full.apk`，约 194 MB
+  SHA-256：`57d57ba0d446ef686db501d9f4f136140cfe5276ab1e764ff593001609732ba9`
+- 精简包（已装手机环境）：`ClaudeWorkbench-slim.apk`，约 8.1 MB
+  SHA-256：`9fc12a315468f446812fc84e63e0a2cff9329b512a287ade98a7cc8a4f1d8adc`
+- 2.4.19 修复手机页进度不同步：SSE 在手机网络/内置 Tailscale 代理下偶尔
+  「连接还在、事件不到」，阶段总结和运行状态不更新；现在运行中额外轮询实时快照。
+- 2.4.18 修复引用对话后消息被误判成压缩摘要、长消息默认收起、发送后立即显示。
+- 完整包超过 GitHub 普通文件 100 MB 限制，走 Releases；
+  App 的「检查更新」读取 `apk/update.json`。
+- 下载：<https://github.com/enneliang-stack/claude-workbench-remote/releases/latest>
+- 国内加速：<https://ghfast.top/https://github.com/enneliang-stack/claude-workbench-remote/releases/latest>
+
+## 历史版本
+
 - **双模式 APK（2.4.5）**：`apk/Claude工作台-双模式-2.4.5.apk`
   - 2.4.5：隐私加固——密码框内容不再返回给模型，卡号/身份证长数字打码，
     验证码界面隐藏数字，密码/支付/转账等界面拒绝截图并交还用户。
