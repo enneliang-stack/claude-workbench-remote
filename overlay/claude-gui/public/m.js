@@ -1747,8 +1747,11 @@
       return;
     }
     box.hidden = false;
-    box.className = 'run-progress' + (kind ? ' ' + kind : '');
-    box.querySelector('.txt').textContent = text;
+    const cls = 'run-progress' + (kind ? ' ' + kind : '');
+    // 轮询会频繁刷新同一句进度；class 不变时不要重设，避免闪烁光标动画被重置
+    if (box.className !== cls) box.className = cls;
+    const txt = box.querySelector('.txt');
+    if (txt.textContent !== text) txt.textContent = text;
   }
 
   function syncProgressFromLive() {

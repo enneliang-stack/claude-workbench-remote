@@ -44,3 +44,6 @@ apk/*.apk
 # Python 缓存
 __pycache__/
 *.pyc
+
+# 本地浏览器测试产物
+.playwright-cli/

@@ -531,6 +531,11 @@ details.tool summary::-webkit-details-marker { display: none; }
 .run-progress .txt {
   min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+.run-progress .txt::after {
+  content: ""; display: inline-block; width: 6px; height: 12px;
+  margin-left: 6px; vertical-align: -1px; background: currentColor;
+  border-radius: 1px; animation: blink 1s steps(2) infinite;
+}
 .run-progress.thinking { color: var(--muted); }
 .run-progress.tool { color: var(--text); }
 .run-progress.wait { color: #e0c05f; }

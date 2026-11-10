@@ -1,9 +1,9 @@
 {
-  "versionCode": 60,
-  "versionName": "2.4.19",
+  "versionCode": 61,
+  "versionName": "2.4.20",
   "apk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/latest/download/ClaudeWorkbench-full.apk",
-  "sha256": "57d57ba0d446ef686db501d9f4f136140cfe5276ab1e764ff593001609732ba9",
+  "sha256": "fc671dd9ffb7d8cb5003813cd8643085fe132f6d141d4eb51a4d763a557b4a76",
   "slimApk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/latest/download/ClaudeWorkbench-slim.apk",
-  "slimSha256": "9fc12a315468f446812fc84e63e0a2cff9329b512a287ade98a7cc8a4f1d8adc",
-  "notes": "2.4.19：修复手机页进度不同步——手机网络/内置 Tailscale 代理下 SSE 偶尔「连接还在、事件不到」，阶段总结、运行状态和进度提示不更新，必须切出对话再切回；现在运行中额外轮询实时快照，SSE 正常时不重复刷新，断线也能持续更新。保留 2.4.18 的引用消息、长消息收起、发送立即显示修复。已装环境用精简包约 8MB，新用户用完整包。"
+  "slimSha256": "d4dfabf7dc1e603b84648deb213ba6851e2c9b8009d76a6b9c01a95bc2de8814",
+  "notes": "2.4.20：恢复手机页运行进度白字后面的闪烁光标，轮询刷新同一句进度时不再重置动画。保留 2.4.19 的实时快照轮询（SSE 断线也能更新阶段状态）、2.4.18 的引用消息、长消息收起、发送立即显示。已装环境用精简包约 8MB，新用户用完整包。"
 }
