@@ -11,13 +11,15 @@
 电脑端使用方式：安装 1.2.0+ 的统一客户端，侧栏「手机连接」里开启访问并复制地址；
 手机 App 粘贴地址即可。同一 Wi-Fi 不需要 Tailscale 账号。
 
-## 最新 APK（2.4.23 精简 / 2.4.21 完整）
+## 最新 APK（2.4.24 精简 / 2.4.21 完整）
 
 - 完整包（新用户/未装环境）：`ClaudeWorkbench-full.apk`，2.4.21，约 194 MB
   SHA-256：`4177f27dc3e3446f50130fb2ea3cbfc5731578247a37fc7eba2314162342e53e`
   下载：`https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.21/ClaudeWorkbench-full.apk`
-- 精简包（已装手机环境）：`ClaudeWorkbench-slim.apk`，2.4.23，约 8.1 MB
-  SHA-256：`f2009cd35141125650ecd60e61e8286c34bad9cf84d35ccdd414bef77f1b4d47`
+- 精简包（已装手机环境）：`ClaudeWorkbench-slim.apk`，2.4.24，约 8.1 MB
+  SHA-256：`f9820d27594bd8b25046b60650ca9feed42c2a1cdbc27e55edaec8f1a955012d`
+- 2.4.24 内置 Tailscale 连接超时后自动重试一次，不用再重启 App；日志默认只看报错，
+  复制也只复制报错；日志页自动刷新不再把正在上滑的页面拉回顶部。
 - 2.4.23 手机端通知栏显示任务运行中/N 个任务已完成/空闲中；普通手机本机任务也显示悬浮窗
   （需手机控制/无障碍开启）；远程电脑页任务不计入手机端状态，避免重叠。
 - 2.4.22 修复日志页自动刷新强制滚到底、通知正文误跳日志、电脑端误显示「手机端」、

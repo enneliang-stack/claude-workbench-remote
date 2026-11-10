@@ -51,7 +51,7 @@ public final class LocalEngine {
                     + ALPINE_VERSION + "-aarch64.tar.gz"
     };
     private static final int SERVER_PORT = 4712;
-    private static final int ASSET_VERSION = 42;
+    private static final int ASSET_VERSION = 43;
     private static final String GCS_BASE =
             "https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases";
     private static final String FALLBACK_CLAUDE_VERSION = "2.1.319";
@@ -1081,6 +1081,10 @@ public final class LocalEngine {
 
     /** 启动内置 tsnet 代理，等它真正连上 tailnet 再返回。 */
     public static void startTailscaleProxy(Context c, Listener listener) throws Exception {
+        startTailscaleProxy(c, listener, 1);
+    }
+
+    private static void startTailscaleProxy(Context c, Listener listener, int attempt) throws Exception {
         synchronized (TS_LOCK) {
             if (!isInstalled(c)) throw new IOException("手机端环境尚未安装");
             String pcUrl = LocalConfig.tsPcUrl(c);
@@ -1158,17 +1162,49 @@ public final class LocalEngine {
                     String err = st.optString("error", "");
                     if (!err.isEmpty()) {
                         stopTailscaleProxy(c);
+                        if (attempt < 2) {
+                            log(c, "内置 Tailscale 连接失败，自动重试一次：" + err);
+                            progress(listener, "内置 Tailscale 连接失败，正在自动重试…");
+                            sleepBeforeTsRetry();
+                            startTailscaleProxy(c, listener, attempt + 1);
+                            return;
+                        }
                         throw new IOException("内置 Tailscale 连接失败：" + err);
                     }
                 }
                 if (tsProxyProcess == null || !tsProxyProcess.isAlive()) {
-                    throw new IOException("内置 Tailscale 启动失败："
-                        + (last.isEmpty() ? tail(readLog(c), 1500) : last));
+                    String msg = "内置 Tailscale 启动失败："
+                        + (last.isEmpty() ? tail(readLog(c), 1500) : last);
+                    stopTailscaleProxy(c);
+                    if (attempt < 2) {
+                        log(c, "内置 Tailscale 进程退出，自动重试一次");
+                        progress(listener, "内置 Tailscale 启动失败，正在自动重试…");
+                        sleepBeforeTsRetry();
+                        startTailscaleProxy(c, listener, attempt + 1);
+                        return;
+                    }
+                    throw new IOException(msg);
                 }
                 Thread.sleep(500);
             }
             stopTailscaleProxy(c);
+            if (attempt < 2) {
+                log(c, "内置 Tailscale 连接超时，自动重试一次");
+                progress(listener, "内置 Tailscale 连接超时，正在自动重试…");
+                sleepBeforeTsRetry();
+                startTailscaleProxy(c, listener, attempt + 1);
+                return;
+            }
             throw new IOException("内置 Tailscale 连接超时" + (last.isEmpty() ? "" : "：" + last));
+        }
+    }
+
+    private static void sleepBeforeTsRetry() throws IOException {
+        try {
+            Thread.sleep(1500);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("内置 Tailscale 重试已取消");
         }
     }
 
@@ -1693,6 +1729,27 @@ public final class LocalEngine {
     public static String readLog(Context c) {
         try {
             return readText(logFile(c));
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    /** 只读日志末尾，避免日志很长时界面每秒读取整个文件。 */
+    public static String readLogTail(Context c, int maxBytes) {
+        File f = logFile(c);
+        if (!f.isFile()) return "";
+        try (java.io.RandomAccessFile raf = new java.io.RandomAccessFile(f, "r")) {
+            long len = raf.length();
+            long start = Math.max(0, len - Math.max(1, maxBytes));
+            raf.seek(start);
+            byte[] buf = new byte[(int) (len - start)];
+            raf.readFully(buf);
+            String s = new String(buf, StandardCharsets.UTF_8);
+            if (start > 0) {
+                int nl = s.indexOf('\n');
+                if (nl >= 0) s = s.substring(nl + 1);
+            }
+            return s;
         } catch (Exception e) {
             return "";
         }

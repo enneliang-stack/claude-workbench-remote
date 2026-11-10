@@ -38,6 +38,7 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Button;
+import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
@@ -941,32 +942,21 @@ public class MainActivity extends Activity {
             return;
         }
 
-        final boolean[] installStick = {true};
-        final boolean[] installProgrammatic = {false};
-        scroll.setOnScrollChangeListener((v, sx, sy, oldSx, oldSy) -> {
-            if (installProgrammatic[0]) return;
-            View child = scroll.getChildAt(0);
-            installStick[0] = child == null || child.getBottom() - (scroll.getHeight() + sy) < dp(24);
-        });
+        final String[] installShown = {""};
         installPoll = new Runnable() {
             @Override
             public void run() {
-                String log = LocalEngine.readLog(MainActivity.this);
-                int max = 6000;
-                if (log.length() > max) log = log.substring(log.length() - max);
-                boolean follow = installStick[0];
-                int keepY = scroll.getScrollY();
-                logView.setText(log);
-                installProgrammatic[0] = true;
-                if (follow) {
+                String log = LocalEngine.readLogTail(MainActivity.this, 6000);
+                if (!log.equals(installShown[0])) {
+                    View child = scroll.getChildAt(0);
+                    boolean follow = child == null || child.getHeight() == 0
+                        || child.getBottom() - (scroll.getHeight() + scroll.getScrollY()) < dp(24);
+                    int keepY = scroll.getScrollY();
+                    installShown[0] = log;
+                    logView.setText(log);
                     scroll.post(() -> {
-                        scroll.fullScroll(View.FOCUS_DOWN);
-                        installProgrammatic[0] = false;
-                    });
-                } else {
-                    scroll.post(() -> {
-                        scroll.scrollTo(0, keepY);
-                        installProgrammatic[0] = false;
+                        if (follow) scroll.fullScroll(View.FOCUS_DOWN);
+                        else scroll.scrollTo(0, keepY);
                     });
                 }
                 boolean done = LocalEngine.isInstalled(MainActivity.this) && !LocalEngine.isInstalling();
@@ -1541,17 +1531,52 @@ public class MainActivity extends Activity {
     }
 
     private void showLogDialog() {
-        TextView tv = text(LocalEngine.readLog(this), 10, Color.rgb(220, 220, 220));
+        final CheckBox onlyErrors = new CheckBox(this);
+        onlyErrors.setText("只看报错");
+        onlyErrors.setTextColor(Color.rgb(220, 220, 220));
+        onlyErrors.setChecked(true);
+
+        TextView hint = text("默认只显示报错，复制时也只复制这些；取消勾选可查看全部日志。", 11, MUTED);
+        hint.setPadding(dp(4), 0, dp(4), dp(6));
+
+        TextView tv = text("", 10, Color.rgb(220, 220, 220));
         tv.setTypeface(Typeface.MONOSPACE);
         tv.setTextIsSelectable(true);
         ScrollView scroll = new ScrollView(this);
         scroll.setPadding(dp(16), dp(8), dp(16), dp(8));
         scroll.addView(tv);
         scroll.setLayoutParams(new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, dp(420)));
+            ViewGroup.LayoutParams.MATCH_PARENT, dp(380)));
+
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.addView(onlyErrors);
+        box.addView(hint);
+        box.addView(scroll);
+
+        final String[] shown = {""};
+        final Runnable[] update = new Runnable[1];
+        update[0] = () -> {
+            String full = onlyErrors.isChecked()
+                ? LocalEngine.readLogTail(this, 300000)
+                : LocalEngine.readLog(this);
+            String next = onlyErrors.isChecked() ? filterErrorLog(full) : full;
+            if (next.equals(shown[0])) return;
+            View child = scroll.getChildAt(0);
+            boolean atBottom = child == null || child.getHeight() == 0
+                || child.getBottom() - (scroll.getHeight() + scroll.getScrollY()) < dp(32);
+            int keepY = scroll.getScrollY();
+            shown[0] = next;
+            tv.setText(next);
+            scroll.post(() -> {
+                if (atBottom) scroll.fullScroll(View.FOCUS_DOWN);
+                else scroll.scrollTo(0, keepY);
+            });
+        };
+
         final AlertDialog dlg = new AlertDialog.Builder(this)
             .setTitle("手机端运行日志（自动刷新）")
-            .setView(scroll)
+            .setView(box)
             .setPositiveButton("复制", (d, w) -> {
                 ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
                 if (cm != null) cm.setPrimaryClip(ClipData.newPlainText("phone.log", tv.getText()));
@@ -1559,41 +1584,57 @@ public class MainActivity extends Activity {
             })
             .setNeutralButton("清空", (d, w) -> {
                 LocalEngine.logFile(this).delete();
+                shown[0] = "";
                 Toast.makeText(this, "已清空", Toast.LENGTH_SHORT).show();
             })
             .setNegativeButton("关闭", null)
             .create();
-        final boolean[] stick = {true};
-        final boolean[] programmatic = {false};
-        scroll.setOnScrollChangeListener((v, sx, sy, oldSx, oldSy) -> {
-            if (programmatic[0]) return;
-            View child = scroll.getChildAt(0);
-            stick[0] = child == null || child.getBottom() - (scroll.getHeight() + sy) < dp(24);
+        onlyErrors.setOnCheckedChangeListener((b, checked) -> {
+            shown[0] = "";
+            update[0].run();
         });
         final Runnable[] refresh = new Runnable[1];
         refresh[0] = () -> {
             if (!dlg.isShowing()) return;
-            boolean follow = stick[0];
-            int keepY = scroll.getScrollY();
-            tv.setText(LocalEngine.readLog(this));
-            programmatic[0] = true;
-            if (follow) {
-                scroll.post(() -> {
-                    scroll.fullScroll(View.FOCUS_DOWN);
-                    programmatic[0] = false;
-                });
-            } else {
-                scroll.post(() -> {
-                    scroll.scrollTo(0, keepY);
-                    programmatic[0] = false;
-                });
-            }
+            update[0].run();
             handler.postDelayed(refresh[0], 1000);
         };
         dlg.setOnDismissListener(d -> handler.removeCallbacks(refresh[0]));
         dlg.show();
-        scroll.post(() -> scroll.fullScroll(View.FOCUS_DOWN));
-        handler.postDelayed(refresh[0], 300);
+        update[0].run();
+        tv.post(() -> scroll.fullScroll(View.FOCUS_DOWN));
+        handler.postDelayed(refresh[0], 800);
+    }
+
+    /** 日志页默认只显示报错；保留 Java 堆栈、失败/超时/异常等关键行。 */
+    private static String filterErrorLog(String text) {
+        if (text == null || text.isEmpty()) return "暂无日志。\n";
+        if (text.length() > 300000) text = text.substring(text.length() - 300000);
+        StringBuilder out = new StringBuilder();
+        int shown = 0;
+        for (String line : text.split("\n", -1)) {
+            String l = line.toLowerCase(Locale.ROOT);
+            String t = line.trim();
+            boolean head = l.contains("error") || l.contains("fail") || l.contains("fatal")
+                || l.contains("panic") || l.contains("exception") || l.contains("timeout")
+                || l.contains("refused") || l.contains("denied") || l.contains("unreachable")
+                || l.contains("unexpected") || l.contains("crash") || l.contains("stack trace")
+                || l.contains("失败") || l.contains("错误") || l.contains("异常")
+                || l.contains("超时") || l.contains("崩溃") || l.contains("未连接")
+                || l.contains("连接失败") || l.contains("无法") || l.contains("断开")
+                || l.contains("拒绝");
+            boolean stack = t.contains("	at ") || t.contains("Caused by:")
+                || t.contains("Suppressed:") || t.startsWith("... ")
+                || (t.contains(".java:") && t.contains("("));
+            if (!head && !stack) continue;
+            out.append(line).append('\n');
+            if (++shown >= 2000) {
+                out.append("…（报错较多，只显示最近 2000 行）\n");
+                break;
+            }
+        }
+        if (shown == 0) return "暂无报错记录。取消勾选「只看报错」可查看全部日志。\n";
+        return out.toString();
     }
 
     // ---------------------------------------------------------------- WebView

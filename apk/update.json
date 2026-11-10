@@ -1,9 +1,9 @@
 {
-  "versionCode": 64,
-  "versionName": "2.4.23",
+  "versionCode": 65,
+  "versionName": "2.4.24",
   "apk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.21/ClaudeWorkbench-full.apk",
   "sha256": "4177f27dc3e3446f50130fb2ea3cbfc5731578247a37fc7eba2314162342e53e",
   "slimApk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/latest/download/ClaudeWorkbench-slim.apk",
-  "slimSha256": "f2009cd35141125650ecd60e61e8286c34bad9cf84d35ccdd414bef77f1b4d47",
-  "notes": "2.4.23：手机端通知栏显示任务状态——任务运行中 / N 个任务已完成 / 空闲中；普通手机本机任务也会像手机控制任务一样，切出去后显示悬浮窗（需要手机控制/无障碍已开启）。远程电脑页任务不计入手机端状态，避免重叠。保留 2.4.22 的日志滚动、通知点击、电脑端标识和 Tailscale 崩溃修复。完整包保持 2.4.21，已装环境直接装精简包。"
+  "slimSha256": "f9820d27594bd8b25046b60650ca9feed42c2a1cdbc27e55edaec8f1a955012d",
+  "notes": "2.4.24：内置 Tailscale 连接超时后自动重试一次，不用再重启 App；日志默认只看报错，复制时也只复制报错，取消勾选可查看全部；日志页自动刷新不再把正在上滑的页面拉回顶部。保留 2.4.23 的通知栏任务状态和本机任务悬浮窗。完整包保持 2.4.21，已装环境直接装精简包。"
 }
