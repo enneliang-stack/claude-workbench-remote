@@ -490,15 +490,31 @@ public class MainActivity extends Activity {
         }, "pc-probe").start();
     }
 
+    /** 内置 Tailscale 刚连上时对端路径可能还没就绪，给几次短重试。 */
+    private boolean probeBuiltinPc(int generation) {
+        String local = LocalConfig.tsLocalUrl(this);
+        if (local.isEmpty()) return false;
+        for (int i = 0; i < 3; i++) {
+            if (generation != pcProbeGeneration || !"pc".equals(mode)) return false;
+            if (probePcUrl(local, 2500, 12000)) return true;
+            if (i < 2) {
+                try {
+                    Thread.sleep(1500);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return false;
+                }
+            }
+        }
+        return false;
+    }
+
     /** 启动内置 Tailscale，再用它本机的 127.0.0.1:4720 探测电脑页面。 */
     private String startBuiltinAndProbe(int generation) {
         if (generation != pcProbeGeneration || !"pc".equals(mode)) return null;
         // 代理已经在跑时不要再显示“启动”，直接用它探测；返回主页不会停掉它。
-        if (LocalEngine.isTailscaleProxyRunning()) {
-            String local = LocalConfig.tsLocalUrl(MainActivity.this);
-            if (!local.isEmpty() && probePcUrl(local, 2500, 12000)) {
-                return local;
-            }
+        if (LocalEngine.isTailscaleProxyRunning() && probeBuiltinPc(generation)) {
+            return LocalConfig.tsLocalUrl(MainActivity.this);
         }
         runOnUiThread(() -> {
             if (generation == pcProbeGeneration && "pc".equals(mode) && loadingText != null) {
@@ -509,14 +525,13 @@ public class MainActivity extends Activity {
             LocalEngine.startTailscaleProxy(MainActivity.this,
                 line -> LocalEngine.log(MainActivity.this, line));
             if (generation != pcProbeGeneration || !"pc".equals(mode)) return null;
-            String local = LocalConfig.tsLocalUrl(MainActivity.this);
-            if (!local.isEmpty() && probePcUrl(local, 2500, 12000)) {
+            if (probeBuiltinPc(generation)) {
                 runOnUiThread(() -> {
                     if (generation == pcProbeGeneration && "pc".equals(mode) && loadingText != null) {
                         loadingText.setText("正在打开电脑端…");
                     }
                 });
-                return local;
+                return LocalConfig.tsLocalUrl(MainActivity.this);
             }
         } catch (Exception e) {
             LocalEngine.log(MainActivity.this, "内置 Tailscale 启动失败（继续其它地址）：" + e);
@@ -1271,15 +1286,6 @@ public class MainActivity extends Activity {
                 }
             }
             final Exception err = last;
-            if (err == null) {
-                // 安装前先停掉内置 Tailscale，避免旧 App 进程留下的代理占着 4720，
-                // 导致更新后第一次进电脑端连不上。
-                try {
-                    LocalEngine.stopTailscaleProxy(MainActivity.this);
-                } catch (Exception e) {
-                    LocalEngine.log(MainActivity.this, "更新前停止内置 Tailscale 失败：" + e);
-                }
-            }
             runOnUiThread(() -> {
                 if (pd.isShowing()) pd.dismiss();
                 if (err != null) {

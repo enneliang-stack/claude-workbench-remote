@@ -1,9 +1,9 @@
 {
-  "versionCode": 68,
-  "versionName": "2.4.27",
+  "versionCode": 69,
+  "versionName": "2.4.28",
   "apk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.21/ClaudeWorkbench-full.apk",
   "sha256": "4177f27dc3e3446f50130fb2ea3cbfc5731578247a37fc7eba2314162342e53e",
   "slimApk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/latest/download/ClaudeWorkbench-slim.apk",
-  "slimSha256": "bd60d61941ebd4371c8fc64b309101f5371c3c95304377f4abd125229172d8b1",
-  "notes": "2.4.27：返回主页不会再重复显示“启动内置 Tailscale”——代理还在运行就直接复用探测；Wi-Fi 下会并行测速所有已配置地址，自动用首字节最快的一条；蜂窝网络仍优先内置 Tailscale。保留 2.4.26 的更新后首次连接修复、2.4.25 的压缩摘要修复和 2.4.24 的自动重试、只看报错日志。完整包保持 2.4.21，已装环境直接装精简包。"
+  "slimSha256": "a19480b003348187ed11d6b8b9a25ef3379fd45a0bedf75e4078f652ae1e8da1",
+  "notes": "2.4.28：修复更新后第一次进电脑端仍失败——2.4.27 在安装前强制停掉内置 Tailscale，等于每次更新都重建连接，制造了首次连接空窗；现在不再强制停，旧代理连着的会直接复用；连接后对电脑页面探测增加 3 次重试。保留 2.4.27 的最快线路选择和返回主页不重启。完整包保持 2.4.21，已装环境直接装精简包。"
 }
