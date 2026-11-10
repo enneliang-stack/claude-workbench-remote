@@ -941,14 +941,34 @@ public class MainActivity extends Activity {
             return;
         }
 
+        final boolean[] installStick = {true};
+        final boolean[] installProgrammatic = {false};
+        scroll.setOnScrollChangeListener((v, sx, sy, oldSx, oldSy) -> {
+            if (installProgrammatic[0]) return;
+            View child = scroll.getChildAt(0);
+            installStick[0] = child == null || child.getBottom() - (scroll.getHeight() + sy) < dp(24);
+        });
         installPoll = new Runnable() {
             @Override
             public void run() {
                 String log = LocalEngine.readLog(MainActivity.this);
                 int max = 6000;
                 if (log.length() > max) log = log.substring(log.length() - max);
+                boolean follow = installStick[0];
+                int keepY = scroll.getScrollY();
                 logView.setText(log);
-                scroll.post(() -> scroll.fullScroll(View.FOCUS_DOWN));
+                installProgrammatic[0] = true;
+                if (follow) {
+                    scroll.post(() -> {
+                        scroll.fullScroll(View.FOCUS_DOWN);
+                        installProgrammatic[0] = false;
+                    });
+                } else {
+                    scroll.post(() -> {
+                        scroll.scrollTo(0, keepY);
+                        installProgrammatic[0] = false;
+                    });
+                }
                 boolean done = LocalEngine.isInstalled(MainActivity.this) && !LocalEngine.isInstalling();
                 if (done) {
                     if (installDialog != null && installDialog.isShowing()) installDialog.dismiss();
@@ -1543,15 +1563,36 @@ public class MainActivity extends Activity {
             })
             .setNegativeButton("关闭", null)
             .create();
+        final boolean[] stick = {true};
+        final boolean[] programmatic = {false};
+        scroll.setOnScrollChangeListener((v, sx, sy, oldSx, oldSy) -> {
+            if (programmatic[0]) return;
+            View child = scroll.getChildAt(0);
+            stick[0] = child == null || child.getBottom() - (scroll.getHeight() + sy) < dp(24);
+        });
         final Runnable[] refresh = new Runnable[1];
         refresh[0] = () -> {
             if (!dlg.isShowing()) return;
+            boolean follow = stick[0];
+            int keepY = scroll.getScrollY();
             tv.setText(LocalEngine.readLog(this));
-            scroll.post(() -> scroll.fullScroll(View.FOCUS_DOWN));
+            programmatic[0] = true;
+            if (follow) {
+                scroll.post(() -> {
+                    scroll.fullScroll(View.FOCUS_DOWN);
+                    programmatic[0] = false;
+                });
+            } else {
+                scroll.post(() -> {
+                    scroll.scrollTo(0, keepY);
+                    programmatic[0] = false;
+                });
+            }
             handler.postDelayed(refresh[0], 1000);
         };
         dlg.setOnDismissListener(d -> handler.removeCallbacks(refresh[0]));
         dlg.show();
+        scroll.post(() -> scroll.fullScroll(View.FOCUS_DOWN));
         handler.postDelayed(refresh[0], 300);
     }
 

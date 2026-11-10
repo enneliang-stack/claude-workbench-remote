@@ -1,9 +1,9 @@
 {
-  "versionCode": 62,
-  "versionName": "2.4.21",
-  "apk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/latest/download/ClaudeWorkbench-full.apk",
+  "versionCode": 63,
+  "versionName": "2.4.22",
+  "apk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.21/ClaudeWorkbench-full.apk",
   "sha256": "4177f27dc3e3446f50130fb2ea3cbfc5731578247a37fc7eba2314162342e53e",
   "slimApk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/latest/download/ClaudeWorkbench-slim.apk",
-  "slimSha256": "be30c029cce966080a4e9f85d633d368ef8584ad702b90f511a9bf83811f4c95",
-  "notes": "2.4.21：闪烁光标改为跟随最新一句白色阶段总结，只最新那一句闪，旧句子和思考/工具状态行不再闪；手机 App 的远程电脑页显示「电脑端」、本机页显示「手机端」，列表和对话页都有。保留 2.4.20 的光标修复、2.4.19 的实时快照轮询和 2.4.18 的引用消息/长消息收起/发送立即显示。已装环境用精简包约 8MB，新用户用完整包。"
+  "slimSha256": "06c543e849391da1f6a6dc3e8178e8b81950cc6e49aec5a9cc0cf051b6c569b5",
+  "notes": "2.4.22：日志页自动刷新不再强制滚到底，上滑查看不会被拽回；点通知正文直接回到 App，只有「查看日志」动作打开日志；电脑端页面不再误显示「手机端」；修复内置 Tailscale peerapi listener 为 nil 时崩溃、连接反复重启。完整包保持 2.4.21，新用户先装完整包再装这个精简包；已装环境直接装精简包。"
 }

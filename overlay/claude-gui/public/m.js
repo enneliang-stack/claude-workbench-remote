@@ -3260,8 +3260,9 @@
 
   /** 远程电脑页显示「电脑端」，手机本机页显示「手机端」；列表和对话页都标上。 */
   function ensureModeBadge() {
-    const host = String(location.hostname || '').toLowerCase();
-    const local = !host || host === '127.0.0.1' || host === 'localhost' || host === '::1';
+    // 手机本机页的 m.html 由 APK 构建脚本注入 workbench-phone；远程电脑页没有这个标记。
+    // 不能按 127.0.0.1 判断：App 的内置 Tailscale 代理也是 127.0.0.1:4720。
+    const local = !!document.querySelector('meta[name="workbench-phone"]');
     const label = local ? '手机端' : '电脑端';
     const cls = 'mode-badge' + (local ? '' : ' pc');
     const make = () => {

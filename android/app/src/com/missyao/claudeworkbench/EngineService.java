@@ -145,7 +145,7 @@ public class EngineService extends Service {
         }
         Intent open = new Intent(this, MainActivity.class);
         open.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
-        open.putExtra(MainActivity.EXTRA_SHOW_LOG, true);
+        // 点通知正文直接回到 App；只有「查看日志」动作才打开日志页
         PendingIntent openPi = PendingIntent.getActivity(this, 1, open,
                 PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= 23 ? PendingIntent.FLAG_IMMUTABLE : 0));
         Intent log = new Intent(this, MainActivity.class);
