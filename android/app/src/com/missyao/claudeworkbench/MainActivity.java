@@ -451,6 +451,7 @@ public class MainActivity extends Activity {
         showLoading("正在连接电脑端…");
         final int generation = ++pcProbeGeneration;
         new Thread(() -> {
+            waitForNetworkReady(3000);
             final boolean cellular = isCellularNetwork();
             final boolean tsEnabled = LocalConfig.tsEnabled(MainActivity.this)
                 && !LocalConfig.tsPcUrl(MainActivity.this).isEmpty();
@@ -549,6 +550,32 @@ public class MainActivity extends Activity {
                 }
             }, "tsnet-prewarm").start(), 800);
         } catch (Exception ignored) {
+        }
+    }
+
+    /** 更新/刚启动时网络可能还没通过系统校验，先短暂等它就绪再探测电脑端。 */
+    private void waitForNetworkReady(int timeoutMs) {
+        long deadline = System.currentTimeMillis() + Math.max(0, timeoutMs);
+        while (System.currentTimeMillis() < deadline) {
+            try {
+                ConnectivityManager cm = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+                if (cm != null) {
+                    Network n = cm.getActiveNetwork();
+                    NetworkCapabilities caps = n == null ? null : cm.getNetworkCapabilities(n);
+                    if (caps != null
+                            && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                            && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) {
+                        return;
+                    }
+                }
+            } catch (Exception ignored) {
+            }
+            try {
+                Thread.sleep(250);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
         }
     }
 
@@ -1202,6 +1229,15 @@ public class MainActivity extends Activity {
                 }
             }
             final Exception err = last;
+            if (err == null) {
+                // 安装前先停掉内置 Tailscale，避免旧 App 进程留下的代理占着 4720，
+                // 导致更新后第一次进电脑端连不上。
+                try {
+                    LocalEngine.stopTailscaleProxy(MainActivity.this);
+                } catch (Exception e) {
+                    LocalEngine.log(MainActivity.this, "更新前停止内置 Tailscale 失败：" + e);
+                }
+            }
             runOnUiThread(() -> {
                 if (pd.isShowing()) pd.dismiss();
                 if (err != null) {

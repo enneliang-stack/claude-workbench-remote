@@ -1109,6 +1109,19 @@ public final class LocalEngine {
                 JSONObject st = tsStatus();
                 if (st != null && st.optBoolean("up", false)) return;
             }
+            // 更新 App 后旧进程可能已经退出，但它启动的 tsproxy 还占着 4720。
+            // 如果它已经连上且目标没变，直接复用，避免新进程再起一个抢端口。
+            JSONObject existing = tsStatus();
+            if (existing != null && existing.optBoolean("up", false)
+                    && target.equals(existing.optString("target", ""))) {
+                tsProxyRunning = true;
+                tsProxyProcess = null;
+                startTsWatch();
+                String line = "复用已连接的内置 Tailscale";
+                log(c, line);
+                progress(listener, line);
+                return;
+            }
             stopTailscaleProxy(c);
             // 上一次 App 进程留下的代理可能还在占 4720；起新进程前清掉。
             try {
@@ -1211,6 +1224,7 @@ public final class LocalEngine {
     public static void stopTailscaleProxy(Context c) {
         synchronized (TS_LOCK) {
             Process p = tsProxyProcess;
+            boolean wasRunning = tsProxyRunning;
             tsProxyProcess = null;
             tsProxyRunning = false;
             if (tsWatchThread != null) {
@@ -1228,6 +1242,14 @@ public final class LocalEngine {
                     }
                 }
                 log(c, "内置 Tailscale 已停止");
+            } else if (wasRunning) {
+                // 复用的代理没有 Process 句柄，按路径清掉。
+                try {
+                    exec(c, "pkill -f '^/opt/workbench/tsproxy' 2>/dev/null || true", 8);
+                } catch (Exception e) {
+                    log(c, "清理复用的 tsproxy 失败：" + e.getMessage());
+                }
+                log(c, "内置 Tailscale 已停止");
             }
         }
     }
@@ -1243,7 +1265,17 @@ public final class LocalEngine {
                 }
                 if (!tsProxyRunning) return;
                 Process p = tsProxyProcess;
-                if (p == null || !p.isAlive()) {
+                if (p == null) {
+                    // 复用了上一个 App 进程留下的 tsproxy，没有 Process 句柄，
+                    // 用本地状态接口判断它是否还活着。
+                    JSONObject st = tsStatus();
+                    if (st == null || !st.optBoolean("up", false)) {
+                        tsProxyRunning = false;
+                        return;
+                    }
+                    continue;
+                }
+                if (!p.isAlive()) {
                     tsProxyRunning = false;
                     return;
                 }
