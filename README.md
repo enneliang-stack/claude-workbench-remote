@@ -11,13 +11,15 @@
 电脑端使用方式：安装 1.2.0+ 的统一客户端，侧栏「手机连接」里开启访问并复制地址；
 手机 App 粘贴地址即可。同一 Wi-Fi 不需要 Tailscale 账号。
 
-## 最新 APK（2.4.26 精简 / 2.4.21 完整）
+## 最新 APK（2.4.27 精简 / 2.4.21 完整）
 
 - 完整包（新用户/未装环境）：`ClaudeWorkbench-full.apk`，2.4.21，约 194 MB
   SHA-256：`4177f27dc3e3446f50130fb2ea3cbfc5731578247a37fc7eba2314162342e53e`
   下载：`https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.21/ClaudeWorkbench-full.apk`
-- 精简包（已装手机环境）：`ClaudeWorkbench-slim.apk`，2.4.26，约 8.1 MB
-  SHA-256：`a6edd6817b4504752064bf2b01ce9373f175f0e6064daa2b3db21f2663190afc`
+- 精简包（已装手机环境）：`ClaudeWorkbench-slim.apk`，2.4.27，约 8.1 MB
+  SHA-256：`bd60d61941ebd4371c8fc64b309101f5371c3c95304377f4abd125229172d8b1`
+- 2.4.27 返回主页不再重复显示「启动内置 Tailscale」：代理还在运行就直接复用探测；
+  Wi-Fi 下并行测速所有已配置地址，自动用首字节最快的一条；蜂窝网络仍优先内置 Tailscale。
 - 2.4.26 修复 App 内更新后点「打开」再进电脑端首次连接失败：更新前主动停掉旧内置
   Tailscale，更新后复用已连接代理；进电脑端前等待网络校验通过，不再刚装完就探测。
 - 2.4.25 修复压缩摘要被误当成引用卡片：摘要正文里只是提到 `<gui-reference-context>`

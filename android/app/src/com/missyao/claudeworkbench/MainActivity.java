@@ -466,21 +466,9 @@ public class MainActivity extends Activity {
             }
 
             if (found == null) {
-                List<String> candidates = new ArrayList<>(pcUrls);
-                if (!cellular) {
-                    // Wi-Fi 下优先试局域网地址，避免上次外出留下的 Tailscale
-                    // 地址先占一个 3 秒超时。
-                    candidates.sort((a, b) -> Boolean.compare(
-                        isPrivateLanUrl(b), isPrivateLanUrl(a)));
-                }
-                for (String u : candidates) {
-                    if (generation != pcProbeGeneration || !"pc".equals(mode)) break;
-                    if (cellular && isPrivateLanUrl(u)) continue;
-                    if (probePcUrl(u, 3000, 4500)) {
-                        found = u;
-                        break;
-                    }
-                }
+                // 同时探测所有可用地址，谁先返回首字节就用谁；避免只按顺序
+                // 选中一个虽然能用、但延迟更高的地址。
+                found = probeFastestPcUrl(new ArrayList<>(pcUrls), generation, cellular);
             }
 
             // 配置的地址都不通时，再启动内置 tsnet 代理（不依赖 Tailscale App）。
@@ -505,6 +493,13 @@ public class MainActivity extends Activity {
     /** 启动内置 Tailscale，再用它本机的 127.0.0.1:4720 探测电脑页面。 */
     private String startBuiltinAndProbe(int generation) {
         if (generation != pcProbeGeneration || !"pc".equals(mode)) return null;
+        // 代理已经在跑时不要再显示“启动”，直接用它探测；返回主页不会停掉它。
+        if (LocalEngine.isTailscaleProxyRunning()) {
+            String local = LocalConfig.tsLocalUrl(MainActivity.this);
+            if (!local.isEmpty() && probePcUrl(local, 2500, 12000)) {
+                return local;
+            }
+        }
         runOnUiThread(() -> {
             if (generation == pcProbeGeneration && "pc".equals(mode) && loadingText != null) {
                 loadingText.setText("正在启动内置 Tailscale…");
@@ -619,7 +614,13 @@ public class MainActivity extends Activity {
     }
 
     private boolean probePcUrl(String url, int connectMs, int readMs) {
+        return probePcLatency(url, connectMs, readMs) >= 0;
+    }
+
+    /** 返回首字节耗时（毫秒），失败返回 -1；用于在多个地址里选最快的一条。 */
+    private long probePcLatency(String url, int connectMs, int readMs) {
         HttpURLConnection con = null;
+        long started = System.currentTimeMillis();
         try {
             con = (HttpURLConnection) new URL(url).openConnection();
             con.setConnectTimeout(connectMs);
@@ -629,19 +630,60 @@ public class MainActivity extends Activity {
             // 探测只要判断返回内容，不要求压缩；避免代理 gzip 后误判。
             con.setRequestProperty("Accept-Encoding", "identity");
             int code = con.getResponseCode();
-            if (code < 200 || code >= 400) return false;
+            if (code < 200 || code >= 400) return -1L;
             try (InputStream in = con.getInputStream()) {
                 byte[] buf = new byte[8192];
                 int n = in.read(buf);
-                if (n <= 0) return false;
+                if (n <= 0) return -1L;
                 String head = new String(buf, 0, n, StandardCharsets.UTF_8);
-                return head.contains("Claude 工作台") || head.contains("listScreen")
-                    || head.contains("workbench") || head.contains("token");
+                if (head.contains("Claude 工作台") || head.contains("listScreen")
+                        || head.contains("workbench") || head.contains("token")) {
+                    return System.currentTimeMillis() - started;
+                }
+                return -1L;
             }
         } catch (Exception e) {
-            return false;
+            return -1L;
         } finally {
             if (con != null) con.disconnect();
+        }
+    }
+
+    /** 并行探测配置的地址，选首字节最快的一条；不按配置顺序硬选。 */
+    private String probeFastestPcUrl(List<String> urls, int generation, boolean cellular) {
+        final List<String> list = new ArrayList<>();
+        for (String u : urls) {
+            if (generation != pcProbeGeneration || !"pc".equals(mode)) break;
+            if (cellular && isPrivateLanUrl(u)) continue;
+            list.add(u);
+        }
+        if (list.isEmpty()) return null;
+        final Object lock = new Object();
+        final String[] best = {null};
+        final long[] bestMs = {Long.MAX_VALUE};
+        final java.util.concurrent.CountDownLatch latch =
+            new java.util.concurrent.CountDownLatch(list.size());
+        for (String u : list) {
+            Thread t = new Thread(() -> {
+                long ms = probePcLatency(u, 3000, 4500);
+                synchronized (lock) {
+                    if (ms >= 0 && ms < bestMs[0]) {
+                        bestMs[0] = ms;
+                        best[0] = u;
+                    }
+                }
+                latch.countDown();
+            }, "pc-probe");
+            t.setDaemon(true);
+            t.start();
+        }
+        try {
+            latch.await(8, java.util.concurrent.TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        synchronized (lock) {
+            return best[0];
         }
     }
 
