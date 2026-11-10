@@ -74,6 +74,16 @@ public class DownloadsBridge {
         PhoneControlServer.onPhoneChatHidden();
     }
 
+    /** 页面（手机本机或远程电脑页）上报当前任务是否在跑，用于通知栏和悬浮窗。 */
+    @JavascriptInterface
+    public void taskState(String json) {
+        try {
+            TaskStatus.onPageState(new JSONObject(json));
+            EngineService.notifyTaskStatusChanged(activity);
+        } catch (Exception ignored) {
+        }
+    }
+
     /** 直接打开手机本机文件（/sdcard、/workspace 等），不复制到下载目录。 */
     @JavascriptInterface
     public boolean openLocal(String path, String name) {

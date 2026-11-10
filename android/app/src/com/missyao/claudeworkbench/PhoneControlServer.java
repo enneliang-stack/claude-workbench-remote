@@ -185,15 +185,19 @@ public final class PhoneControlServer {
     }
 
     public static boolean isClaudeRunning() {
-        return claudeRunning;
+        return claudeRunning || TaskStatus.isRunning();
+    }
+
+    public static boolean isPageTaskRemote() {
+        return TaskStatus.isPageTaskRemote();
     }
 
     public static boolean isCompletionPending() {
-        return completionPending;
+        return completionPending || TaskStatus.isCompletionPending();
     }
 
     public static String completionConvId() {
-        return completionConv;
+        return completionPending ? completionConv : TaskStatus.completionConv();
     }
 
     public static boolean isPhoneChatVisible() {
@@ -230,6 +234,7 @@ public final class PhoneControlServer {
 
     /** 用户回到 App 手机页、看到任务结束后，清掉“任务已完成”提示，避免以后再弹。 */
     public static void markCompletionSeen() {
+        TaskStatus.clearCompleted();
         if (!claudeRunning) {
             completionPending = false;
             completionConv = "";
@@ -244,6 +249,7 @@ public final class PhoneControlServer {
         completionConv = "";
         lastText = "";
         lastActionAt = 0;
+        TaskStatus.clearCompleted();
     }
 
     public static void setPaused(boolean value) {
@@ -263,7 +269,15 @@ public final class PhoneControlServer {
     public static String overlayStatus() {
         if (paused) return toolBusy ? "手机操作已暂停（等当前步骤收尾）" : "手机操作已暂停";
         if (toolBusy) return "正在" + actionText + "…";
+        if (TaskStatus.isRunning()) {
+            String page = TaskStatus.overlayText();
+            if (!page.isEmpty()) return page;
+            if (claudeRunning) {
+                return lastText.isEmpty() ? "任务进行中，等待下一步…" : lastText + " · 任务进行中";
+            }
+        }
         if (completionPending && !claudeRunning) return "任务已完成";
+        if (TaskStatus.isCompletionPending()) return "任务已完成";
         if (claudeRunning) return lastText.isEmpty() ? "任务进行中，等待下一步…" : lastText + " · 任务进行中";
         if (lastActionAt > 0 && System.currentTimeMillis() - lastActionAt < 12000) return lastText;
         return "";
@@ -272,6 +286,7 @@ public final class PhoneControlServer {
     public static boolean shouldShowOverlay(Context c) {
         if (c == null || !isEnabled(c) || !isAccessibilityConnected() || !isRunning()) return false;
         if (completionPending && !claudeRunning) return true; // 常驻，直到用户打开对应对话
+        if (TaskStatus.isRunning() || TaskStatus.isCompletionPending()) return true;
         if (paused || toolBusy || claudeRunning) return true;
         return lastActionAt > 0 && System.currentTimeMillis() - lastActionAt < 12000;
     }
@@ -292,6 +307,7 @@ public final class PhoneControlServer {
             try {
                 JSONObject r = LocalEngine.phoneServerCall(c, "GET", "/api/phone/current", null, 1800);
                 boolean running = r != null && r.optBoolean("running", false);
+                TaskStatus.updateLocalRunning(r != null ? r.optInt("count", running ? 1 : 0) : 0);
                 String id = r != null ? r.optString("id", "") : "";
                 if (!id.isEmpty()) activeConv = id;
                 boolean was = claudeRunning;
@@ -310,6 +326,7 @@ public final class PhoneControlServer {
                 }
             } catch (Exception ignored) {
                 claudeRunning = false;
+                TaskStatus.updateLocalRunning(0);
             } finally {
                 refreshingRun = false;
             }

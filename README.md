@@ -11,13 +11,15 @@
 电脑端使用方式：安装 1.2.0+ 的统一客户端，侧栏「手机连接」里开启访问并复制地址；
 手机 App 粘贴地址即可。同一 Wi-Fi 不需要 Tailscale 账号。
 
-## 最新 APK（2.4.22 精简 / 2.4.21 完整）
+## 最新 APK（2.4.23 精简 / 2.4.21 完整）
 
 - 完整包（新用户/未装环境）：`ClaudeWorkbench-full.apk`，2.4.21，约 194 MB
   SHA-256：`4177f27dc3e3446f50130fb2ea3cbfc5731578247a37fc7eba2314162342e53e`
   下载：`https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.21/ClaudeWorkbench-full.apk`
-- 精简包（已装手机环境）：`ClaudeWorkbench-slim.apk`，2.4.22，约 8.1 MB
-  SHA-256：`06c543e849391da1f6a6dc3e8178e8b81950cc6e49aec5a9cc0cf051b6c569b5`
+- 精简包（已装手机环境）：`ClaudeWorkbench-slim.apk`，2.4.23，约 8.1 MB
+  SHA-256：`f2009cd35141125650ecd60e61e8286c34bad9cf84d35ccdd414bef77f1b4d47`
+- 2.4.23 手机端通知栏显示任务运行中/N 个任务已完成/空闲中；普通手机本机任务也显示悬浮窗
+  （需手机控制/无障碍开启）；远程电脑页任务不计入手机端状态，避免重叠。
 - 2.4.22 修复日志页自动刷新强制滚到底、通知正文误跳日志、电脑端误显示「手机端」、
   内置 Tailscale peerapi nil listener 崩溃；完整包继续保持 2.4.21，新用户装完再更新精简包。
 - 2.4.21 闪烁光标改为跟随最新一句白色阶段总结，只最新那一句闪；手机 App 的

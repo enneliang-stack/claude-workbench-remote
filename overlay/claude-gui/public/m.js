@@ -409,6 +409,7 @@
     S.convId = data.id;
     S.live = data.live || null;
     S.running = !!data.running;
+    if (S.running) notifyPageTask(true);
     S.loadingOlder = false;
     S.conv.start = Number.isFinite(data.start) ? data.start : 0;
     S.conv.hasMore = !!data.hasMore;
@@ -1809,6 +1810,7 @@
     switch (t) {
       case 'run_start': {
         S.running = true;
+        notifyPageTask(true);
         // 新消息的 user_echo 通常先到，先记下来，重建实时区时不能把它弄丢
         const pending = S.pendingEcho;
         S.pendingEcho = null;
@@ -1932,6 +1934,7 @@
 
       case 'run_end':
         S.running = false;
+        notifyPageTask(false);
         stopLivePolling();
         syncLiveCursor();
         closeStopConfirm();
@@ -2024,6 +2027,7 @@
       if (!data.running) {
         if (S.running) {
           S.running = false;
+          notifyPageTask(false);
           S.live = null;
           stopLivePolling();
           syncLiveCursor();
@@ -2630,6 +2634,7 @@
         S.running = true;
         updateComposer();
       }
+      notifyPageTask(true);
       input.value = '';
       S.pendingImages = [];
       S.pendingRefs = [];
@@ -3256,6 +3261,20 @@
         if (S.running) startLivePolling();
       }
     });
+  }
+
+  /** 只把手机本机页的任务状态报给 App，用于通知栏和悬浮窗；远程电脑页不参与。 */
+  function notifyPageTask(running) {
+    try {
+      if (!document.querySelector('meta[name="workbench-phone"]')) return;
+      if (window.AndroidDownloads && AndroidDownloads.taskState) {
+        AndroidDownloads.taskState(JSON.stringify({
+          running: !!running,
+          title: (S.conv && S.conv.title) || '',
+          id: S.convId || ''
+        }));
+      }
+    } catch { /* 非 App 环境 */ }
   }
 
   /** 远程电脑页显示「电脑端」，手机本机页显示「手机端」；列表和对话页都标上。 */

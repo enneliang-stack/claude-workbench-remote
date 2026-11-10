@@ -1819,6 +1819,9 @@ public class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         PhoneControlServer.setAppForeground(true);
+        // 用户已经回到 App，清掉“几个任务已完成”的通知计数；运行中的任务保留。
+        TaskStatus.clearCompleted();
+        EngineService.notifyTaskStatusChanged(this);
         maybeAutoEnableAccessibility();
         refreshHomeStatus();
     }
