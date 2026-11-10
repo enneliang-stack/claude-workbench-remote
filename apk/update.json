@@ -1,9 +1,9 @@
 {
-  "versionCode": 61,
-  "versionName": "2.4.20",
+  "versionCode": 62,
+  "versionName": "2.4.21",
   "apk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/latest/download/ClaudeWorkbench-full.apk",
-  "sha256": "fc671dd9ffb7d8cb5003813cd8643085fe132f6d141d4eb51a4d763a557b4a76",
+  "sha256": "4177f27dc3e3446f50130fb2ea3cbfc5731578247a37fc7eba2314162342e53e",
   "slimApk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/latest/download/ClaudeWorkbench-slim.apk",
-  "slimSha256": "d4dfabf7dc1e603b84648deb213ba6851e2c9b8009d76a6b9c01a95bc2de8814",
-  "notes": "2.4.20：恢复手机页运行进度白字后面的闪烁光标，轮询刷新同一句进度时不再重置动画。保留 2.4.19 的实时快照轮询（SSE 断线也能更新阶段状态）、2.4.18 的引用消息、长消息收起、发送立即显示。已装环境用精简包约 8MB，新用户用完整包。"
+  "slimSha256": "be30c029cce966080a4e9f85d633d368ef8584ad702b90f511a9bf83811f4c95",
+  "notes": "2.4.21：闪烁光标改为跟随最新一句白色阶段总结，只最新那一句闪，旧句子和思考/工具状态行不再闪；手机 App 的远程电脑页显示「电脑端」、本机页显示「手机端」，列表和对话页都有。保留 2.4.20 的光标修复、2.4.19 的实时快照轮询和 2.4.18 的引用消息/长消息收起/发送立即显示。已装环境用精简包约 8MB，新用户用完整包。"
 }

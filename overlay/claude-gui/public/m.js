@@ -1633,19 +1633,28 @@
     syncLiveCursor(box);
   }
 
-  // 只在「当前最后一段正在输出的文字」末尾显示闪烁光标。
-  // 之前每个 text block 都带 streaming 类，一轮里有多段文字时会到处闪。
+  // 只在「最新一段白字阶段总结」末尾显示闪烁光标；后面接着工具/思考时也保留。
+  // 新一轮文字出现时先清掉旧的，保证同一时间只有一个光标。
   function syncLiveCursor(box) {
     const root = box || $('#liveTurn');
     if (!root) return;
     root.querySelectorAll('.msg.assistant.streaming').forEach(n => n.classList.remove('streaming'));
     if (!S.running || !S.live) return;
     const blocks = S.live.blocks || [];
-    const last = blocks[blocks.length - 1];
-    if (!last || last.type !== 'text') return;
-    const texts = root.querySelectorAll(':scope > .msg.assistant');
-    const elLast = texts[texts.length - 1];
-    if (elLast) elLast.classList.add('streaming');
+    let lastText = null;
+    for (let i = blocks.length - 1; i >= 0; i--) {
+      if (blocks[i].type === 'text') { lastText = blocks[i]; break; }
+    }
+    if (!lastText) return;
+    const ref = S.liveEls.get(lastText.key);
+    const node = ref && ref.textEl ? ref.textEl.closest('.msg.assistant') : null;
+    if (node) {
+      node.classList.add('streaming');
+    } else {
+      const texts = root.querySelectorAll(':scope > .msg.assistant');
+      const elLast = texts[texts.length - 1];
+      if (elLast) elLast.classList.add('streaming');
+    }
   }
 
   function liveBlockNode(b) {
@@ -3249,12 +3258,46 @@
     });
   }
 
+  /** 远程电脑页显示「电脑端」，手机本机页显示「手机端」；列表和对话页都标上。 */
+  function ensureModeBadge() {
+    const host = String(location.hostname || '').toLowerCase();
+    const local = !host || host === '127.0.0.1' || host === 'localhost' || host === '::1';
+    const label = local ? '手机端' : '电脑端';
+    const cls = 'mode-badge' + (local ? '' : ' pc');
+    const make = () => {
+      const badge = document.createElement('span');
+      badge.className = cls;
+      badge.textContent = label;
+      return badge;
+    };
+    const listHead = document.querySelector('#listScreen .hd-left');
+    if (listHead && !document.getElementById('phoneModeBadge') && !document.getElementById('pcModeBadge')) {
+      const badge = make();
+      badge.id = local ? 'phoneModeBadge' : 'pcModeBadge';
+      const h = listHead.querySelector('h1');
+      if (h) h.appendChild(badge);
+    }
+    const chatTitle = document.getElementById('chatTitle');
+    if (chatTitle) {
+      let chatBadge = document.getElementById('chatModeBadge');
+      if (!chatBadge) {
+        chatBadge = make();
+        chatBadge.id = 'chatModeBadge';
+        chatTitle.insertAdjacentElement('afterend', chatBadge);
+      }
+      chatBadge.className = cls;
+      chatBadge.textContent = label;
+      chatBadge.hidden = false;
+    }
+  }
+
   async function init() {
     if (!TOKEN) {
       document.body.innerHTML = '<div style="padding:40px;color:#e8e6e3;font:15px system-ui">缺少访问令牌，请重新用带 token 的地址打开。</div>';
       return;
     }
     bind();
+    ensureModeBadge();
     loadFolderCollapsed();
     connect();
 
