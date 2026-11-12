@@ -2682,18 +2682,44 @@
             try {
               const wctx = work.getContext('2d');
               const wd = wctx.getImageData(0, 0, work.width, work.height).data;
-              const rowInk = y => {
+              const rowInk = (y, minCount) => {
                 const base = y * work.width * 4;
-                for (let x = 0; x < work.width; x += 4) {
+                const need = minCount || 1;
+                let n = 0;
+                for (let x = 0; x < work.width; x += 2) {
                   const i = base + x * 4;
-                  if (wd[i + 3] > 8 && (wd[i] < 244 || wd[i + 1] < 244 || wd[i + 2] < 244)) return true;
+                  if (wd[i + 3] > 8 && (wd[i] < 244 || wd[i + 1] < 244 || wd[i + 2] < 244)) {
+                    n++;
+                    if (n >= need) return true;
+                  }
                 }
                 return false;
               };
+              // 一行只有一条细边框/一两个图标不算正文；连续一段都有足够多的非白像素才是正文起点。
+              const denseInk = Math.max(4, Math.round((work.width / 2) * 0.05));
+              const runNeed = Math.max(12, Math.round(work.height * 0.012));
               let top = 0;
-              while (top < work.height && !rowInk(top)) top++;
+              let run = 0;
+              let foundTop = -1;
+              for (let y = 0; y < work.height; y++) {
+                if (rowInk(y, denseInk)) {
+                  run++;
+                  if (run >= runNeed) { foundTop = y - runNeed + 1; break; }
+                } else run = 0;
+              }
+              if (foundTop >= 0) top = foundTop;
+              else while (top < work.height && !rowInk(top, 1)) top++;
               let bottom = work.height - 1;
-              while (bottom > top && !rowInk(bottom)) bottom--;
+              run = 0;
+              let foundBottom = -1;
+              for (let y = work.height - 1; y >= 0; y--) {
+                if (rowInk(y, denseInk)) {
+                  run++;
+                  if (run >= runNeed) { foundBottom = y + runNeed - 1; break; }
+                } else run = 0;
+              }
+              if (foundBottom >= 0) bottom = foundBottom;
+              else while (bottom > top && !rowInk(bottom, 1)) bottom--;
               if (top < bottom) {
                 topOrig = Math.round(top * ih / work.height);
                 bottomOrig = Math.max(topOrig + 1, Math.round((bottom + 1) * ih / work.height));
@@ -2725,14 +2751,23 @@
           }
           URL.revokeObjectURL(url);
           if (!out.length) throw new Error('这张长截图无法处理，请裁剪成几张后再发');
-          const total = out.length;
-          out.forEach((one, i) => {
-            one.sliceIndex = i + 1;
-            one.sliceCount = total;
+          // 只丢掉真正全白的切片；白底图只要有一点文字/图标（非白像素）都会保留
+          const MIN_KEEP_INK = 0.0001;
+          let kept = out.filter(one => (one.inkRatio == null ? 1 : one.inkRatio) >= MIN_KEEP_INK);
+          if (!kept.length) {
+            kept = out.slice().sort((a, b) => (b.inkRatio || 0) - (a.inkRatio || 0)).slice(0, 1);
+          }
+          const total = kept.length;
+          const multi = total > 1;
+          kept.forEach((one, i) => {
+            one.sliceIndex = multi ? i + 1 : 0;
+            one.sliceCount = multi ? total : 0;
             one.name = (file.name || '长图') + ' (' + (i + 1) + '/' + total + ')';
           });
-          out[0].sliceInfo = { total, kept: total, width: iw, height: ih };
-          resolve(out);
+          const nominal = Math.max(out.length, Math.min(5, Math.max(1,
+            Math.ceil((Math.min(iw, 720) * ih) / (iw * 1600)))));
+          kept[0].sliceInfo = { total: nominal, kept: total, width: iw, height: ih };
+          resolve(kept);
         } catch (e) {
           URL.revokeObjectURL(url);
           reject(e);
@@ -2802,29 +2837,29 @@
           ctx.drawImage(img, sx * fx, sy * fy, sw * fx, sh * fy, 0, 0, w, h);
         }
 
-        const isBlank = () => {
+        const measureInk = () => {
           try {
             const ctx = canvas.getContext('2d');
             const data = ctx.getImageData(0, 0, w, h).data;
-            const stepX = Math.max(1, Math.floor(w / 40));
-            const stepY = Math.max(1, Math.floor(h / 60));
-            let nonWhite = 0;
+            const stepX = Math.max(1, Math.floor(w / 64));
+            const stepY = Math.max(1, Math.floor(h / 128));
+            let total = 0;
+            let ink = 0;
             for (let y = Math.floor(stepY / 2); y < h; y += stepY) {
               for (let x = Math.floor(stepX / 2); x < w; x += stepX) {
+                total++;
                 const i = (y * w + x) * 4;
-                if (data[i + 3] > 8 && (data[i] < 244 || data[i + 1] < 244 || data[i + 2] < 244)) {
-                  nonWhite++;
-                  return false; // 有任何非白像素就说明这片有内容，不能丢
-                }
+                if (data[i + 3] > 8 && (data[i] < 244 || data[i + 1] < 244 || data[i + 2] < 244)) ink++;
               }
             }
-            return nonWhite === 0;
+            return total ? ink / total : 0;
           } catch {
-            return false;
+            return 1;
           }
         };
 
-        let blank = isBlank();
+        let inkRatio = measureInk();
+        let blank = inkRatio < 0.002;
         if (blank && bitmap) {
           try { bitmap.close && bitmap.close(); } catch { /* ignore */ }
           bitmap = null;
@@ -2836,7 +2871,8 @@
             ctx.fillRect(0, 0, w, h);
           }
           ctx.drawImage(img, sx * fx, sy * fy, sw * fx, sh * fy, 0, 0, w, h);
-          blank = isBlank();
+          inkRatio = measureInk();
+          blank = inkRatio < 0.002;
         }
 
         let dataUrl = canvas.toDataURL(type, 0.88);
@@ -2913,7 +2949,8 @@
           h,
           sliceIndex,
           sliceCount,
-          blank
+          blank,
+          inkRatio
         });
       } catch (e) {
         reject(e);
