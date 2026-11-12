@@ -11,13 +11,14 @@
 电脑端使用方式：安装 1.2.0+ 的统一客户端，侧栏「手机连接」里开启访问并复制地址；
 手机 App 粘贴地址即可。同一 Wi-Fi 不需要 Tailscale 账号。
 
-## 最新 APK（2.4.29 精简 / 2.4.21 完整）
+## 最新 APK（2.4.51 精简 / 2.4.21 完整）
 
 - 完整包（新用户/未装环境）：`ClaudeWorkbench-full.apk`，2.4.21，约 194 MB
   SHA-256：`4177f27dc3e3446f50130fb2ea3cbfc5731578247a37fc7eba2314162342e53e`
   下载：`https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.21/ClaudeWorkbench-full.apk`
-- 精简包（已装手机环境）：`ClaudeWorkbench-slim.apk`，2.4.29，约 8.1 MB
-  SHA-256：`bcc249ae3c32d96d3bea4ba12fd9a340c4ab6735719b5c5d0de2fc6bda3f918c`
+- 精简包（已装手机环境）：`ClaudeWorkbench-slim.apk`，2.4.51，约 8.2 MB
+  SHA-256：`e5b477353a0ee41894170d6e589ee9bc0d70a13ed54bc95b3edd5c284ab49180`
+- 2.4.51：更新弹窗改为深色卡片；包含 2.4.50 的全部改进：手机页过程只保留思考/运行/编辑等一行摘要，不再下发工具输出和详情；头部去掉 token 数，「运行中」完整显示；推理档位默认最高；应用内选择弹层；返回键先关弹层、缓慢滑动不误触长按；主页设置卡片和状态颜色。
 - 2.4.29 修复 App 切后台、任务完成后再切回来时，新发消息显示在已完成任务底部：
   回到前台先重新同步对话和运行状态，发送/插话前也会清掉过期的运行中状态；
   手机页同时去掉背景实时模糊，降低 WebView 的 GPU/耗电开销。

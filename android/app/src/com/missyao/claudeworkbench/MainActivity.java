@@ -1484,6 +1484,159 @@ public class MainActivity extends Activity {
 
     // ---------------------------------------------------------------- 检查更新
 
+    private LinearLayout updateInfoRow(String label, String value, int valueColor) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(14), dp(11), dp(14), dp(11));
+        TextView l = text(label, 12, MUTED);
+        row.addView(l, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        TextView v = text(value, 12, valueColor);
+        v.setGravity(Gravity.RIGHT);
+        row.addView(v);
+        return row;
+    }
+
+    private void showInfoDialog(String title, String message, String buttonLabel) {
+        final Dialog dialog = new Dialog(this);
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(dp(18), dp(16), dp(18), dp(16));
+        root.setBackground(rounded(CARD, STROKE, 20));
+
+        TextView t = text(title, 18, FG);
+        t.setTypeface(Typeface.DEFAULT_BOLD);
+        root.addView(t);
+        TextView m = text(message, 13, MUTED);
+        m.setLineSpacing(dp(3), 1f);
+        m.setPadding(0, dp(10), 0, 0);
+        root.addView(m);
+
+        TextView close = text(buttonLabel, 14, FG);
+        close.setGravity(Gravity.CENTER);
+        close.setPadding(0, dp(12), 0, dp(12));
+        close.setBackground(rounded(0xFF1A1F27, STROKE, 12));
+        LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        clp.topMargin = dp(16);
+        close.setLayoutParams(clp);
+        close.setOnClickListener(v -> dialog.dismiss());
+        root.addView(close);
+
+        dialog.setContentView(root);
+        dialog.setOnShowListener(d -> {
+            Window w = dialog.getWindow();
+            if (w == null) return;
+            w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+            int width = (int) (getResources().getDisplayMetrics().widthPixels * 0.9f);
+            w.setLayout(Math.min(width, dp(480)), ViewGroup.LayoutParams.WRAP_CONTENT);
+        });
+        dialog.show();
+    }
+
+    private void showUpdateDialog(String oldName, int oldCode, String newName, int newCode,
+                                  String channel, String notes, boolean slim, boolean important,
+                                  Runnable onDownload) {
+        final Dialog dialog = new Dialog(this);
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
+
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(dp(18), dp(16), dp(18), dp(16));
+        root.setBackground(rounded(CARD, STROKE, 20));
+
+        LinearLayout head = new LinearLayout(this);
+        head.setOrientation(LinearLayout.HORIZONTAL);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout titles = new LinearLayout(this);
+        titles.setOrientation(LinearLayout.VERTICAL);
+        TextView title = text("发现新版本", 18, FG);
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        titles.addView(title);
+        TextView sub = text("Claude 工作台 · 手机端", 11, MUTED);
+        sub.setPadding(0, dp(2), 0, 0);
+        titles.addView(sub);
+        head.addView(titles, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        if (important) {
+            TextView imp = text("重要", 10, ORANGE);
+            imp.setPadding(dp(8), dp(3), dp(8), dp(3));
+            imp.setBackground(rounded(Color.argb(20, 240, 163, 94),
+                Color.argb(100, 240, 163, 94), 999));
+            head.addView(imp);
+        }
+        TextView closeX = text("×", 22, MUTED);
+        closeX.setGravity(Gravity.CENTER);
+        closeX.setOnClickListener(v -> dialog.dismiss());
+        head.addView(closeX, new LinearLayout.LayoutParams(dp(36), dp(36)));
+        root.addView(head);
+
+        LinearLayout info = settingsGroup();
+        info.addView(updateInfoRow("当前版本", oldName + "（" + oldCode + "）", MUTED));
+        info.addView(settingsDivider());
+        info.addView(updateInfoRow("新版本", newName + "（" + newCode + "）", ORANGE));
+        info.addView(settingsDivider());
+        info.addView(updateInfoRow("更新方式", channel, slim ? GREEN : ORANGE));
+        LinearLayout.LayoutParams ilp = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        ilp.topMargin = dp(14);
+        root.addView(info, ilp);
+
+        root.addView(settingsGroupLabel("更新内容"));
+        ScrollView notesScroll = new ScrollView(this);
+        TextView notesView = text(notes.isEmpty() ? "建议更新到最新版本。" : notes, 12.5f, MUTED);
+        notesView.setLineSpacing(dp(3), 1f);
+        notesView.setPadding(dp(14), dp(12), dp(14), dp(12));
+        notesScroll.addView(notesView);
+        notesScroll.setBackground(rounded(CARD, STROKE, 16));
+        root.addView(notesScroll, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, dp(190)));
+
+        if (slim) {
+            TextView tip = text("本机已装手机端环境，只更新 App，约 8 MB。", 11, GREEN);
+            tip.setPadding(dp(4), dp(8), dp(4), 0);
+            root.addView(tip);
+        }
+
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams alp = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        alp.topMargin = dp(14);
+        TextView later = text("稍后", 14, MUTED);
+        later.setGravity(Gravity.CENTER);
+        later.setPadding(0, dp(12), 0, dp(12));
+        later.setBackground(rounded(0xFF1A1F27, STROKE, 12));
+        later.setOnClickListener(v -> dialog.dismiss());
+        TextView download = text("下载并安装", 14, Color.rgb(27, 18, 12));
+        download.setTypeface(Typeface.DEFAULT_BOLD);
+        download.setGravity(Gravity.CENTER);
+        download.setPadding(0, dp(12), 0, dp(12));
+        download.setBackground(rounded(ORANGE, ORANGE, 12));
+        download.setOnClickListener(v -> {
+            dialog.dismiss();
+            onDownload.run();
+        });
+        LinearLayout.LayoutParams lp1 = new LinearLayout.LayoutParams(0,
+            ViewGroup.LayoutParams.WRAP_CONTENT, 1);
+        LinearLayout.LayoutParams lp2 = new LinearLayout.LayoutParams(0,
+            ViewGroup.LayoutParams.WRAP_CONTENT, 1);
+        lp2.leftMargin = dp(10);
+        actions.addView(later, lp1);
+        actions.addView(download, lp2);
+        root.addView(actions, alp);
+
+        dialog.setContentView(root);
+        dialog.setOnShowListener(d -> {
+            Window w = dialog.getWindow();
+            if (w == null) return;
+            w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+            int width = (int) (getResources().getDisplayMetrics().widthPixels * 0.92f);
+            w.setLayout(Math.min(width, dp(520)), ViewGroup.LayoutParams.WRAP_CONTENT);
+        });
+        dialog.show();
+    }
+
     private void checkForUpdates() {
         Toast.makeText(this, "正在检查更新…", Toast.LENGTH_SHORT).show();
         new Thread(() -> {
@@ -1500,6 +1653,8 @@ public class MainActivity extends Activity {
                 final String slimUrl = o.optString("slimApk", "");
                 final String slimSha = o.optString("slimSha256", "");
                 final String notes = o.optString("notes", "");
+                final boolean important = o.optBoolean("important", false)
+                    || o.optBoolean("importantUpdate", false);
                 final int oldCode = getPackageManager()
                     .getPackageInfo(getPackageName(), 0).versionCode;
                 final String oldName = getPackageManager()
@@ -1513,11 +1668,8 @@ public class MainActivity extends Activity {
                     : "完整包（含手机环境，约 194 MB）";
                 runOnUiThread(() -> {
                     if (newCode <= oldCode) {
-                        new AlertDialog.Builder(MainActivity.this)
-                            .setTitle("已是最新版本")
-                            .setMessage("当前版本：" + oldName + "（" + oldCode + "）")
-                            .setPositiveButton("知道了", null)
-                            .show();
+                        showInfoDialog("已是最新版本",
+                            "当前版本：" + oldName + "（" + oldCode + "）", "知道了");
                         return;
                     }
                     if (chosenUrl.isEmpty()) {
@@ -1525,27 +1677,14 @@ public class MainActivity extends Activity {
                             "更新清单里没有安装包地址", Toast.LENGTH_LONG).show();
                         return;
                     }
-                    new AlertDialog.Builder(MainActivity.this)
-                        .setTitle("发现新版本 " + newName)
-                        .setMessage("当前版本：" + oldName + "（" + oldCode + "）\n"
-                            + "新版本：" + newName + "（" + newCode + "）\n"
-                            + "更新方式：" + channel + "\n\n"
-                            + (notes.isEmpty() ? "建议更新到最新版本。" : notes)
-                            + (useSlim
-                                ? "\n\n本机已经装好手机端环境，只更新 App，不需要再下 194 MB。"
-                                : "\n\n完整安装包较大（约 190 MB），建议在 Wi-Fi 下下载。"))
-                        .setPositiveButton("下载并安装",
-                            (d, w) -> downloadUpdate(chosenUrl, newName, chosenSha))
-                        .setNegativeButton("稍后", null)
-                        .show();
+                    showUpdateDialog(oldName, oldCode, newName, newCode, channel, notes,
+                        useSlim, important,
+                        () -> downloadUpdate(chosenUrl, newName, chosenSha));
                 });
             } catch (Exception e) {
-                runOnUiThread(() -> new AlertDialog.Builder(MainActivity.this)
-                    .setTitle("检查更新失败")
-                    .setMessage("无法读取更新清单：\n" + e.getMessage()
-                        + "\n\n请确认网络能访问 GitHub，或稍后再试。")
-                    .setPositiveButton("知道了", null)
-                    .show());
+                runOnUiThread(() -> showInfoDialog("检查更新失败",
+                    "无法读取更新清单：\n" + e.getMessage()
+                        + "\n\n请确认网络能访问 GitHub，或稍后再试。", "知道了"));
             }
         }, "check-update").start();
     }
