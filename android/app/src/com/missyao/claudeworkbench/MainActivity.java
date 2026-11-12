@@ -106,6 +106,10 @@ public class MainActivity extends Activity {
     private TextView homePcStatus;
     private TextView homePhoneStatus;
     private TextView homeStorageStatus;
+    private TextView importantUpdateBadge;
+    private JSONObject importantUpdateInfo;
+    private volatile boolean importantCheckRunning;
+    private long importantCheckAt;
 
     private ValueCallback<Uri[]> fileCallback;
     private final List<String> pcUrls = new ArrayList<>();
@@ -275,6 +279,26 @@ public class MainActivity extends Activity {
         root.addView(errorView, new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
+        // 主页左下角的重要更新提醒：只有 update.json 标记 important=true 且版本更高时才显示。
+        importantUpdateBadge = text("", 12, BLUE);
+        importantUpdateBadge.setTypeface(Typeface.DEFAULT_BOLD);
+        importantUpdateBadge.setGravity(Gravity.CENTER_VERTICAL);
+        importantUpdateBadge.setPadding(dp(14), dp(9), dp(14), dp(9));
+        importantUpdateBadge.setBackground(rounded(CARD, BLUE, 999));
+        importantUpdateBadge.setElevation(dp(5));
+        importantUpdateBadge.setClickable(true);
+        importantUpdateBadge.setFocusable(true);
+        importantUpdateBadge.setVisibility(View.GONE);
+        importantUpdateBadge.setOnClickListener(v -> {
+            if (importantUpdateInfo != null) checkForUpdates();
+        });
+        FrameLayout.LayoutParams badgeLp = new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        badgeLp.gravity = Gravity.BOTTOM | Gravity.START;
+        badgeLp.leftMargin = dp(18);
+        badgeLp.bottomMargin = dp(26);
+        root.addView(importantUpdateBadge, badgeLp);
+
         setContentView(root);
         loadPcUrls();
         LocalConfig.ensureDefaultEffort(this);
@@ -389,6 +413,7 @@ public class MainActivity extends Activity {
         if (loadingText != null) loadingText.setVisibility(View.GONE);
         if (errorView != null) errorView.setVisibility(View.GONE);
         if (homeView != null) homeView.setVisibility(View.VISIBLE);
+        updateImportantBadge();
         refreshHomeStatus();
     }
 
@@ -429,6 +454,51 @@ public class MainActivity extends Activity {
             else control = "手机控制：未开启";
             homeStorageStatus.setText(storage + " · " + control);
         }
+    }
+
+    private void updateImportantBadge() {
+        if (importantUpdateBadge == null) return;
+        boolean show = "home".equals(mode) && importantUpdateInfo != null;
+        if (show) {
+            importantUpdateBadge.setText("重要更新 v"
+                + importantUpdateInfo.optString("versionName", ""));
+        }
+        importantUpdateBadge.setVisibility(show ? View.VISIBLE : View.GONE);
+    }
+
+    /** 静默检查 update.json：只有标记 important=true 且版本更高时才在主页左下角显示提醒。 */
+    private void checkImportantUpdateSilently() {
+        long now = System.currentTimeMillis();
+        if (now - importantCheckAt < 60 * 1000L) return;
+        if (importantCheckRunning) return;
+        importantCheckAt = now;
+        importantCheckRunning = true;
+        new Thread(() -> {
+            JSONObject found = null;
+            boolean ok = false;
+            try {
+                String json = fetchUpdateText(UPDATE_MANIFEST_URL);
+                JSONObject o = new JSONObject(json);
+                int newCode = o.optInt("versionCode", 0);
+                boolean important = o.optBoolean("important", false)
+                    || o.optBoolean("importantUpdate", false);
+                int oldCode = getPackageManager()
+                    .getPackageInfo(getPackageName(), 0).versionCode;
+                if (important && newCode > oldCode) found = o;
+                ok = true;
+            } catch (Exception ignored) {
+                // 静默检查，失败不打扰；下次回到 App 或手动检查时再试。
+            } finally {
+                importantCheckRunning = false;
+                if (!ok) importantCheckAt = 0;
+            }
+            if (!ok) return;
+            final JSONObject info = found;
+            runOnUiThread(() -> {
+                importantUpdateInfo = info;
+                updateImportantBadge();
+            });
+        }, "important-update-check").start();
     }
 
     // ---------------------------------------------------------------- 电脑端
@@ -1736,6 +1806,7 @@ public class MainActivity extends Activity {
         errorView.setVisibility(View.GONE);
         progress.setVisibility(View.VISIBLE);
         if (loadingText != null) loadingText.setVisibility(View.GONE);
+        updateImportantBadge();
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString(PREF_LAST_MODE, mode).apply();
         cancelLoadTimeout();
         // 切回手机端时先清掉 WebView 里残留的电脑端页面；
@@ -1761,6 +1832,7 @@ public class MainActivity extends Activity {
             loadingText.setText(text == null ? "" : text);
             loadingText.setVisibility(View.VISIBLE);
         }
+        updateImportantBadge();
     }
 
     private boolean handleUrl(Uri uri) {
@@ -1808,6 +1880,7 @@ public class MainActivity extends Activity {
         }
         errorView.setVisibility(View.VISIBLE);
         webView.setVisibility(View.GONE);
+        updateImportantBadge();
         refreshHomeStatus();
     }
 
@@ -1949,6 +2022,7 @@ public class MainActivity extends Activity {
         EngineService.notifyTaskStatusChanged(this);
         maybeAutoEnableAccessibility();
         refreshHomeStatus();
+        checkImportantUpdateSilently();
     }
 
     @Override
