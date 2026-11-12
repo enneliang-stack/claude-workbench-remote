@@ -2655,6 +2655,26 @@
             resolve([one]);
             return;
           }
+          // 先把整张长图缩小到一张工作画布，再从画布切片；避免直接裁切原始超大图在部分 WebView 上画成白图
+          let work = null;
+          if (typeof createImageBitmap === 'function') {
+            try {
+              const workW = Math.min(iw, 720);
+              const workH = Math.max(1, Math.round(ih * workW / iw));
+              const bmp = await createImageBitmap(file, {
+                resizeWidth: workW,
+                resizeHeight: workH,
+                resizeQuality: 'high'
+              });
+              const c = document.createElement('canvas');
+              c.width = workW;
+              c.height = workH;
+              c.getContext('2d').drawImage(bmp, 0, 0);
+              if (bmp.close) bmp.close();
+              work = c;
+            } catch { work = null; }
+          }
+
           // 尽量少切：按输出宽度不低于约 720px 计算最少切几片，最多 5 片
           const targetW = Math.min(iw, 720);
           const count = Math.min(5, Math.max(1, Math.ceil((targetW * ih) / (iw * 1600))));
@@ -2664,7 +2684,17 @@
             const { sy, sh } = ranges[i];
             if (sh <= 0) continue;
             const label = (file.name || '长图') + ' (' + (i + 1) + '/' + count + ')';
-            const one = await makeImageSlice(file, img, 0, sy, iw, sh, label, i + 1, count, iw, ih);
+            let sx2 = 0, sy2 = sy, sw2 = iw, sh2 = sh, src = null, fullW = iw, fullH = ih;
+            if (work) {
+              sx2 = 0;
+              sy2 = Math.round(sy * work.height / ih);
+              sw2 = work.width;
+              sh2 = Math.max(1, Math.round(sh * work.height / ih));
+              src = work;
+              fullW = work.width;
+              fullH = work.height;
+            }
+            const one = await makeImageSlice(file, img, sx2, sy2, sw2, sh2, label, i + 1, count, fullW, fullH, src);
             out.push(one);
           }
           URL.revokeObjectURL(url);
@@ -2691,7 +2721,7 @@
   }
 
   /** 画一张图/一片长图；长图优先让 createImageBitmap 在解码时裁剪缩放，避免 WebView 画成白图 */
-  function makeImageSlice(file, img, sx, sy, sw, sh, name, sliceIndex, sliceCount, fullW, fullH) {
+  function makeImageSlice(file, img, sx, sy, sw, sh, name, sliceIndex, sliceCount, fullW, fullH, sourceCanvas) {
     return new Promise(async (resolve, reject) => {
       try {
         const sliceLong = sliceCount > 0;
@@ -2727,7 +2757,14 @@
             });
           } catch { bitmap = null; }
         }
-        if (bitmap) paint(bitmap, w, h);
+        if (sourceCanvas) {
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext('2d');
+          ctx.fillStyle = '#fff';
+          ctx.fillRect(0, 0, w, h);
+          ctx.drawImage(sourceCanvas, sx, sy, sw, sh, 0, 0, w, h);
+        } else if (bitmap) paint(bitmap, w, h);
         else {
           canvas.width = w;
           canvas.height = h;
@@ -2781,7 +2818,14 @@
           type = 'image/jpeg';
           w = Math.max(1, Math.round(w * 0.72));
           h = Math.max(1, Math.round(h * 0.72));
-          if (bitmap) paint(bitmap, w, h);
+          if (sourceCanvas) {
+            canvas.width = w;
+            canvas.height = h;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#fff';
+            ctx.fillRect(0, 0, w, h);
+            ctx.drawImage(sourceCanvas, sx, sy, sw, sh, 0, 0, w, h);
+          } else if (bitmap) paint(bitmap, w, h);
           else {
             canvas.width = w;
             canvas.height = h;
