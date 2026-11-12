@@ -7,10 +7,10 @@ https://raw.githubusercontent.com/enneliang-stack/claude-workbench-remote/main/a
 
 读取失败时会自动尝试 ghfast.top 加速镜像。
 
-当前已准备 2.4.38（versionCode 79，精简更新）：
+当前已准备 2.4.39（versionCode 80，精简更新，important: true）：
 - 精简包：apk/release/ClaudeWorkbench-slim.apk
-  SHA-256 = 8d3e2260721921b1f51057d605e2cbe9ec7dedf7980c86182ade8751d2d10974
-- 完整包保持 2.4.21，不重发；新用户先装 2.4.21 完整包，再装 2.4.38 精简包。
+  SHA-256 = fdec000c8b4d83fe72ab0708bb854c5f78d301a3dbed004353c4fb49e6b0f8eb
+- 完整包保持 2.4.21，不重发；新用户先装 2.4.21 完整包，再装 2.4.39 精简包。
 
 重要更新提醒（2.4.38 起）：
 - 在 update.json 里加 "important": true，手机 App 主页左下角会出现“重要更新 vX”按钮；

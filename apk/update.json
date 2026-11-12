@@ -1,9 +1,10 @@
 {
-  "versionCode": 79,
-  "versionName": "2.4.38",
+  "versionCode": 80,
+  "versionName": "2.4.39",
   "apk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.21/ClaudeWorkbench-full.apk",
   "sha256": "4177f27dc3e3446f50130fb2ea3cbfc5731578247a37fc7eba2314162342e53e",
   "slimApk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/latest/download/ClaudeWorkbench-slim.apk",
-  "slimSha256": "8d3e2260721921b1f51057d605e2cbe9ec7dedf7980c86182ade8751d2d10974",
-  "notes": "2.4.38：新增主页左下角“重要更新”提醒——只有 update.json 标记 important=true 且版本更高时才显示；普通更新仍然只在设置里点“检查更新”才会出现。长截图自动按文件发送和普通图片逻辑保持 2.4.37。PC 客户端仍为 1.2.13，本次只更新 App；完整包保持 2.4.21，已装环境直接装精简包。"
+  "slimSha256": "fdec000c8b4d83fe72ab0708bb854c5f78d301a3dbed004353c4fb49e6b0f8eb",
+  "important": true,
+  "notes": "2.4.39：重要更新（用于验证主页左下角提醒）。功能与 2.4.38 相同；安装 2.4.38 后，主页左下角会出现“重要更新 v2.4.39”，点它即可更新到本版。长截图仍自动按文件发送，普通图片仍按图片发送。PC 客户端仍为 1.2.13；完整包保持 2.4.21，已装环境直接装精简包。"
 }
