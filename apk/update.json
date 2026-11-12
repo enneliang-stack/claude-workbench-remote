@@ -1,9 +1,9 @@
 {
-  "versionCode": 72,
-  "versionName": "2.4.31",
+  "versionCode": 73,
+  "versionName": "2.4.32",
   "apk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.21/ClaudeWorkbench-full.apk",
   "sha256": "4177f27dc3e3446f50130fb2ea3cbfc5731578247a37fc7eba2314162342e53e",
   "slimApk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/latest/download/ClaudeWorkbench-slim.apk",
-  "slimSha256": "e5d7fd6253ae35db4309ffd46554fc20f17b780038dcd91f0cf10e01ca6ff1eb",
-  "notes": "2.4.31：内置 Tailscale 首轮连接最多等 10 秒（原 90 秒），卡住时尽早重试，第二轮仍给 60 秒；手机页修复从小窗/后台回来、任务结束后同一条用户消息重复显示在底部的问题。完整包保持 2.4.21，已装环境直接装精简包。"
+  "slimSha256": "a942207a94ca06ca6cc0b4a158d24a5230d67643105d8ae7a01b21f28b160751",
+  "notes": "2.4.32：长截屏改为固定重叠切法——不再分析空白、不丢片，相邻片重叠，跨接缝的文字不会丢；切分数量按可读宽度取最少，最多 5 张；同时从文件头读取真实尺寸，避免手机 WebView 把长图压小后误判成一张。包含 2.4.31 的 Tailscale 首轮 10 秒重试和手机页重复消息修复。完整包保持 2.4.21，已装环境直接装精简包。"
 }

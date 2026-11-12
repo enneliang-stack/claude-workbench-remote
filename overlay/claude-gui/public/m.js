@@ -2426,10 +2426,21 @@
     S.pendingImages.forEach((img, i) => {
       const d = el('div', 'pending-img');
       const im = el('img');
-      im.src = img.preview;
+      im.src = img.thumb || img.preview;
       im.alt = '';
+      const isSlice = !!(img.sliceIndex && img.sliceCount);
+      const tall = !isSlice && img.h && img.w && img.h / img.w > 3;
+      if (tall) {
+        im.style.objectFit = 'contain';
+        im.style.background = '#111';
+      }
       im.onclick = () => openImageViewer(img.preview);
       d.appendChild(im);
+      if (isSlice || tall) {
+        const tag = el('span', null, isSlice ? img.sliceIndex + '/' + img.sliceCount : '长图');
+        tag.style.cssText = 'position:absolute;left:3px;bottom:3px;padding:0 4px;border-radius:4px;background:rgba(0,0,0,.68);color:#fff;font-size:9px;line-height:14px;pointer-events:none;';
+        d.appendChild(tag);
+      }
       const b = el('button', null, '×');
       b.type = 'button';
       b.title = '移除';
@@ -2558,52 +2569,114 @@
     });
   }
 
-  /** 相册图片通常很大，先缩到 1600px 再转 JPEG；保留较小的 PNG 透明背景 */
-  function readImageFile(file) {
-    return new Promise((resolve, reject) => {
-      const url = URL.createObjectURL(file);
-      const img = new Image();
-      img.onload = () => {
+  /** 长图切点：优先找接近空白的行，避免把一行字切成两半；找不到就在接缝处带一段重叠 */
+  /** 简单重叠切法：固定步长切开，相邻片重叠一段，保证跨接缝的内容不会丢 */
+  function findSliceRanges(iw, ih, count) {
+    const step = ih / count;
+    const overlap = Math.max(60, Math.min(200, Math.round(step * 0.12)));
+    const ranges = [];
+    for (let i = 0; i < count; i++) {
+      const sy = Math.max(0, Math.round(i * step - (i > 0 ? overlap : 0)));
+      const ey = i === count - 1 ? ih : Math.round((i + 1) * step);
+      ranges.push({ sy, sh: Math.max(1, ey - sy) });
+    }
+    return ranges;
+  }
+
+  /** 从文件头读真实宽高：手机 WebView 可能把超大图解码成较小尺寸，naturalWidth 不可靠 */
+  function readImageDimensions(file) {
+    return new Promise(resolve => {
+      const r = new FileReader();
+      r.onload = () => {
         try {
-          const maxDim = 1600;
-          const iw = img.naturalWidth || img.width;
-          const ih = img.naturalHeight || img.height;
-          const scale = Math.min(1, maxDim / Math.max(iw, ih));
-          let w = Math.max(1, Math.round(iw * scale));
-          let h = Math.max(1, Math.round(ih * scale));
-
-          const canvas = document.createElement('canvas');
-          let type = (file.type === 'image/png' && file.size <= 2.5 * 1024 * 1024)
-            ? 'image/png' : 'image/jpeg';
-          const draw = () => {
-            canvas.width = w;
-            canvas.height = h;
-            const ctx = canvas.getContext('2d');
-            if (type !== 'image/png') {
-              ctx.fillStyle = '#fff';
-              ctx.fillRect(0, 0, w, h);
+          const b = new Uint8Array(r.result);
+          if (b.length < 12) { resolve(null); return; }
+          let w = 0, h = 0;
+          if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) {
+            w = (b[16] << 24) | (b[17] << 16) | (b[18] << 8) | b[19];
+            h = (b[20] << 24) | (b[21] << 16) | (b[22] << 8) | b[23];
+          } else if (b[0] === 0xff && b[1] === 0xd8) {
+            let i = 2;
+            while (i + 9 < b.length) {
+              if (b[i] !== 0xff) { i++; continue; }
+              const m = b[i + 1];
+              if (m >= 0xc0 && m <= 0xcf && m !== 0xc4 && m !== 0xc8 && m !== 0xcc) {
+                h = (b[i + 5] << 8) | b[i + 6];
+                w = (b[i + 7] << 8) | b[i + 8];
+                break;
+              }
+              const len = (b[i + 2] << 8) | b[i + 3];
+              if (len < 2) break;
+              i += 2 + len;
             }
-            ctx.drawImage(img, 0, 0, w, h);
-          };
-          draw();
-
-          let dataUrl = canvas.toDataURL(type, 0.85);
-          if (dataUrl.length > 4.5 * 1024 * 1024) {
-            type = 'image/jpeg';
-            w = Math.max(1, Math.round(w * 0.72));
-            h = Math.max(1, Math.round(h * 0.72));
-            draw();
-            dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+          } else if (b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 &&
+                     b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50) {
+            const t = String.fromCharCode(b[12], b[13], b[14], b[15]);
+            if (t === 'VP8X') {
+              w = 1 + (b[24] | (b[25] << 8) | (b[26] << 16));
+              h = 1 + (b[27] | (b[28] << 8) | (b[29] << 16));
+            } else if (t === 'VP8 ') {
+              w = (b[26] | (b[27] << 8)) & 0x3fff;
+              h = (b[28] | (b[29] << 8)) & 0x3fff;
+            } else if (t === 'VP8L') {
+              const bits = b[21] | (b[22] << 8) | (b[23] << 16) | (b[24] << 24);
+              w = (bits & 0x3fff) + 1;
+              h = ((bits >> 14) & 0x3fff) + 1;
+            }
+          } else if (b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46) {
+            w = b[6] | (b[7] << 8);
+            h = b[8] | (b[9] << 8);
           }
+          resolve(w > 0 && h > 0 ? { w, h } : null);
+        } catch { resolve(null); }
+      };
+      r.onerror = () => resolve(null);
+      r.readAsArrayBuffer(file.slice(0, Math.min(file.size, 256 * 1024)));
+    });
+  }
 
+  /** 相册图片通常很大：普通图缩到 1600px；长截屏按固定步长重叠切分，最多 5 片 */
+  function readImageFile(file) {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    return new Promise((resolve, reject) => {
+      img.onload = async () => {
+        try {
+          const naturalW = img.naturalWidth || img.width;
+          const naturalH = img.naturalHeight || img.height;
+          const parsed = await readImageDimensions(file);
+          const iw = (parsed && parsed.w > 0) ? parsed.w : naturalW;
+          const ih = (parsed && parsed.h > 0) ? parsed.h : naturalH;
+          if (!iw || !ih) throw new Error('无法读取图片尺寸');
+          const long = ih > 3000 && ih / iw > 3;
+          if (!long) {
+            const one = await makeImageSlice(file, img, 0, 0, iw, ih, file.name || '图片', 0, 0, iw, ih);
+            URL.revokeObjectURL(url);
+            resolve([one]);
+            return;
+          }
+          // 尽量少切：按输出宽度不低于约 720px 计算最少切几片，最多 5 片
+          const targetW = Math.min(iw, 720);
+          const count = Math.min(5, Math.max(1, Math.ceil((targetW * ih) / (iw * 1600))));
+          const ranges = findSliceRanges(iw, ih, count);
+          const out = [];
+          for (let i = 0; i < ranges.length; i++) {
+            const { sy, sh } = ranges[i];
+            if (sh <= 0) continue;
+            const label = (file.name || '长图') + ' (' + (i + 1) + '/' + count + ')';
+            const one = await makeImageSlice(file, img, 0, sy, iw, sh, label, i + 1, count, iw, ih);
+            out.push(one);
+          }
           URL.revokeObjectURL(url);
-          const comma = dataUrl.indexOf(',');
-          resolve({
-            media_type: dataUrl.slice(5, dataUrl.indexOf(';')),
-            data: dataUrl.slice(comma + 1),
-            preview: dataUrl,
-            name: file.name || '图片'
+          if (!out.length) throw new Error('这张长截图无法处理，请裁剪成几张后再发');
+          const total = out.length;
+          out.forEach((one, i) => {
+            one.sliceIndex = i + 1;
+            one.sliceCount = total;
+            one.name = (file.name || '长图') + ' (' + (i + 1) + '/' + total + ')';
           });
+          out[0].sliceInfo = { total, kept: total, width: iw, height: ih };
+          resolve(out);
         } catch (e) {
           URL.revokeObjectURL(url);
           reject(e);
@@ -2617,24 +2690,195 @@
     });
   }
 
+  /** 画一张图/一片长图；长图优先让 createImageBitmap 在解码时裁剪缩放，避免 WebView 画成白图 */
+  function makeImageSlice(file, img, sx, sy, sw, sh, name, sliceIndex, sliceCount, fullW, fullH) {
+    return new Promise(async (resolve, reject) => {
+      try {
+        const sliceLong = sliceCount > 0;
+        const nw = img.naturalWidth || fullW || sw;
+        const nh = img.naturalHeight || fullH || sh;
+        // 文件头尺寸和 WebView 解码尺寸不一致时，把源坐标映射到解码后的图上
+        const fx = fullW && nw ? nw / fullW : 1;
+        const fy = fullH && nh ? nh / fullH : 1;
+        const scale = Math.min(1, 1600 / Math.max(sw, sh));
+        let w = Math.max(1, Math.round(sw * scale));
+        let h = Math.max(1, Math.round(sh * scale));
+        // 普通小 PNG 保留透明背景；长截图分片和 JPEG 用白底
+        let type = (!sliceLong && file.type === 'image/png' && file.size <= 2.5 * 1024 * 1024)
+          ? 'image/png' : 'image/jpeg';
+        const canvas = document.createElement('canvas');
+        const paint = (source, dw, dh) => {
+          canvas.width = dw;
+          canvas.height = dh;
+          const ctx = canvas.getContext('2d');
+          if (type !== 'image/png') {
+            ctx.fillStyle = '#fff';
+            ctx.fillRect(0, 0, dw, dh);
+          }
+          ctx.drawImage(source, 0, 0, dw, dh);
+        };
+        let bitmap = null;
+        if (typeof createImageBitmap === 'function') {
+          try {
+            bitmap = await createImageBitmap(file, sx, sy, sw, sh, {
+              resizeWidth: w,
+              resizeHeight: h,
+              resizeQuality: 'high'
+            });
+          } catch { bitmap = null; }
+        }
+        if (bitmap) paint(bitmap, w, h);
+        else {
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext('2d');
+          if (type !== 'image/png') {
+            ctx.fillStyle = '#fff';
+            ctx.fillRect(0, 0, w, h);
+          }
+          ctx.drawImage(img, sx * fx, sy * fy, sw * fx, sh * fy, 0, 0, w, h);
+        }
+
+        const isBlank = () => {
+          try {
+            const ctx = canvas.getContext('2d');
+            const data = ctx.getImageData(0, 0, w, h).data;
+            const stepX = Math.max(1, Math.floor(w / 40));
+            const stepY = Math.max(1, Math.floor(h / 60));
+            let nonWhite = 0;
+            for (let y = Math.floor(stepY / 2); y < h; y += stepY) {
+              for (let x = Math.floor(stepX / 2); x < w; x += stepX) {
+                const i = (y * w + x) * 4;
+                if (data[i + 3] > 8 && (data[i] < 244 || data[i + 1] < 244 || data[i + 2] < 244)) {
+                  nonWhite++;
+                  return false; // 有任何非白像素就说明这片有内容，不能丢
+                }
+              }
+            }
+            return nonWhite === 0;
+          } catch {
+            return false;
+          }
+        };
+
+        let blank = isBlank();
+        if (blank && bitmap) {
+          try { bitmap.close && bitmap.close(); } catch { /* ignore */ }
+          bitmap = null;
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext('2d');
+          if (type !== 'image/png') {
+            ctx.fillStyle = '#fff';
+            ctx.fillRect(0, 0, w, h);
+          }
+          ctx.drawImage(img, sx * fx, sy * fy, sw * fx, sh * fy, 0, 0, w, h);
+          blank = isBlank();
+        }
+
+        let dataUrl = canvas.toDataURL(type, 0.88);
+        if (dataUrl.length > 4.5 * 1024 * 1024) {
+          type = 'image/jpeg';
+          w = Math.max(1, Math.round(w * 0.72));
+          h = Math.max(1, Math.round(h * 0.72));
+          if (bitmap) paint(bitmap, w, h);
+          else {
+            canvas.width = w;
+            canvas.height = h;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#fff';
+            ctx.fillRect(0, 0, w, h);
+            ctx.drawImage(img, sx * fx, sy * fy, sw * fx, sh * fy, 0, 0, w, h);
+          }
+          dataUrl = canvas.toDataURL('image/jpeg', 0.72);
+        }
+        // 分片缩略图：从顶部/中部/底部挑内容最多的一条方形带，避免缩略图只看到白色页眉
+        let thumb = null;
+        if (sliceCount > 0) {
+          try {
+            const ctx = canvas.getContext('2d');
+            const data = ctx.getImageData(0, 0, w, h).data;
+            const side = Math.max(1, Math.min(w, h));
+            const positions = h > w
+              ? [0, Math.max(0, Math.floor((h - side) / 2)), Math.max(0, h - side)]
+              : [Math.max(0, Math.floor((h - side) / 2))];
+            const scoreBand = y => {
+              let score = 0;
+              const stepX = Math.max(1, Math.floor(w / 24));
+              const stepY = Math.max(1, Math.floor(side / 24));
+              for (let yy = y; yy < Math.min(h, y + side); yy += stepY) {
+                for (let xx = 0; xx < w; xx += stepX) {
+                  const i = (yy * w + xx) * 4;
+                  if (data[i + 3] > 8 && (data[i] < 244 || data[i + 1] < 244 || data[i + 2] < 244)) score++;
+                }
+              }
+              return score;
+            };
+            let best = positions[0];
+            let bestScore = -1;
+            for (const y of positions) {
+              const s = scoreBand(y);
+              if (s > bestScore) { bestScore = s; best = y; }
+            }
+            const tc = document.createElement('canvas');
+            tc.width = 116;
+            tc.height = 116;
+            const tctx = tc.getContext('2d');
+            tctx.fillStyle = '#fff';
+            tctx.fillRect(0, 0, 116, 116);
+            if (h >= w) tctx.drawImage(canvas, 0, best, w, w, 0, 0, 116, 116);
+            else tctx.drawImage(canvas, Math.max(0, Math.floor((w - h) / 2)), 0, h, h, 0, 0, 116, 116);
+            thumb = tc.toDataURL('image/jpeg', 0.82);
+          } catch { thumb = null; }
+        }
+        if (bitmap) { try { bitmap.close && bitmap.close(); } catch { /* ignore */ } }
+        const comma = dataUrl.indexOf(',');
+        resolve({
+          media_type: dataUrl.slice(5, dataUrl.indexOf(';')),
+          data: dataUrl.slice(comma + 1),
+          preview: dataUrl,
+          thumb,
+          name,
+          w,
+          h,
+          sliceIndex,
+          sliceCount,
+          blank
+        });
+      } catch (e) {
+        reject(e);
+      }
+    });
+  }
+
   async function addImageFiles(files) {
     const list = [...(files || [])].filter(f => f && /^image\//.test(f.type));
     if (!list.length) return;
-    const room = MAX_PENDING_IMAGES - S.pendingImages.length;
-    if (room <= 0) {
-      toast(`最多 ${MAX_PENDING_IMAGES} 张图片`, 'err');
-      return;
-    }
-    for (const file of list.slice(0, room)) {
+    for (const file of list) {
       try {
-        const img = await readImageFile(file);
-        S.pendingImages.push(img);
+        const imgs = await readImageFile(file);
+        const multi = imgs.length > 1;
+        if (!multi && S.pendingImages.length >= MAX_PENDING_IMAGES) {
+          toast(`最多 ${MAX_PENDING_IMAGES} 张图片`, 'err');
+          continue;
+        }
+        for (const img of imgs) {
+          if (S.pendingImages.length >= 10) {
+            toast('最多 10 张图片', 'err');
+            break;
+          }
+          S.pendingImages.push(img);
+        }
         renderPendingImages();
+        const info = imgs[0] && imgs[0].sliceInfo;
+        if (info) {
+          if (info.kept > 1) toast(`长截图 ${info.width}×${info.height}：已拆成 ${info.kept} 张`);
+          else if (info.total > 1) toast(`长截图 ${info.width}×${info.height}：内容合并为 1 张（空白部分已省略）`);
+        }
       } catch (e) {
         toast('图片读取失败：' + (file.name || '未知文件'), 'err');
       }
     }
-    if (list.length > room) toast(`最多 ${MAX_PENDING_IMAGES} 张，多余的已忽略`, 'err');
     updateSendState();
   }
 
