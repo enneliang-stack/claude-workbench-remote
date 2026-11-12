@@ -3,6 +3,7 @@ package com.missyao.claudeworkbench;
 import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.app.Dialog;
 import android.app.ProgressDialog;
 import android.content.ActivityNotFoundException;
 import android.content.ClipData;
@@ -13,7 +14,9 @@ import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.Typeface;
+import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.StateListDrawable;
 import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.NetworkCapabilities;
@@ -23,6 +26,7 @@ import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
+import android.provider.MediaStore;
 import android.provider.Settings;
 import android.text.InputType;
 import android.util.Log;
@@ -87,13 +91,17 @@ public class MainActivity extends Activity {
     private static final int REQ_FILE = 1001;
     private static final int REQ_NOTIFY = 1002;
     private static final int REQ_STORAGE = 1003;
+    private static final int REQ_CAPTURE = 1004;
 
     private static final int BG = Color.rgb(11, 13, 16);
     private static final int CARD = Color.rgb(21, 26, 33);
     private static final int STROKE = Color.rgb(38, 46, 56);
     private static final int FG = Color.rgb(232, 230, 227);
     private static final int MUTED = Color.rgb(154, 163, 173);
+    private static final int FAINT = Color.rgb(111, 120, 131);
     private static final int ORANGE = Color.rgb(240, 163, 94);
+    private static final int GREEN = Color.rgb(76, 195, 138);
+    private static final int RED = Color.rgb(224, 118, 107);
     private static final int BLUE = Color.rgb(110, 168, 254);
 
     WebView webView;
@@ -106,16 +114,29 @@ public class MainActivity extends Activity {
     private TextView homePcStatus;
     private TextView homePhoneStatus;
     private TextView homeStorageStatus;
+    private TextView homeControlStatus;
+    private TextView homeOverlayStatus;
     private TextView importantUpdateBadge;
     private JSONObject importantUpdateInfo;
     private volatile boolean importantCheckRunning;
     private long importantCheckAt;
 
     private ValueCallback<Uri[]> fileCallback;
+    private Uri captureUri;
+    private File captureFile;
     private final List<String> pcUrls = new ArrayList<>();
     private int pcProbeGeneration = 0;
     private boolean pcProbing = false;
     private String mode = "home"; // home | pc | phone
+
+    private final Runnable homeStatusPoll = new Runnable() {
+        @Override
+        public void run() {
+            if (!"home".equals(mode)) return;
+            refreshHomeStatus();
+            handler.postDelayed(this, 3000);
+        }
+    };
     private String currentBaseHost = "";
     private int phonePort = 0;
     private boolean phoneStarting = false;
@@ -210,6 +231,27 @@ public class MainActivity extends Activity {
                                              FileChooserParams params) {
                 if (fileCallback != null) fileCallback.onReceiveValue(null);
                 fileCallback = callback;
+                // <input capture>：直接调相机，结果通过私有 content URI 交回 WebView。
+                if (params.isCaptureEnabled()) {
+                    try {
+                        File file = CaptureProvider.newCaptureFile(MainActivity.this);
+                        Uri uri = CaptureProvider.uriFor(file);
+                        Intent capture = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+                        capture.putExtra(MediaStore.EXTRA_OUTPUT, uri);
+                        capture.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                                | Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                        if (capture.resolveActivity(getPackageManager()) == null) {
+                            throw new ActivityNotFoundException("no camera");
+                        }
+                        captureUri = uri;
+                        captureFile = file;
+                        startActivityForResult(capture, REQ_CAPTURE);
+                        return true;
+                    } catch (Exception e) {
+                        cleanupCapture();
+                        // 没有相机应用时退回文件选择器，不让页面卡住。
+                    }
+                }
                 try {
                     Intent intent = params.createIntent();
                     String[] accept = params.getAcceptTypes();
@@ -280,11 +322,11 @@ public class MainActivity extends Activity {
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         // 主页左下角的重要更新提醒：只有 update.json 标记 important=true 且版本更高时才显示。
-        importantUpdateBadge = text("", 12, BLUE);
+        importantUpdateBadge = text("", 12, ORANGE);
         importantUpdateBadge.setTypeface(Typeface.DEFAULT_BOLD);
         importantUpdateBadge.setGravity(Gravity.CENTER_VERTICAL);
         importantUpdateBadge.setPadding(dp(14), dp(9), dp(14), dp(9));
-        importantUpdateBadge.setBackground(rounded(CARD, BLUE, 999));
+        importantUpdateBadge.setBackground(rounded(CARD, ORANGE, 999));
         importantUpdateBadge.setElevation(dp(5));
         importantUpdateBadge.setClickable(true);
         importantUpdateBadge.setFocusable(true);
@@ -345,13 +387,7 @@ public class MainActivity extends Activity {
         page.addView(card("手机端", "直接在这台手机上运行 Claude Code", ORANGE,
             homePhoneStatus, this::openPhoneMode), marginTop(dp(14)));
 
-        TextView settings = text("设置与日志  ›", 13, MUTED);
-        settings.setPadding(dp(6), dp(18), dp(6), dp(4));
-        settings.setOnClickListener(v -> showPhoneSettings());
-        page.addView(settings);
-
-        homeStorageStatus = text("", 11, MUTED);
-        page.addView(homeStorageStatus, marginTop(dp(2)));
+        page.addView(buildHomeSettingsCard(), marginTop(dp(18)));
 
         TextView tip = text("手机端不依赖电脑；电脑端需要电脑开机并运行「远程访问」。\n"
             + "手机端首次安装约 500 MB，需要 1.8 GB 以上空间。", 11, Color.rgb(110, 118, 128));
@@ -368,6 +404,77 @@ public class MainActivity extends Activity {
             addView(scroll, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         }};
+    }
+
+    private TextView homeChip() {
+        TextView t = text("", 10, MUTED);
+        t.setPadding(dp(6), dp(3), dp(6), dp(3));
+        t.setBackground(rounded(0xFF1B2028, STROKE, 999));
+        return t;
+    }
+
+    private void setStatusChip(TextView v, String label, int color) {
+        if (v == null) return;
+        String text = "● " + label;
+        if (text.contentEquals(v.getText()) && color == v.getCurrentTextColor()) return;
+        v.setVisibility(View.VISIBLE);
+        v.setText(text);
+        v.setTextColor(color);
+        v.setBackground(rounded(
+            Color.argb(20, Color.red(color), Color.green(color), Color.blue(color)),
+            Color.argb(90, Color.red(color), Color.green(color), Color.blue(color)),
+            999));
+    }
+
+    private LinearLayout buildHomeSettingsCard() {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(dp(14), dp(13), dp(12), dp(13));
+        card.setBackground(rounded(CARD, STROKE, 16));
+        card.setClickable(true);
+        card.setFocusable(true);
+        card.setOnClickListener(v -> showPhoneSettings());
+
+        LinearLayout top = new LinearLayout(this);
+        top.setOrientation(LinearLayout.HORIZONTAL);
+        top.setGravity(Gravity.CENTER_VERTICAL);
+        TextView icon = text("⚙", 18, MUTED);
+        icon.setGravity(Gravity.CENTER);
+        icon.setBackground(rounded(0xFF1B2028, STROKE, 12));
+        top.addView(icon, new LinearLayout.LayoutParams(dp(38), dp(38)));
+
+        LinearLayout main = new LinearLayout(this);
+        main.setOrientation(LinearLayout.VERTICAL);
+        main.setPadding(dp(11), 0, 0, 0);
+        TextView title = text("设置与日志", 15, FG);
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        main.addView(title);
+        TextView sub = text("权限、运行环境与更新", 11, MUTED);
+        sub.setPadding(0, dp(2), 0, 0);
+        main.addView(sub);
+        top.addView(main, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        TextView arrow = text("›", 20, FAINT);
+        arrow.setPadding(dp(6), 0, 0, 0);
+        top.addView(arrow);
+        card.addView(top);
+
+        LinearLayout chips = new LinearLayout(this);
+        chips.setOrientation(LinearLayout.HORIZONTAL);
+        chips.setGravity(Gravity.CENTER_VERTICAL);
+        homeStorageStatus = homeChip();
+        chips.addView(homeStorageStatus);
+        homeControlStatus = homeChip();
+        LinearLayout.LayoutParams c1 = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        c1.leftMargin = dp(6);
+        chips.addView(homeControlStatus, c1);
+        homeOverlayStatus = homeChip();
+        LinearLayout.LayoutParams c2 = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        c2.leftMargin = dp(6);
+        chips.addView(homeOverlayStatus, c2);
+        card.addView(chips, marginTop(dp(10)));
+        return card;
     }
 
     private LinearLayout card(String title, String subtitle, int accent, TextView status, Runnable onClick) {
@@ -415,6 +522,13 @@ public class MainActivity extends Activity {
         if (homeView != null) homeView.setVisibility(View.VISIBLE);
         updateImportantBadge();
         refreshHomeStatus();
+        handler.removeCallbacks(homeStatusPoll);
+        handler.postDelayed(homeStatusPoll, 3000);
+    }
+
+    private void refreshHomeStatusSoon() {
+        handler.postDelayed(this::refreshHomeStatus, 400);
+        handler.postDelayed(this::refreshHomeStatus, 1200);
     }
 
     private void refreshHomeStatus() {
@@ -432,6 +546,8 @@ public class MainActivity extends Activity {
             homePcStatus.setText("已配置 · " + (host == null ? first : host) + extra);
         }
 
+        homePhoneStatus.setTextColor(
+            LocalEngine.isRunning() && LocalEngine.currentPort() > 0 ? GREEN : ORANGE);
         if (LocalEngine.isInstalling()) {
             homePhoneStatus.setText("安装中 · 点此查看进度");
         } else if (!LocalConfig.isConfigured(this)) {
@@ -444,16 +560,19 @@ public class MainActivity extends Activity {
             homePhoneStatus.setText("环境未安装 · 点此安装（约 500 MB）");
         }
 
-        if (homeStorageStatus != null) {
-            String storage = LocalConfig.hasAllFilesAccess(this)
-                ? "手机存储：已授权全盘访问"
-                : "手机存储：仅 App 专属目录（可在设置里授权全盘）";
-            String control;
-            if (PhoneControlServer.isRunning()) control = "手机控制：已开启";
-            else if (PhoneControlServer.isEnabled(this)) control = "手机控制：等待无障碍授权";
-            else control = "手机控制：未开启";
-            homeStorageStatus.setText(storage + " · " + control);
+        boolean storageOk = LocalConfig.hasAllFilesAccess(this);
+        setStatusChip(homeStorageStatus, storageOk ? "存储 已授权" : "存储 未授权",
+            storageOk ? GREEN : ORANGE);
+        if (PhoneControlServer.isRunning()) {
+            setStatusChip(homeControlStatus, "控制 已开启", GREEN);
+        } else if (PhoneControlServer.isEnabled(this)) {
+            setStatusChip(homeControlStatus, "控制 待授权", ORANGE);
+        } else {
+            setStatusChip(homeControlStatus, "控制 未开启", ORANGE);
         }
+        boolean overlayOk = Settings.canDrawOverlays(this);
+        setStatusChip(homeOverlayStatus, overlayOk ? "悬浮窗 已授权" : "悬浮窗 未授权",
+            overlayOk ? GREEN : ORANGE);
     }
 
     private void updateImportantBadge() {
@@ -1140,79 +1259,227 @@ public class MainActivity extends Activity {
         }
     }
 
+    private LinearLayout settingsGroup() {
+        LinearLayout g = new LinearLayout(this);
+        g.setOrientation(LinearLayout.VERTICAL);
+        g.setBackground(rounded(CARD, STROKE, 16));
+        return g;
+    }
+
+    private TextView settingsGroupLabel(String s) {
+        TextView t = text(s, 11, FAINT);
+        t.setTypeface(Typeface.DEFAULT_BOLD);
+        t.setPadding(dp(6), dp(16), 0, dp(6));
+        return t;
+    }
+
+    private View settingsDivider() {
+        View v = new View(this);
+        v.setBackgroundColor(STROKE);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, dp(1));
+        lp.leftMargin = dp(14);
+        v.setLayoutParams(lp);
+        return v;
+    }
+
+    private StateListDrawable rowPressBg() {
+        StateListDrawable d = new StateListDrawable();
+        d.addState(new int[]{android.R.attr.state_pressed}, rounded(0xFF1B2028, Color.TRANSPARENT, 12));
+        d.addState(new int[]{}, rounded(Color.TRANSPARENT, Color.TRANSPARENT, 12));
+        return d;
+    }
+
+    private LinearLayout settingsRow(String title, String subtitle, String status,
+                                     int statusColor, boolean danger, Runnable action) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(14), dp(12), dp(12), dp(12));
+        row.setBackground(rowPressBg());
+        row.setClickable(true);
+        row.setFocusable(true);
+
+        LinearLayout main = new LinearLayout(this);
+        main.setOrientation(LinearLayout.VERTICAL);
+        TextView t = text(title, 14, danger ? RED : FG);
+        main.addView(t);
+        if (subtitle != null && !subtitle.isEmpty()) {
+            TextView sub = text(subtitle, 11, MUTED);
+            sub.setPadding(0, dp(2), 0, 0);
+            main.addView(sub);
+        }
+        row.addView(main, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+
+        if (status != null && !status.isEmpty()) {
+            TextView chip = text(status, 11, statusColor);
+            chip.setPadding(dp(8), dp(3), dp(8), dp(3));
+            chip.setBackground(rounded(Color.TRANSPARENT,
+                Color.argb(90, Color.red(statusColor), Color.green(statusColor), Color.blue(statusColor)),
+                999));
+            row.addView(chip);
+        }
+        TextView chev = text("›", 18, FAINT);
+        chev.setPadding(dp(8), 0, 0, 0);
+        row.addView(chev);
+        if (action != null) row.setOnClickListener(v -> action.run());
+        return row;
+    }
+
+    private LinearLayout settingsRow(String title, String subtitle, String status,
+                                     int statusColor, Runnable action) {
+        return settingsRow(title, subtitle, status, statusColor, false, action);
+    }
+
     private void showPhoneSettings() {
-        String storage = LocalConfig.hasAllFilesAccess(this) ? "手机存储：已授权全盘" : "手机存储：授权全盘访问";
-        String control = PhoneControlServer.isRunning()
-            ? "手机控制：已开启"
-            : PhoneControlServer.isEnabled(this)
-                ? "手机控制：等待无障碍授权"
-                : "手机控制：未开启";
-        String ts = LocalEngine.isTailscaleProxyRunning()
-            ? "内置 Tailscale：运行中"
-            : LocalConfig.tsEnabled(this)
-                ? "内置 Tailscale：已配置，未启动"
-                : "内置 Tailscale：未配置（免装 Tailscale App）";
-        String[] items = {
-            "修改 API Key / 模型",
-            control,
-            ts,
-            storage,
-            "查看运行日志",
-            LocalEngine.isRunning() ? "停止手机端" : "启动手机端",
-            "重新安装手机端环境",
-            "清空所有手机端数据与环境",
-            "卸载 App",
-            Settings.canDrawOverlays(this)
-                ? "悬浮窗权限：已授权"
-                : "悬浮窗权限：未授权（插话会打开聊天页）",
-            "检查更新"
-        };
-        new AlertDialog.Builder(this)
-            .setTitle("设置与日志")
-            .setItems(items, (d, which) -> {
-                if (which == 0) showPhoneConfigDialog(false);
-                else if (which == 1) showPhoneControlDialog();
-                else if (which == 2) showTailscaleDialog();
-                else if (which == 3) openStorageSettings();
-                else if (which == 4) showLogDialog();
-                else if (which == 5) {
-                    if (LocalEngine.isRunning()) {
-                        EngineService.stop(this);
-                        Toast.makeText(this, "已停止手机端", Toast.LENGTH_SHORT).show();
-                        refreshHomeStatus();
-                    } else {
-                        openPhoneMode();
-                    }
-                } else if (which == 6) {
-                    new AlertDialog.Builder(this)
-                        .setTitle("重新安装？")
-                        .setMessage("会重新下载 Alpine 并重装 Node / Claude Code，已安装的对话记录会先备份再恢复。")
-                        .setPositiveButton("重新安装", (dd, ww) -> {
-                            Toast.makeText(this, "正在重置环境…", Toast.LENGTH_SHORT).show();
-                            new Thread(() -> {
-                                try {
-                                    LocalEngine.resetForReinstall(MainActivity.this);
-                                    runOnUiThread(() -> showInstallDialog());
-                                } catch (Exception e) {
-                                    runOnUiThread(() -> Toast.makeText(MainActivity.this,
-                                        "重置失败：" + e.getMessage(), Toast.LENGTH_LONG).show());
-                                }
-                            }, "phone-reset").start();
-                        })
-                        .setNegativeButton("取消", null)
-                        .show();
-                } else if (which == 7) {
-                    confirmClearAllData();
-                } else if (which == 8) {
-                    confirmUninstall();
-                } else if (which == 9) {
-                    openOverlaySettings();
-                } else if (which == 10) {
-                    checkForUpdates();
+        final boolean controlOn = PhoneControlServer.isRunning();
+        final boolean controlWaiting = !controlOn && PhoneControlServer.isEnabled(this);
+        final String controlStatus = controlOn ? "已开启" : controlWaiting ? "等待授权" : "未开启";
+        final int controlColor = controlOn ? GREEN : ORANGE;
+        final boolean tsOn = LocalEngine.isTailscaleProxyRunning();
+        final boolean tsConfigured = LocalConfig.tsEnabled(this);
+        final String tsStatus = tsOn ? "运行中" : tsConfigured ? "已配置" : "未配置";
+        final int tsColor = (tsOn || tsConfigured) ? GREEN : ORANGE;
+        final boolean storageOk = LocalConfig.hasAllFilesAccess(this);
+        final boolean overlayOk = Settings.canDrawOverlays(this);
+        String version = "";
+        try {
+            version = getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+        } catch (Exception ignored) { /* ignore */ }
+        final String versionText = version == null ? "" : version;
+        final String versionSub = versionText.isEmpty() ? "Claude 工作台 · 手机端"
+            : "Claude 工作台 · v" + versionText;
+
+        final Dialog dialog = new Dialog(this);
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
+
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(dp(16), dp(14), dp(16), dp(14));
+        root.setBackground(rounded(CARD, STROKE, 20));
+
+        LinearLayout head = new LinearLayout(this);
+        head.setOrientation(LinearLayout.HORIZONTAL);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout titles = new LinearLayout(this);
+        titles.setOrientation(LinearLayout.VERTICAL);
+        TextView title = text("设置与日志", 18, FG);
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        titles.addView(title);
+        TextView subtitle = text(versionSub, 11, MUTED);
+        subtitle.setPadding(0, dp(2), 0, 0);
+        titles.addView(subtitle);
+        head.addView(titles, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        TextView closeX = text("×", 22, MUTED);
+        closeX.setGravity(Gravity.CENTER);
+        closeX.setOnClickListener(v -> dialog.dismiss());
+        head.addView(closeX, new LinearLayout.LayoutParams(dp(36), dp(36)));
+        root.addView(head);
+
+        ScrollView scroll = new ScrollView(this);
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(0, dp(4), 0, dp(2));
+        scroll.addView(content);
+        root.addView(scroll, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
+
+        content.addView(settingsGroupLabel("连接与模型"));
+        LinearLayout g1 = settingsGroup();
+        g1.addView(settingsRow("API Key 与模型", "DeepSeek 地址、Key、默认模型", null, 0,
+            () -> { dialog.dismiss(); showPhoneConfigDialog(false); }));
+        g1.addView(settingsDivider());
+        g1.addView(settingsRow("手机控制", "无障碍点按与读屏", controlStatus, controlColor,
+            () -> { dialog.dismiss(); showPhoneControlDialog(); }));
+        g1.addView(settingsDivider());
+        g1.addView(settingsRow("内置 Tailscale", "免装 Tailscale App", tsStatus, tsColor,
+            () -> { dialog.dismiss(); showTailscaleDialog(); }));
+        content.addView(g1);
+
+        content.addView(settingsGroupLabel("设备权限"));
+        LinearLayout g2 = settingsGroup();
+        g2.addView(settingsRow("手机存储", "读取和保存手机文件", storageOk ? "全盘" : "未授权",
+            storageOk ? GREEN : ORANGE,
+            () -> { dialog.dismiss(); openStorageSettings(); }));
+        g2.addView(settingsDivider());
+        g2.addView(settingsRow("悬浮窗权限", "插话与完成提示", overlayOk ? "已授权" : "未授权",
+            overlayOk ? GREEN : ORANGE,
+            () -> { dialog.dismiss(); openOverlaySettings(); }));
+        content.addView(g2);
+
+        content.addView(settingsGroupLabel("运行与维护"));
+        LinearLayout g3 = settingsGroup();
+        g3.addView(settingsRow("查看运行日志", "手机端引擎实时输出", null, 0,
+            () -> { dialog.dismiss(); showLogDialog(); }));
+        g3.addView(settingsDivider());
+        g3.addView(settingsRow(LocalEngine.isRunning() ? "停止手机端" : "启动手机端",
+            LocalEngine.isRunning() ? "正在运行" : "127.0.0.1 本机服务",
+            LocalEngine.isRunning() ? "运行中" : "已停止",
+            LocalEngine.isRunning() ? GREEN : FAINT, () -> {
+                dialog.dismiss();
+                if (LocalEngine.isRunning()) {
+                    EngineService.stop(this);
+                    Toast.makeText(this, "已停止手机端", Toast.LENGTH_SHORT).show();
+                    refreshHomeStatus();
+                    refreshHomeStatusSoon();
+                } else {
+                    openPhoneMode();
                 }
-            })
-            .setNegativeButton("关闭", null)
-            .show();
+            }));
+        g3.addView(settingsDivider());
+        g3.addView(settingsRow("检查更新", versionText.isEmpty() ? "" : "当前 " + versionText, null, 0,
+            () -> { dialog.dismiss(); checkForUpdates(); }));
+        g3.addView(settingsDivider());
+        g3.addView(settingsRow("重新安装手机端环境", "重装 Node / Claude Code，保留对话", null, 0, () -> {
+            dialog.dismiss();
+            new AlertDialog.Builder(this)
+                .setTitle("重新安装？")
+                .setMessage("会重新下载 Alpine 并重装 Node / Claude Code，已安装的对话记录会先备份再恢复。")
+                .setPositiveButton("重新安装", (dd, ww) -> {
+                    Toast.makeText(this, "正在重置环境…", Toast.LENGTH_SHORT).show();
+                    new Thread(() -> {
+                        try {
+                            LocalEngine.resetForReinstall(MainActivity.this);
+                            runOnUiThread(() -> showInstallDialog());
+                        } catch (Exception e) {
+                            runOnUiThread(() -> Toast.makeText(MainActivity.this,
+                                "重置失败：" + e.getMessage(), Toast.LENGTH_LONG).show());
+                        }
+                    }, "phone-reset").start();
+                })
+                .setNegativeButton("取消", null)
+                .show();
+        }));
+        g3.addView(settingsDivider());
+        g3.addView(settingsRow("清空所有手机端数据与环境", "对话、配置、运行环境都会删除", null, 0, true,
+            () -> { dialog.dismiss(); confirmClearAllData(); }));
+        g3.addView(settingsDivider());
+        g3.addView(settingsRow("卸载 App", "保留还是删除手机端数据？", null, 0, true,
+            () -> { dialog.dismiss(); confirmUninstall(); }));
+        content.addView(g3);
+
+        TextView close = text("关闭", 14, FG);
+        close.setGravity(Gravity.CENTER);
+        close.setPadding(0, dp(12), 0, dp(12));
+        close.setBackground(rounded(0xFF1A1F27, STROKE, 12));
+        LinearLayout.LayoutParams closeLp = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        closeLp.topMargin = dp(14);
+        close.setLayoutParams(closeLp);
+        close.setOnClickListener(v -> dialog.dismiss());
+        root.addView(close);
+
+        dialog.setContentView(root, new ViewGroup.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        dialog.setOnShowListener(d -> {
+            Window w = dialog.getWindow();
+            if (w == null) return;
+            w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+            int width = (int) (getResources().getDisplayMetrics().widthPixels * 0.92f);
+            int height = (int) (getResources().getDisplayMetrics().heightPixels * 0.86f);
+            w.setLayout(Math.min(width, dp(480)), height);
+        });
+        dialog.show();
     }
 
     // ---------------------------------------------------------------- 检查更新
@@ -1959,7 +2226,9 @@ public class MainActivity extends Activity {
             return;
         }
         webView.evaluateJavascript(
-            "(function(){var ids=['imgViewer','confirmStop','confirmDelete','attachSheet','refSheet','chatSettings','sheet','downloadsSheet','pcFileSheet','phoneFolderPicker'];" +
+            "(function(){" +
+            "try{if(window.__workbenchBack){var r=window.__workbenchBack();if(r)return r;}}catch(e){}" +
+            "var ids=['imgViewer','confirmStop','confirmDelete','attachSheet','refSheet','chatSettings','sheet','downloadsSheet','pcFileSheet','phoneFolderPicker','optionSheet','quoteTargetSheet','msgActions','diffSheet'];" +
             "for(var i=0;i<ids.length;i++){var e=document.getElementById(ids[i]);if(e&&!e.hidden){e.hidden=true;" +
             "if(ids[i]==='imgViewer'){var im=document.getElementById('imgViewerImg');if(im)im.src='';}" +
             "return 'handled';}}" +
@@ -2051,8 +2320,32 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void cleanupCapture() {
+        if (captureFile != null) {
+            try { captureFile.delete(); } catch (Exception ignored) { /* ignore */ }
+        }
+        captureUri = null;
+        captureFile = null;
+    }
+
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (requestCode == REQ_CAPTURE) {
+            Uri shot = null;
+            if (resultCode == RESULT_OK && captureUri != null
+                    && captureFile != null && captureFile.length() > 0) {
+                shot = captureUri;
+                captureUri = null;
+                captureFile = null;
+            } else {
+                cleanupCapture();
+            }
+            if (fileCallback != null) {
+                fileCallback.onReceiveValue(shot == null ? null : new Uri[]{shot});
+                fileCallback = null;
+            }
+            return;
+        }
         if (requestCode == REQ_FILE) {
             Uri[] results = null;
             if (resultCode == RESULT_OK && data != null) {

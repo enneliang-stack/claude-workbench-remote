@@ -1889,14 +1889,147 @@ async function addFolderIfNeeded(p) {
 
 // ---------------------------------------------------------------- 流式运行器
 
-const sseClients = new Set();
+// res -> { compact, thinking: Map<key, chars> }
+const sseClients = new Map();
 let runners = new Map(); // convId -> Runner
 
 function broadcast(ev) {
   const payload = 'data: ' + JSON.stringify(ev) + '\n\n';
-  for (const res of sseClients) {
-    try { res.write(payload); } catch { sseClients.delete(res); }
+  for (const [res, state] of sseClients) {
+    try {
+      if (!state.compact) {
+        res.write(payload);
+        continue;
+      }
+      const compact = compactEvent(ev, state);
+      if (compact) res.write('data: ' + JSON.stringify(compact) + '\n\n');
+    } catch {
+      sseClients.delete(res);
+    }
   }
+}
+
+// ---------------------------------------------------------------- 手机端精简通道
+// 手机页不需要完整思考过程和工具大字段；服务端在发送前截断，
+// 桌面端 /api/stream 不带 compact，仍然拿完整事件。
+const COMPACT_THINK_CHARS = 80;
+const COMPACT_TEXT_FIELDS = ['command', 'file_path', 'path', 'notebook_path', 'pattern', 'glob',
+  'query', 'url', 'description', 'prompt', 'task', 'plan', 'old_string', 'new_string',
+  'content', 'new_source', 'edit_mode'];
+
+function compactValue(key, value) {
+  if (typeof value !== 'string') return value;
+  const limits = {
+    command: 120, file_path: 260, path: 260, notebook_path: 260,
+    pattern: 120, glob: 120, query: 120, url: 240, description: 100,
+    prompt: 120, task: 120, plan: 300, old_string: 1200, new_string: 1200,
+    content: 1200, new_source: 1200
+  };
+  const n = limits[key] || 300;
+  return value.length > n ? value.slice(0, n) + '\n…' : value;
+}
+
+function compactToolInput(input) {
+  if (!input || typeof input !== 'object') return input;
+  const out = {};
+  for (const k of COMPACT_TEXT_FIELDS) {
+    if (input[k] != null) out[k] = compactValue(k, input[k]);
+  }
+  if (Array.isArray(input.todos)) {
+    out.todos = input.todos.map(t => t && typeof t === 'object'
+      ? { content: String(t.content || '').slice(0, 200), status: t.status || 'pending', activeForm: t.activeForm }
+      : t);
+  }
+  if (Array.isArray(input.edits)) {
+    out.edits = input.edits.map(e => e && typeof e === 'object'
+      ? {
+          old_string: compactValue('old_string', typeof e.old_string === 'string' ? e.old_string : ''),
+          new_string: compactValue('new_string', typeof e.new_string === 'string' ? e.new_string : '')
+        }
+      : e);
+  }
+  if (!Object.keys(out).length) {
+    try {
+      const s = JSON.stringify(input);
+      out._preview = s.length > 300 ? s.slice(0, 300) + '…' : s;
+    } catch { /* ignore */ }
+  }
+  return out;
+}
+
+function compactToolBlock(b) {
+  if (!b || typeof b !== 'object') return b;
+  const out = {
+    key: b.key,
+    type: b.type,
+    name: b.name,
+    toolUseId: b.toolUseId,
+    done: b.done,
+    status: b.status,
+    isError: b.isError
+  };
+  if (b.input != null) out.input = compactToolInput(b.input);
+  if (b.result != null) out.done = true;
+  // 手机端过程只展示一行摘要，不接收工具输出。
+  return out;
+}
+
+function compactBlock(b) {
+  if (!b || typeof b !== 'object') return b;
+  if (b.type === 'thinking') {
+    const t = b.thinking || b.text || '';
+    const short = t.length > COMPACT_THINK_CHARS ? t.slice(0, COMPACT_THINK_CHARS) + '…' : t;
+    return { type: 'thinking', thinking: short, text: short };
+  }
+  if (b.type === 'tool_use') return compactToolBlock(b);
+  return b;
+}
+
+function compactMessages(messages) {
+  return (messages || []).map(m => {
+    if (!m || m.role !== 'assistant' || !Array.isArray(m.blocks)) return m;
+    return { ...m, blocks: m.blocks.map(compactBlock).filter(Boolean) };
+  });
+}
+
+function compactEvent(ev, state) {
+  if (!ev) return ev;
+  const t = ev.t;
+  if (t === 'run_start' || t === 'run_end') state.thinking.clear();
+  if (t === 'delta') {
+    if (ev.kind !== 'thinking') return ev;
+    const key = ev.key || '';
+    const seen = state.thinking.get(key) || 0;
+    if (seen >= COMPACT_THINK_CHARS) return null;
+    const text = String(ev.text || '');
+    const room = COMPACT_THINK_CHARS - seen;
+    const short = text.slice(0, room);
+    state.thinking.set(key, seen + short.length);
+    return { ...ev, text: short };
+  }
+  if (t === 'block_start') {
+    const b = ev.block;
+    if (b && b.type === 'thinking') {
+      const text = String(b.thinking || b.text || '').slice(0, COMPACT_THINK_CHARS);
+      state.thinking.set(ev.key || '', text.length);
+      return { ...ev, block: { type: 'thinking', thinking: text, text } };
+    }
+    if (b && b.type === 'tool_use') return { ...ev, block: compactToolBlock(b) };
+    return ev;
+  }
+  if (t === 'block_set') {
+    if (ev.block && ev.block.type === 'tool_use') return { ...ev, block: compactToolBlock(ev.block) };
+    return ev;
+  }
+  if (t === 'tool_result') {
+    return { ...ev, content: '' };
+  }
+  return ev;
+}
+
+function compactLive(live) {
+  if (!live) return live;
+  return { ...live, blocks: (live.blocks || []).map(compactBlock) };
 }
 
 class Runner {
@@ -3182,7 +3315,10 @@ async function handleApi(req, res, url) {
       'x-accel-buffering': 'no'
     });
     res.write('retry: 3000\n\n');
-    sseClients.add(res);
+    sseClients.set(res, {
+      compact: url.searchParams.get('compact') === '1',
+      thinking: new Map()
+    });
     const ping = setInterval(() => {
       try { res.write(': ping\n\n'); } catch { /* ignore */ }
     }, 15000);
@@ -3212,10 +3348,12 @@ async function handleApi(req, res, url) {
     }
 
     // 手机端分页：默认不传 limit 保持电脑端行为（返回全部）。
-    // 手机传 limit + light，只返回最后一页并截断工具大字段。
+    // 手机传 limit + light + compact，只返回最后一页并只带摘要。
     const light = url.searchParams.get('light') === '1';
+    const compact = url.searchParams.get('compact') === '1';
     const limitParam = url.searchParams.get('limit');
-    if (light) messages = lightenMessages(messages);
+    if (compact) messages = compactMessages(messages);
+    else if (light) messages = lightenMessages(messages);
     const total = messages.length;
     let start = 0;
     let end = total;
@@ -3250,7 +3388,9 @@ async function handleApi(req, res, url) {
       contextTokens,
       compacted,
       running,
-      live: running && liveRunner ? liveRunner.liveSnapshot() : null,
+      live: running && liveRunner
+        ? (compact ? compactLive(liveRunner.liveSnapshot()) : liveRunner.liveSnapshot())
+        : null,
       file
     });
   }

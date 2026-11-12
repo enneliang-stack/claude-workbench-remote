@@ -37,14 +37,22 @@
     deleteId: null,         // 当前要删除的对话（列表删除或对话设置删除）
     pendingImages: [],      // 已选、待发送的图片
     pendingRefs: [],        // 已引用、待发送的其它对话
+    pendingQuotes: [],      // 待发送的文字引用
     refSel: new Map(),
     pendingFiles: [],       // 待发送/引用的文件（手机上传或电脑路径）
+    filter: 'all',          // 对话列表筛选：all / running / waiting
+    unread: new Set(),      // 本轮结束时不在当前对话的会话 id
+    todos: null,            // 最新 TodoWrite 清单
+    todoOpen: false,
+    msgAction: null,        // 当前长按的消息 { text, role, source, sourceId }
+    quoteTarget: null,      // 「引用至其他对话」待选择的引用
+    fontScale: 'normal',
     pcPath: '',
     pcParent: null,
     pcEntries: [],
     pcSel: new Map(),
     collapsedFolders: new Set(),
-    drafts: new Map(),      // convId -> { text, images, refs }
+    drafts: new Map(),      // convId -> { text, images, refs, files, quotes }
     downloads: [],          // 手机 App 已下载的文件
     loadingOlder: false,
     sending: false,
@@ -53,8 +61,6 @@
     liveProcessMeta: null,
     liveProcessState: null,
     liveProcessCollapse: null,
-    liveProcessCount: 0,
-    liveProcessFiles: new Set(),
     conn: false,
     wasDown: false,
     es: null
@@ -105,6 +111,12 @@
     t.hidden = false;
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => { t.hidden = true; }, 2800);
+  }
+
+  function hideToast() {
+    clearTimeout(toastTimer);
+    const t = $('#toast');
+    if (t) t.hidden = true;
   }
 
   function fmtTok(n) {
@@ -187,6 +199,78 @@
     }
   }
 
+  const FONT_SCALES = { small: .92, normal: 1, large: 1.12, xlarge: 1.24 };
+
+  function applyFontScale(scale) {
+    S.fontScale = FONT_SCALES[scale] ? scale : 'normal';
+    document.documentElement.style.setProperty('--font-scale', String(FONT_SCALES[S.fontScale]));
+    try { localStorage.setItem('m.fontScale', S.fontScale); } catch { /* ignore */ }
+  }
+
+  function loadFontScale() {
+    let v = 'normal';
+    try { v = localStorage.getItem('m.fontScale') || 'normal'; } catch { /* ignore */ }
+    applyFontScale(v);
+  }
+
+  // 弹层打开时压一条 history；返回键先关弹层，不直接退页面。
+  let cancelMsgPress = null;
+  let lastMsgScrollAt = 0;
+  const sheetStack = [];
+  let sheetObserver = null;
+  let sheetHistoryCleanup = false;
+
+  function setupSheetBackHandling() {
+    if (sheetObserver) return;
+    const els = [...document.querySelectorAll('.sheet')];
+    const viewer = document.getElementById('imgViewer');
+    if (viewer) els.push(viewer);
+    sheetObserver = new MutationObserver(records => {
+      for (const r of records) {
+        const el = r.target;
+        if (!el || !el.id) continue;
+        if (el.hidden) {
+          const i = sheetStack.lastIndexOf(el);
+          if (i >= 0) sheetStack.splice(i, 1);
+          if (!sheetHistoryCleanup && history.state && history.state.sheet === el.id) {
+            sheetHistoryCleanup = true;
+            setTimeout(() => {
+              try { history.back(); } catch { sheetHistoryCleanup = false; }
+            }, 0);
+          }
+        } else if (!sheetStack.includes(el)) {
+          sheetStack.push(el);
+          try {
+            history.pushState({ ...(history.state || {}), sheet: el.id }, '');
+          } catch { /* ignore */ }
+        }
+      }
+    });
+    els.forEach(el => sheetObserver.observe(el, { attributes: true, attributeFilter: ['hidden'] }));
+  }
+
+  function closeTopSheetFromHistory() {
+    if (!sheetStack.length) return false;
+    const top = sheetStack.pop();
+    if (top.id === 'imgViewer') closeImageViewer();
+    else top.hidden = true;
+    return true;
+  }
+
+  function msgPreview(text) {
+    const s = String(text || '')
+      .replace(/```[\s\S]*?```/g, ' [代码] ')
+      .replace(/<gui-quote>[\s\S]*?<\/gui-quote>/g, '')
+      .replace(/^\s*\|.*\|\s*$/gm, ' ')
+      .replace(/^\s*#{1,6}\s+/gm, '')
+      .replace(/^\s*[-*+]\s+/gm, '')
+      .replace(/^\s*\d+\.\s+/gm, '')
+      .replace(/[*_~`>]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return Array.from(s).slice(0, 60).join('') + (Array.from(s).length > 60 ? '…' : '');
+  }
+
   function convTime(iso) {
     const d = iso ? new Date(iso) : null;
     if (!d || Number.isNaN(d.getTime())) return '';
@@ -198,6 +282,30 @@
     return `${d.getMonth() + 1}/${d.getDate()}`;
   }
 
+  function convMatchesFilter(c) {
+    if (S.filter === 'running') return !!c.running;
+    if (S.filter === 'waiting') return !!c.waiting;
+    return true;
+  }
+
+  function emptyState(query) {
+    const q = String(query || '').trim();
+    if (q) {
+      return `<div class="empty-state"><div class="empty-art">⌕</div>` +
+        `<div class="empty-title">没有匹配的对话</div>` +
+        `<div class="empty-sub">换个关键词，或清空搜索</div></div>`;
+    }
+    if (S.filter !== 'all') {
+      return `<div class="empty-state"><div class="empty-art">◎</div>` +
+        `<div class="empty-title">这个筛选下没有对话</div>` +
+        `<button type="button" class="empty-act" data-empty-act="all">看全部对话</button></div>`;
+    }
+    return `<div class="empty-state"><div class="empty-art">✦</div>` +
+      `<div class="empty-title">还没有对话</div>` +
+      `<div class="empty-sub">选一个工作文件夹，让 Claude 开始干活</div>` +
+      `<button type="button" class="empty-act primary" data-empty-act="new">新建对话</button></div>`;
+  }
+
   function renderList() {
     const box = $('#convList');
     box.innerHTML = '';
@@ -206,6 +314,7 @@
 
     for (const folder of (S.boot && S.boot.folders) || []) {
       const convs = (folder.conversations || []).filter(c => {
+        if (!convMatchesFilter(c)) return false;
         if (!q) return true;
         return `${c.title || ''} ${c.preview || ''}`.toLowerCase().includes(q);
       });
@@ -231,13 +340,15 @@
 
       if (!collapsed) {
         for (const c of convs) {
-          const row = el('button', 'conv-row');
+          const row = el('button', 'conv-row' + (c.running ? ' running' : ''));
           row.type = 'button';
           const badges = [];
-          if (c.running) badges.push('<span class="badge run">运行中</span>');
+          if (c.running) badges.push('<span class="badge run"><i class="run-dot"></i>运行中</span>');
           if (c.waiting) badges.push('<span class="badge wait">待确认</span>');
+          const unread = S.unread.has(c.id) && !c.running && !c.waiting;
           row.innerHTML =
-            `<div class="conv-top"><span class="conv-title">${escapeHtml(c.title || '未命名对话')}</span>` +
+            `<div class="conv-top">` +
+            `<span class="conv-title">${unread ? '<i class="unread-dot"></i>' : ''}${escapeHtml(c.title || '未命名对话')}</span>` +
             `<span class="conv-time">${escapeHtml(convTime(c.updatedAt))}</span></div>` +
             `<div class="conv-sub"><span class="conv-preview">${escapeHtml(c.preview || '')}</span>${badges.join('')}</div>`;
           // 删除不在列表里常驻 ×；长按对话行约 550ms 再确认删除。
@@ -281,8 +392,19 @@
     }
 
     if (!total) {
-      box.innerHTML = `<div class="empty">${q ? '没有匹配的对话' : '还没有对话，点右上角 ＋ 新建'}</div>`;
+      box.innerHTML = emptyState(q);
     }
+    updateFilterChips();
+  }
+
+  function updateFilterChips() {
+    const row = $('#filterRow');
+    if (!row) return;
+    row.querySelectorAll('[data-filter]').forEach(b => {
+      const on = b.dataset.filter === S.filter;
+      b.classList.toggle('on', on);
+      b.setAttribute('aria-selected', on ? 'true' : 'false');
+    });
   }
 
   // ---------------------------------------------------------------- 会话
@@ -307,11 +429,12 @@
     const images = S.pendingImages.slice();
     const refs = S.pendingRefs.slice();
     const files = S.pendingFiles.slice();
-    if (!text.trim() && !images.length && !refs.length && !files.length) {
+    const quotes = S.pendingQuotes.slice();
+    if (!text.trim() && !images.length && !refs.length && !files.length && !quotes.length) {
       S.drafts.delete(id);
       return;
     }
-    S.drafts.set(id, { text, images, refs, files });
+    S.drafts.set(id, { text, images, refs, files, quotes });
   }
 
   function restoreDraft(id) {
@@ -320,10 +443,12 @@
     S.pendingImages = d ? d.images.slice() : [];
     S.pendingRefs = d ? d.refs.slice() : [];
     S.pendingFiles = d && d.files ? d.files.slice() : [];
+    S.pendingQuotes = d && d.quotes ? d.quotes.slice() : [];
     S.refSel = new Map(S.pendingRefs.map(r => [r.id, r]));
     renderPendingImages();
     renderPendingRefs();
     renderPendingFiles();
+    renderPendingQuotes();
     autoGrow();
     updateSendState();
   }
@@ -345,7 +470,11 @@
     S.pendingEcho = null;
     S.pendingImages = [];
     S.pendingRefs = [];
+    S.pendingQuotes = [];
     S.pendingFiles = [];
+    S.todos = null;
+    S.todoOpen = false;
+    S.unread.delete(id);
     S.refSel = new Map();
     S.sending = false;
     $('#input').value = '';
@@ -353,7 +482,9 @@
     setRunProgress('', '');
     renderPendingImages();
     renderPendingRefs();
+    renderPendingQuotes();
     renderPendingFiles();
+    renderTodoBar();
     showChat(true);
     $('#chatTitle').textContent = '加载中…';
     $('#chatMeta').textContent = '';
@@ -361,7 +492,7 @@
     $('#panels').innerHTML = '';
     updateComposer();
     try {
-      const data = await api('/api/conversation?id=' + encodeURIComponent(id) + '&limit=30&light=1', { timeout: 30000 });
+      const data = await api('/api/conversation?id=' + encodeURIComponent(id) + '&limit=30&light=1&compact=1', { timeout: 30000 });
       renderConversation(data);
       restoreDraft(id);
       try {
@@ -392,7 +523,10 @@
     S.askOther = null;
     S.pendingImages = [];
     S.pendingRefs = [];
+    S.pendingQuotes = [];
     S.pendingFiles = [];
+    S.todos = null;
+    S.todoOpen = false;
     S.refSel = new Map();
     S.sending = false;
     $('#input').value = '';
@@ -401,7 +535,9 @@
     setRunProgress('', '');
     renderPendingImages();
     renderPendingRefs();
+    renderPendingQuotes();
     renderPendingFiles();
+    renderTodoBar();
     showChat(false);
     loadBoot().catch(() => {});
   }
@@ -411,6 +547,9 @@
     S.convId = data.id;
     S.live = data.live || null;
     S.running = !!data.running;
+    S.unread.delete(data.id);
+    S.todos = extractTodosFromMessages(data.messages || []);
+    renderTodoBar();
     // 任务已经结束：历史里已经有这条用户消息，本地乐观回声不能再画一次
     if (!S.running) S.pendingEcho = null;
     if (S.running) notifyPageTask(true);
@@ -456,7 +595,7 @@
     if (ctx > 0) {
       const pct = ctx / 1000000;
       const cls = pct >= 0.8 ? 'ctx-bad' : pct >= 0.5 ? 'ctx-warn' : 'ctx-ok';
-      parts.push(`<span class="${cls}">上下文 ${fmtTok(ctx)} · ${Math.round(pct * 100)}%</span>`);
+      parts.push(`<span class="${cls}" title="上下文 ${fmtTok(ctx)} tokens">上下文 ${Math.round(pct * 100)}%</span>`);
     }
     if (S.running) parts.push('<span class="run">● 运行中</span>');
     if (S.pendingAsk) parts.push('<span class="wait">等待回答</span>');
@@ -467,25 +606,21 @@
 
   function updateQuickEffort() {
     const sel = $('#quickEffort');
-    if (!sel) return;
-    const levels = (S.boot && S.boot.settings && S.boot.settings.effortLevels) ||
-      ['low', 'medium', 'high', 'xhigh', 'max'];
+    const btn = $('#quickEffortBtn');
+    if (!sel || !btn) return;
+    const levels = effortLevels();
     if (!sel.dataset.filled) {
-      fillSelect(sel, [{ value: '', label: '默认' }].concat(
-        levels.map(e => ({ value: e, label: EFFORT_LABELS[e] || e }))
-      ));
+      fillSelect(sel, levels.map(e => ({ value: e, label: EFFORT_LABELS[e] || e })));
       sel.dataset.filled = '1';
     }
-    const cur = (S.conv && S.conv.effort) ||
-      (S.boot && S.boot.settings && S.boot.settings.defaultEffort) || '';
-    sel.value = levels.includes(cur) ? cur : '';
-    sel.title = '推理档位：' + (sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].text : '默认');
+    const cur = currentEffortValue();
+    sel.value = cur;
+    btn.textContent = EFFORT_LABELS[cur] || cur;
+    btn.title = '推理档位：' + (EFFORT_LABELS[cur] || cur);
   }
 
-  async function changeQuickEffort() {
-    if (!S.convId) return;
-    const sel = $('#quickEffort');
-    const effort = sel ? sel.value : '';
+  async function changeQuickEffort(effort) {
+    if (!S.convId || !effort) return;
     try {
       const data = await api('/api/conversation?id=' + encodeURIComponent(S.convId), {
         method: 'PATCH',
@@ -494,7 +629,7 @@
       const conv = (data && data.conversation) || {};
       if (S.conv) S.conv.effort = conv.effort != null ? conv.effort : effort;
       updateHeader();
-      toast('推理档位：' + (effort ? (EFFORT_LABELS[effort] || effort) : '默认'));
+      toast('推理档位：' + (EFFORT_LABELS[effort] || effort));
     } catch (e) {
       toast(e.message, 'err');
       updateHeader();
@@ -516,7 +651,7 @@
 
   function updateSendState() {
     const has = !!$('#input').value.trim() || S.pendingImages.length > 0 ||
-      S.pendingRefs.length > 0 || S.pendingFiles.length > 0;
+      S.pendingRefs.length > 0 || S.pendingFiles.length > 0 || S.pendingQuotes.length > 0;
     $('#sendBtn').disabled = S.sending || !has;
   }
 
@@ -771,12 +906,13 @@
     const imgs = (m.images || []).filter(img => img && img.data);
     if (imgs.length) {
       const grid = el('div', 'user-images' + (imgs.length === 1 ? ' one' : ''));
-      for (const img of imgs) {
+      const sources = imgs.map(img => `data:${img.media_type || 'image/png'};base64,${img.data}`);
+      sources.forEach((src, idx) => {
         const i = el('img');
-        i.src = `data:${img.media_type || 'image/png'};base64,${img.data}`;
-        i.onclick = () => openImageViewer(i.src);
+        i.src = src;
+        i.onclick = () => openImageViewer(src, sources, idx);
         grid.appendChild(i);
-      }
+      });
       d.appendChild(grid);
     }
     for (const q of info.quotes || []) d.appendChild(quoteNode(q));
@@ -797,6 +933,7 @@
         d.appendChild(btn);
       }
     }
+    attachMsgActions(d, m);
     return d;
   }
 
@@ -828,36 +965,15 @@
     const edits = aggregateEdits(blocks);
     if (edits.length) wrap.appendChild(editCardNode(edits));
     if (m.meta) wrap.appendChild(turnMetaNode(m.meta));
+    attachMsgActions(wrap, m);
     return wrap;
   }
 
   function blockNode(b) {
-    if (!b) return null;
-    if (b.type === 'text') {
-      const d = el('div', 'txt');
-      d.innerHTML = formatText(b.text);
-      enhanceCodeBlocks(d);
-      return d;
-    }
-    if (b.type === 'thinking') return thinkingNode(b);
-    if (b.type === 'tool_use') return toolNode(b);
-    return null;
-  }
-
-  function thinkingNode(b) {
-    const d = el('details', 'think');
-    d.appendChild(el('summary', null, '思考过程'));
-    const t = el('div', 'think-text');
-    t.textContent = b.thinking || b.text || '';
-    d.appendChild(t);
-    const c = el('button', 'collapse-btn small', '收起');
-    c.type = 'button';
-    c.onclick = e => {
-      e.preventDefault();
-      e.stopPropagation();
-      d.open = false;
-    };
-    d.appendChild(c);
+    if (!b || b.type !== 'text') return null;
+    const d = el('div', 'txt');
+    d.innerHTML = formatText(b.text);
+    enhanceCodeBlocks(d);
     return d;
   }
 
@@ -919,6 +1035,25 @@
     return null;
   }
 
+  function editChanges(name, input) {
+    const out = [];
+    if (!input || typeof input !== 'object') return out;
+    if (name === 'Edit' && typeof input.old_string === 'string' && typeof input.new_string === 'string') {
+      out.push({ oldText: input.old_string, newText: input.new_string });
+    } else if (name === 'MultiEdit' && Array.isArray(input.edits)) {
+      for (const e of input.edits) {
+        if (e && typeof e.old_string === 'string' && typeof e.new_string === 'string') {
+          out.push({ oldText: e.old_string, newText: e.new_string });
+        }
+      }
+    } else if (name === 'Write' && typeof input.content === 'string') {
+      out.push({ oldText: '', newText: input.content });
+    } else if (name === 'NotebookEdit' && typeof input.new_source === 'string' && input.edit_mode !== 'delete') {
+      out.push({ oldText: '', newText: input.new_source });
+    }
+    return out;
+  }
+
   /** 按路径聚合本轮/本条消息里的编辑记录 */
   function aggregateEdits(blocks) {
     const map = new Map();
@@ -930,14 +1065,108 @@
       const key = info.path.replace(/\\/g, '/').toLowerCase();
       let cur = map.get(key);
       if (!cur) {
-        cur = { path: info.path, added: 0, removed: 0, edits: 0 };
+        cur = { path: info.path, added: 0, removed: 0, edits: 0, changes: [] };
         map.set(key, cur);
       }
       cur.added += info.added;
       cur.removed += info.removed;
       cur.edits += 1;
+      cur.changes.push(...editChanges(b.name, b.input));
     }
     return [...map.values()];
+  }
+
+  function diffRows(oldText, newText) {
+    const a = splitLines(oldText);
+    const b = splitLines(newText);
+    let pre = 0;
+    while (pre < a.length && pre < b.length && a[pre] === b[pre]) pre++;
+    let suf = 0;
+    while (suf < a.length - pre && suf < b.length - pre &&
+      a[a.length - 1 - suf] === b[b.length - 1 - suf]) suf++;
+    const aa = a.slice(pre, a.length - suf);
+    const bb = b.slice(pre, b.length - suf);
+    const rows = [];
+    for (let i = 0; i < pre; i++) rows.push({ type: 'same', text: a[i], oldNo: i + 1, newNo: i + 1 });
+    const mid = [];
+    if (aa.length * bb.length > 160000 || aa.length + bb.length > 4000) {
+      for (let i = 0; i < aa.length; i++) mid.push({ type: 'del', text: aa[i], oldNo: pre + i + 1, newNo: null });
+      for (let j = 0; j < bb.length; j++) mid.push({ type: 'add', text: bb[j], oldNo: null, newNo: pre + j + 1 });
+    } else {
+      const n = aa.length;
+      const m = bb.length;
+      const dp = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
+      for (let i = n - 1; i >= 0; i--) {
+        for (let j = m - 1; j >= 0; j--) {
+          dp[i][j] = aa[i] === bb[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+        }
+      }
+      let i = 0;
+      let j = 0;
+      while (i < n && j < m) {
+        if (aa[i] === bb[j]) {
+          mid.push({ type: 'same', text: aa[i], oldNo: pre + i + 1, newNo: pre + j + 1 });
+          i++;
+          j++;
+        } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+          mid.push({ type: 'del', text: aa[i], oldNo: pre + i + 1, newNo: null });
+          i++;
+        } else {
+          mid.push({ type: 'add', text: bb[j], oldNo: null, newNo: pre + j + 1 });
+          j++;
+        }
+      }
+      while (i < n) mid.push({ type: 'del', text: aa[i], oldNo: pre + i + 1, newNo: null }), i++;
+      while (j < m) mid.push({ type: 'add', text: bb[j], oldNo: null, newNo: pre + j + 1 }), j++;
+    }
+    rows.push(...mid);
+    for (let k = 0; k < suf; k++) {
+      rows.push({
+        type: 'same', text: a[a.length - suf + k],
+        oldNo: a.length - suf + k + 1, newNo: b.length - suf + k + 1
+      });
+    }
+    return rows;
+  }
+
+  function openDiffSheet(f) {
+    const parts = artifactSplit(f.path);
+    $('#diffTitle').textContent = parts.name || '改动';
+    $('#diffMeta').textContent = `${f.path} · ${f.edits} 次修改 · +${f.added} -${f.removed}`;
+    const body = $('#diffBody');
+    body.innerHTML = '';
+    const changes = f.changes || [];
+    if (!changes.length) {
+      body.innerHTML = '<div class="diff-empty">没有可展示的行级改动</div>';
+    } else {
+      let left = 1500;
+      changes.forEach((c, idx) => {
+        const head = el('div', 'diff-hunk', changes.length > 1 ? `第 ${idx + 1} 次修改` : '改动');
+        body.appendChild(head);
+        if (left <= 0) return;
+        const rows = diffRows(c.oldText, c.newText);
+        const shown = rows.slice(0, left);
+        left -= shown.length;
+        const html = shown.map(r => {
+          const sign = r.type === 'add' ? '+' : r.type === 'del' ? '-' : ' ';
+          return `<div class="diff-row ${r.type}">` +
+            `<span class="diff-ln">${r.oldNo == null ? '' : r.oldNo}</span>` +
+            `<span class="diff-ln">${r.newNo == null ? '' : r.newNo}</span>` +
+            `<span class="diff-sign">${sign}</span>` +
+            `<span class="diff-text">${escapeHtml(r.text)}</span></div>`;
+        }).join('');
+        body.insertAdjacentHTML('beforeend', html);
+        if (rows.length > shown.length) {
+          body.insertAdjacentHTML('beforeend', '<div class="diff-more">改动太长，只显示前 1500 行</div>');
+          left = 0;
+        }
+      });
+    }
+    $('#diffSheet').hidden = false;
+  }
+
+  function closeDiffSheet() {
+    $('#diffSheet').hidden = true;
   }
 
   function artifactSplit(p) {
@@ -1257,19 +1486,39 @@
       }
       const p = el('div', 'edit-path');
       const parts = artifactSplit(f.path);
-      if (parts.dir) p.appendChild(el('span', 'ep-dir', parts.dir));
+      if (parts.dir) {
+        const sep = /[\\/]$/.test(parts.dir) ? '' : '/';
+        p.appendChild(el('span', 'ep-dir', parts.dir + sep));
+      }
       p.appendChild(el('span', 'ep-name', parts.name));
       row.appendChild(p);
       const stat = el('span', 'edit-stat');
       stat.innerHTML = `<span class="edit-add">+${f.added}</span> <span class="edit-del">-${f.removed}</span>`;
       row.appendChild(stat);
-      row.title = '打开 ' + f.path;
+      const hasDiff = Array.isArray(f.changes) && f.changes.length > 0;
+      row.title = hasDiff ? '查看改动' : '打开 ' + f.path;
       row.style.cursor = 'pointer';
+      if (hasDiff) row.classList.add('has-diff');
       row.onclick = () => {
+        if (hasDiff) {
+          openDiffSheet(f);
+          return;
+        }
         if (!openLocalFile({ path: f.path, name: parts.name, dir: parts.dir })) {
           startDownload({ path: f.path, name: parts.name, dir: parts.dir }, null);
         }
       };
+      const open = el('button', 'edit-open', '打开');
+      open.type = 'button';
+      open.title = '打开 ' + f.path;
+      open.onclick = e => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!openLocalFile({ path: f.path, name: parts.name, dir: parts.dir })) {
+          startDownload({ path: f.path, name: parts.name, dir: parts.dir }, null);
+        }
+      };
+      row.appendChild(open);
       list.appendChild(row);
     });
 
@@ -1289,8 +1538,128 @@
     return card;
   }
 
-  function processMetaText(count, files) {
-    return `· ${count} 步` + (files && files.size ? ` · ${files.size} 个文件` : '');
+  function summarizeBlocks(blocks) {
+    const out = {
+      command: 0, search: 0, web: 0, agent: 0, todo: 0, other: 0, failed: 0, total: 0,
+      edit: new Set(), read: new Set()
+    };
+    for (const b of blocks || []) {
+      if (!b) continue;
+      if (b.type === 'thinking') { out.total++; continue; }
+      if (b.type !== 'tool_use') continue;
+      out.total++;
+      const kind = toolKindOf(b.name);
+      const failed = !!(b.isError || b.denied || b.cancelled || b.status === 'failed');
+      if (failed) out.failed++;
+      if (kind === 'edit') {
+        const info = editToolInfo(b.name, b.input);
+        if (!failed && info && info.path) out.edit.add(info.path.replace(/\\/g, '/').toLowerCase());
+        else if (!failed && !info) out.other++;
+        continue;
+      }
+      if (kind === 'read') {
+        if (!failed) {
+          const p = b.input && (b.input.file_path || b.input.path);
+          if (typeof p === 'string' && p) out.read.add(p.replace(/\\/g, '/').toLowerCase());
+        }
+        continue;
+      }
+      if (kind === 'command') out.command++;
+      else if (kind === 'search') out.search++;
+      else if (kind === 'web') out.web++;
+      else if (kind === 'agent') out.agent++;
+      else if (kind === 'todo') out.todo++;
+      else out.other++;
+    }
+    return out;
+  }
+
+  function processMetaText(blocks) {
+    if (!Array.isArray(blocks)) return `· ${blocks || 0} 步`;
+    const s = summarizeBlocks(blocks);
+    const parts = [];
+    if (s.command) parts.push(`${s.command} 条命令`);
+    if (s.edit.size) parts.push(`改了 ${s.edit.size} 个文件`);
+    if (s.read.size) parts.push(`读了 ${s.read.size} 个文件`);
+    if (s.search) parts.push(`${s.search} 次搜索`);
+    if (s.web) parts.push(`${s.web} 次联网`);
+    if (s.agent) parts.push(`${s.agent} 个子代理`);
+    if (s.todo) parts.push('更新待办');
+    if (s.other) parts.push(`${s.other} 个工具`);
+    if (s.failed) parts.push(`${s.failed} 个失败`);
+    return '· ' + (parts.length ? parts.join(' · ') : `${s.total} 步`);
+  }
+
+  // ---------------------------------------------------------------- 待办进度
+
+  function normalizeTodos(input) {
+    const list = Array.isArray(input && input.todos) ? input.todos : [];
+    return list.map(t => ({
+      content: String((t && (t.content || t.activeForm)) || '').trim(),
+      status: String((t && t.status) || 'pending')
+    })).filter(t => t.content);
+  }
+
+  function extractTodosFromBlocks(blocks) {
+    for (let i = (blocks || []).length - 1; i >= 0; i--) {
+      const b = blocks[i];
+      if (b && b.type === 'tool_use' && b.name === 'TodoWrite') {
+        const todos = normalizeTodos(b.input);
+        if (todos.length) return todos;
+      }
+    }
+    return null;
+  }
+
+  function extractTodosFromMessages(messages) {
+    for (let i = (messages || []).length - 1; i >= 0; i--) {
+      const todos = extractTodosFromBlocks(messages[i] && messages[i].blocks);
+      if (todos) return todos;
+    }
+    return null;
+  }
+
+  function updateTodosFromTool(input) {
+    if (!input || !Array.isArray(input.todos)) return;
+    const todos = normalizeTodos(input);
+    S.todos = todos.length ? todos : null;
+    renderTodoBar();
+  }
+
+  function renderTodoBar() {
+    const bar = $('#todoBar');
+    if (!bar) return;
+    const todos = S.todos || [];
+    if (!todos.length) {
+      bar.hidden = true;
+      return;
+    }
+    bar.hidden = false;
+    const done = todos.filter(t => t.status === 'completed').length;
+    const cur = todos.find(t => t.status === 'in_progress') ||
+      todos.find(t => t.status !== 'completed');
+    $('#todoCount').textContent = `${done}/${todos.length}`;
+    $('#todoNow').textContent = done === todos.length
+      ? '全部完成'
+      : cur ? (cur.status === 'in_progress' ? '正在：' : '下一步：') + cur.content : '';
+    $('#todoFill').style.width = Math.round(done / todos.length * 100) + '%';
+    $('#todoToggle').setAttribute('aria-expanded', S.todoOpen ? 'true' : 'false');
+    $('#todoChev').textContent = S.todoOpen ? '▴' : '▾';
+    const list = $('#todoList');
+    list.hidden = !S.todoOpen;
+    if (S.todoOpen) {
+      list.innerHTML = todos.map(t => {
+        const cls = t.status === 'completed' ? ' done' : t.status === 'in_progress' ? ' doing' : '';
+        const mark = t.status === 'completed' ? '✓' : t.status === 'in_progress' ? '▸' : '○';
+        return `<div class="todo-row${cls}"><span class="todo-mark">${mark}</span>` +
+          `<span class="todo-text">${escapeHtml(t.content)}</span></div>`;
+      }).join('');
+    }
+  }
+
+  function toggleTodoBar() {
+    S.todoOpen = !S.todoOpen;
+    renderTodoBar();
   }
 
   function turnMetaNode(meta) {
@@ -1307,14 +1676,162 @@
     return el('div', 'turn-meta', parts.join(' · '));
   }
 
-  function openImageViewer(src) {
-    $('#imgViewerImg').src = src;
+  let imgView = { list: [], index: 0, scale: 1, tx: 0, ty: 0 };
+  let imgGesture = null;
+  let imgTapTimer = 0;
+  let imgLastTapAt = 0;
+
+  function applyImgTransform() {
+    const img = $('#imgViewerImg');
+    if (!img) return;
+    img.style.transform = `translate3d(${imgView.tx}px, ${imgView.ty}px, 0) scale(${imgView.scale})`;
+    $('#imgViewer').classList.toggle('zoomed', imgView.scale > 1.01);
+  }
+
+  function updateViewerChrome() {
+    const n = imgView.list.length;
+    const count = $('#imgViewerCount');
+    count.hidden = n < 2;
+    count.textContent = n > 1 ? `${imgView.index + 1} / ${n}` : '';
+    $('#imgViewerPrev').hidden = n < 2;
+    $('#imgViewerNext').hidden = n < 2;
+  }
+
+  function openImageViewer(src, list, index) {
+    const arr = (Array.isArray(list) && list.length ? list : [src]).filter(Boolean);
+    let idx = Number.isFinite(index) ? index : arr.indexOf(src);
+    if (idx < 0 || idx >= arr.length) idx = 0;
+    imgView = { list: arr, index: idx, scale: 1, tx: 0, ty: 0 };
+    $('#imgViewerImg').src = arr[idx];
     $('#imgViewer').hidden = false;
+    updateViewerChrome();
+    applyImgTransform();
   }
 
   function closeImageViewer() {
+    clearTimeout(imgTapTimer);
+    imgTapTimer = 0;
+    imgLastTapAt = 0;
+    imgView = { list: [], index: 0, scale: 1, tx: 0, ty: 0 };
     $('#imgViewer').hidden = true;
     $('#imgViewerImg').src = '';
+    $('#imgViewerImg').style.transform = '';
+    $('#imgViewer').classList.remove('zoomed');
+  }
+
+  function stepImageViewer(delta) {
+    if (imgView.list.length < 2) return;
+    imgView.index = (imgView.index + delta + imgView.list.length) % imgView.list.length;
+    imgView.scale = 1;
+    imgView.tx = 0;
+    imgView.ty = 0;
+    $('#imgViewerImg').src = imgView.list[imgView.index];
+    updateViewerChrome();
+    applyImgTransform();
+  }
+
+  function viewTouchDistance(a, b) {
+    const dx = a.clientX - b.clientX;
+    const dy = a.clientY - b.clientY;
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+
+  function setupImageViewerGestures() {
+    const stage = $('#imgViewerStage');
+    if (!stage || stage.dataset.gesture) return;
+    stage.dataset.gesture = '1';
+
+    stage.addEventListener('touchstart', e => {
+      if (e.touches.length === 2) {
+        clearTimeout(imgTapTimer);
+        imgGesture = {
+          mode: 'pinch',
+          startDist: Math.max(1, viewTouchDistance(e.touches[0], e.touches[1])),
+          startScale: imgView.scale,
+          startTx: imgView.tx,
+          startTy: imgView.ty
+        };
+        e.preventDefault();
+      } else if (e.touches.length === 1) {
+        imgGesture = {
+          mode: 'pan',
+          startX: e.touches[0].clientX,
+          startY: e.touches[0].clientY,
+          startTx: imgView.tx,
+          startTy: imgView.ty,
+          moved: false
+        };
+      }
+    }, { passive: false });
+
+    stage.addEventListener('touchmove', e => {
+      if (!imgGesture) return;
+      if (imgGesture.mode === 'pinch' && e.touches.length === 2) {
+        const dist = Math.max(1, viewTouchDistance(e.touches[0], e.touches[1]));
+        imgView.scale = Math.max(1, Math.min(8, imgGesture.startScale * dist / imgGesture.startDist));
+        if (imgView.scale <= 1.01) { imgView.tx = 0; imgView.ty = 0; }
+        applyImgTransform();
+        e.preventDefault();
+        return;
+      }
+      if (imgGesture.mode === 'pan' && e.touches.length === 1) {
+        const dx = e.touches[0].clientX - imgGesture.startX;
+        const dy = e.touches[0].clientY - imgGesture.startY;
+        if (Math.abs(dx) > 10 || Math.abs(dy) > 10) imgGesture.moved = true;
+        if (imgView.scale > 1.01) {
+          imgView.tx = imgGesture.startTx + dx;
+          imgView.ty = imgGesture.startTy + dy;
+          applyImgTransform();
+          e.preventDefault();
+        }
+      }
+    }, { passive: false });
+
+    stage.addEventListener('touchend', e => {
+      const g = imgGesture;
+      imgGesture = null;
+      if (!g) return;
+      if (g.mode === 'pinch') {
+        if (imgView.scale <= 1.01) { imgView.scale = 1; imgView.tx = 0; imgView.ty = 0; }
+        applyImgTransform();
+        return;
+      }
+      if (g.mode !== 'pan') return;
+      const dx = (e.changedTouches[0] ? e.changedTouches[0].clientX : g.startX) - g.startX;
+      const dy = (e.changedTouches[0] ? e.changedTouches[0].clientY : g.startY) - g.startY;
+      if (imgView.scale > 1.01 || g.moved) {
+        applyImgTransform();
+        return;
+      }
+      if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) && imgView.list.length > 1) {
+        stepImageViewer(dx < 0 ? 1 : -1);
+        return;
+      }
+      if (Math.abs(dx) > 10 || Math.abs(dy) > 10) return;
+      // 单击关闭，双击放大；第二次点按会取消关闭定时器
+      const now = Date.now();
+      if (now - imgLastTapAt < 300) {
+        clearTimeout(imgTapTimer);
+        imgTapTimer = 0;
+        imgLastTapAt = 0;
+        imgView.scale = imgView.scale > 1.01 ? 1 : 2.5;
+        imgView.tx = 0;
+        imgView.ty = 0;
+        applyImgTransform();
+      } else {
+        imgLastTapAt = now;
+        imgTapTimer = setTimeout(() => {
+          if (Date.now() - imgLastTapAt >= 280) closeImageViewer();
+        }, 320);
+      }
+    });
+
+    stage.addEventListener('wheel', e => {
+      e.preventDefault();
+      imgView.scale = Math.max(1, Math.min(8, imgView.scale * (e.deltaY < 0 ? 1.18 : .85)));
+      if (imgView.scale <= 1.01) { imgView.scale = 1; imgView.tx = 0; imgView.ty = 0; }
+      applyImgTransform();
+    }, { passive: false });
   }
 
   /** 历史消息里的「过程」：思考、工具调用、中间结论文本统一折叠，默认合上 */
@@ -1332,17 +1849,15 @@
       enhanceCodeBlocks(t);
       body.appendChild(t);
     }
-    const files = new Set();
     for (const b of blocks) {
-      const node = b.type === 'thinking' ? thinkingNode(b)
+      const node = b.type === 'thinking'
+        ? thinkingRow(b)
         : (b.type === 'tool_use' ? toolNode(b) : null);
       if (node) body.appendChild(node);
-      const f = editedFileOf(b);
-      if (f) files.add(f);
     }
 
     d.append(sum, body);
-    meta.textContent = processMetaText(blocks.length, files);
+    meta.textContent = processMetaText(blocks);
     d.addEventListener('toggle', scheduleProcessCollapseUpdate);
     return d;
   }
@@ -1457,52 +1972,256 @@
     });
   }
 
-  /** 极简 markdown：标题/列表/引用/加粗/行内 code/代码块，和电脑端观感一致 */
+  // ---------------------------------------------------------------- Markdown
+
+  /** 行内格式。输入已经 HTML 转义；行内 code 先占位，避免里面的 ** / _ 被误处理。 */
   function formatInline(escaped) {
-    let out = escaped;
-    out = out.replace(/`([^`\n]+)`/g, '<code>$1</code>');
+    const codes = [];
+    let out = String(escaped || '').replace(/`([^`\n]+)`/g, (m, code) => {
+      codes.push(`<code>${code}</code>`);
+      return `\u0001${codes.length - 1}\u0001`;
+    });
+    out = out.replace(/!\[([^\]\n]*)\]\((https?:\/\/[^\s)]+)\)/g,
+      '<img src="$2" alt="$1" loading="lazy">');
+    out = out.replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g,
+      '<a href="$2" target="_blank" rel="noopener">$1</a>');
     out = out.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+    out = out.replace(/__([^_\n]+)__/g, '<strong>$1</strong>');
     out = out.replace(/~~([^~\n]+)~~/g, '<s>$1</s>');
-    out = out.replace(
-      /\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g,
-      '<a href="$2" target="_blank" rel="noopener">$1</a>'
-    );
-    return out;
+    out = out.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, '$1<em>$2</em>');
+    out = out.replace(/(^|[^_])_([^_\n]+)_(?!_)/g, '$1<em>$2</em>');
+    return out.replace(/\u0001(\d+)\u0001/g, (m, i) => codes[Number(i)] || '');
   }
 
-  function formatBlockText(text) {
-    return String(text || '').split('\n').map(line => {
-      if (!line.trim()) return '<div class="md-gap"></div>';
-      let m;
-      if ((m = line.match(/^(#{1,6})\s+(.*)$/))) {
-        const level = m[1].length;
-        return `<div class="md-h md-h${level}">${formatInline(escapeHtml(m[2]))}</div>`;
+  function splitTableRow(line) {
+    let s = String(line || '').trim();
+    if (!s.includes('|')) return null;
+    if (s.startsWith('|')) s = s.slice(1);
+    if (s.endsWith('|')) s = s.slice(0, -1);
+    return s.split('|').map(x => x.trim());
+  }
+
+  function isTableSep(line) {
+    const cells = splitTableRow(line);
+    return !!cells && cells.length > 0 && cells.every(c => /^:?-{3,}:?$/.test(c));
+  }
+
+  function tableHtml(head, rows) {
+    const th = head.map(c => `<th>${formatInline(escapeHtml(c))}</th>`).join('');
+    const tb = rows.map(r => '<tr>' + head.map((_, i) =>
+      `<td>${formatInline(escapeHtml(r[i] || ''))}</td>`).join('') + '</tr>').join('');
+    return `<div class="table-wrap"><table><thead><tr>${th}</tr></thead><tbody>${tb}</tbody></table></div>`;
+  }
+
+  function codeBlockHtml(lang, code) {
+    const safeLang = String(lang || '').toLowerCase();
+    let body;
+    if (safeLang === 'diff') {
+      body = String(code || '').split('\n').map(line => {
+        const cls = line.startsWith('+') ? 'add' : line.startsWith('-') ? 'del'
+          : line.startsWith('@@') ? 'hunk' : '';
+        return cls ? `<span class="diff-${cls}">${escapeHtml(line)}</span>` : escapeHtml(line);
+      }).join('');
+    } else {
+      body = escapeHtml(code);
+    }
+    const label = safeLang || '代码';
+    return `<div class="code-wrap"><div class="code-head">` +
+      `<span class="code-lang">${escapeHtml(label)}</span>` +
+      `<span class="code-tools">` +
+      `<button type="button" class="code-wrap-btn" title="自动换行">换行</button>` +
+      `<button type="button" class="code-copy">复制</button>` +
+      `</span></div>` +
+      `<pre class="code${safeLang === 'diff' ? ' diff' : ''}" data-lang="${escapeHtml(safeLang)}"><code>${body}</code></pre></div>`;
+  }
+
+  /** 流式时把最后一段未闭合的标记补上，让字从出现起就是最终样式。 */
+  function closeTrailingMarkers(segment) {
+    const src = String(segment || '');
+    // 只修最后一段普通文本：代码块和行内 code 里的标记不动
+    const parts = src.split(/(```[\s\S]*?```)/);
+    const tail = parts.length ? parts.pop() : '';
+    const inline = tail.split(/(`[^`\n]*`)/);
+    let last = inline.length ? inline.pop() : '';
+    for (const marker of ['**', '~~', '`']) {
+      const count = last.split(marker).length - 1;
+      if (count % 2) last += marker;
+    }
+    inline.push(last);
+    parts.push(inline.join(''));
+    return parts.join('');
+  }
+
+  function markdownBlocks(text, streaming) {
+    let src = String(text || '').replace(/\r\n?/g, '\n');
+    if (streaming) {
+      // 只有标记、还没有内容的末行先不显示，避免先闪一下符号
+      src = src.replace(/\n(?:#{1,6}|[-*+]|>|\d+\.)\s*$/, '\n');
+      // 半截图片/链接先藏住
+      src = src.replace(/!\[[^\]\n]*\]\([^)\n]*$/, '');
+      src = src.replace(/(^|[^!])\[[^\]\n]*\]\([^)\n]*$/, '$1');
+      // 未闭合的代码栅栏先按代码块收尾
+      const fences = (src.match(/^```/gm) || []).length;
+      if (fences % 2) src += '\n```';
+      src = closeTrailingMarkers(src);
+    }
+    const lines = src.split('\n');
+    const blocks = [];
+    const push = (html, key) => blocks.push({ html, key });
+    let i = 0;
+    while (i < lines.length) {
+      const line = lines[i];
+      if (!line.trim()) { i++; continue; }
+
+      const fence = line.match(/^```([\w+#.-]*)\s*$/);
+      if (fence) {
+        const lang = fence[1] || '';
+        const body = [];
+        i++;
+        while (i < lines.length && !/^```\s*$/.test(lines[i])) { body.push(lines[i]); i++; }
+        if (i < lines.length) i++;
+        const code = body.join('\n');
+        push(codeBlockHtml(lang, code), 'code\0' + lang + '\0' + code);
+        continue;
       }
-      if ((m = line.match(/^\s*[-*]\s+(.*)$/))) {
-        return `<div class="md-li">• ${formatInline(escapeHtml(m[1]))}</div>`;
+
+      const h = line.match(/^(#{1,6})\s+(.*)$/);
+      if (h) {
+        push(`<div class="md-h md-h${h[1].length}">${formatInline(escapeHtml(h[2]))}</div>`,
+          'h' + h[1].length + '\0' + h[2]);
+        i++;
+        continue;
       }
-      if ((m = line.match(/^\s*(\d+)\.\s+(.*)$/))) {
-        return `<div class="md-li">${m[1]}. ${formatInline(escapeHtml(m[2]))}</div>`;
+
+      if (/^\s*---+\s*$/.test(line)) { push('<hr>', 'hr'); i++; continue; }
+
+      if (/^\s*>\s?/.test(line)) {
+        const q = [];
+        while (i < lines.length && /^\s*>\s?/.test(lines[i])) {
+          q.push(lines[i].replace(/^\s*>\s?/, ''));
+          i++;
+        }
+        push(`<blockquote>${q.map(x => formatInline(escapeHtml(x))).join('<br>')}</blockquote>`,
+          'q\0' + q.join('\n'));
+        continue;
       }
-      if ((m = line.match(/^\s*>\s?(.*)$/))) {
-        return `<blockquote>${formatInline(escapeHtml(m[1]))}</blockquote>`;
+
+      if (line.includes('|') && i + 1 < lines.length && isTableSep(lines[i + 1])) {
+        const head = splitTableRow(line);
+        i += 2;
+        const rows = [];
+        while (i < lines.length && lines[i].trim() && lines[i].includes('|')) {
+          rows.push(splitTableRow(lines[i]));
+          i++;
+        }
+        push(tableHtml(head, rows), 'table\0' + line + '\0' + rows.map(r => r.join('|')).join('\n'));
+        continue;
       }
-      if (/^\s*---+\s*$/.test(line)) return '<hr>';
-      return `<div>${formatInline(escapeHtml(line))}</div>`;
-    }).join('');
+
+      if (/^\s*(?:[-*+]|\d+\.)\s+/.test(line)) {
+        const items = [];
+        while (i < lines.length) {
+          const m = lines[i].match(/^(\s*)([-*+]|\d+\.)\s+(.*)$/);
+          if (!m) break;
+          const level = Math.min(2, Math.floor(m[1].length / 2));
+          let item = m[3];
+          let check = '';
+          const task = item.match(/^\[([ xX])\]\s+(.*)$/);
+          if (task) {
+            check = task[1].toLowerCase() === 'x'
+              ? '<span class="md-check done">✓</span>'
+              : '<span class="md-check"></span>';
+            item = task[2];
+          }
+          const bullet = check || '<span class="md-bullet">•</span>';
+          items.push(`<div class="md-li lv${level}">${bullet}<span>${formatInline(escapeHtml(item))}</span></div>`);
+          i++;
+        }
+        push(`<div class="md-list">${items.join('')}</div>`, 'list\0' + items.join(''));
+        continue;
+      }
+
+      const para = [];
+      while (i < lines.length) {
+        const l = lines[i];
+        if (!l.trim()) break;
+        if (/^```/.test(l) || /^(#{1,6})\s+/.test(l) || /^\s*>\s?/.test(l) ||
+            /^\s*(?:[-*+]|\d+\.)\s+/.test(l) || /^\s*---+\s*$/.test(l)) break;
+        if (l.includes('|') && i + 1 < lines.length && isTableSep(lines[i + 1])) break;
+        para.push(l);
+        i++;
+      }
+      if (!para.length) { para.push(line); i++; }
+      push(`<div class="md-p">${para.map(x => formatInline(escapeHtml(x))).join('<br>')}</div>`,
+        'p\0' + para.join('\n'));
+    }
+    return blocks;
+  }
+
+  function enhanceRendered(root) {
+    if (!root) return;
+    root.querySelectorAll('.code-wrap').forEach(wrap => {
+      if (wrap.dataset.enhanced) return;
+      wrap.dataset.enhanced = '1';
+      const pre = wrap.querySelector('pre.code');
+      const copy = wrap.querySelector('.code-copy');
+      const wrapBtn = wrap.querySelector('.code-wrap-btn');
+      if (copy && pre) {
+        copy.onclick = async () => {
+          const ok = await copyText(pre.textContent || '');
+          copy.textContent = ok ? '已复制' : '复制失败';
+          setTimeout(() => { copy.textContent = '复制'; }, 1500);
+        };
+      }
+      if (wrapBtn && pre) {
+        wrapBtn.onclick = () => {
+          const on = pre.classList.toggle('wrap');
+          wrapBtn.classList.toggle('on', on);
+          wrapBtn.textContent = on ? '不换行' : '换行';
+        };
+      }
+    });
+    root.querySelectorAll('img').forEach(img => {
+      if (img.dataset.enhanced) return;
+      img.dataset.enhanced = '1';
+      img.onclick = () => openImageViewer(img.src);
+    });
+  }
+
+  function renderMarkdown(node, text, opts = {}) {
+    if (!node) return;
+    const streaming = !!opts.streaming;
+    const blocks = markdownBlocks(text, streaming);
+    const keys = blocks.map(b => b.key);
+    const prev = node._mdKeys;
+    const sameAll = prev && prev.length === keys.length && keys.every((k, i) => k === prev[i]);
+    if (sameAll) return;
+    const samePrefix = prev && prev.length === keys.length &&
+      keys.slice(0, -1).every((k, i) => k === prev[i]);
+    if (samePrefix && node.lastElementChild && blocks.length) {
+      const holder = document.createElement('div');
+      holder.innerHTML = blocks[blocks.length - 1].html;
+      const fresh = holder.firstElementChild;
+      if (fresh) node.lastElementChild.replaceWith(fresh);
+      else node.innerHTML = blocks.map(b => b.html).join('');
+    } else {
+      node.innerHTML = blocks.map(b => b.html).join('');
+    }
+    node._mdKeys = keys;
+    enhanceRendered(node);
   }
 
   function formatText(text) {
-    const s = String(text || '');
-    const parts = s.split('```');
-    if (parts.length === 1) return formatBlockText(s);
-    return parts.map((p, i) => {
-      if (i % 2) {
-        const body = p.replace(/^[^\n]*\n/, '');
-        return `<pre class="code">${escapeHtml(body)}</pre>`;
-      }
-      return formatBlockText(p);
-    }).join('');
+    return markdownBlocks(text, false).map(b => b.html).join('');
+  }
+
+  function scheduleMarkdownRender(ref) {
+    if (!ref || ref._mdTimer) return;
+    ref._mdTimer = setTimeout(() => {
+      ref._mdTimer = 0;
+      if (!ref.textEl || !ref.textEl.isConnected) return;
+      renderMarkdown(ref.textEl, ref.text, { streaming: true });
+    }, 60);
   }
 
   async function copyText(text) {
@@ -1531,33 +2250,71 @@
   }
 
   function enhanceCodeBlocks(root) {
-    root.querySelectorAll('pre.code').forEach(pre => {
-      if (pre.parentElement && pre.parentElement.classList.contains('code-wrap')) return;
-      const wrap = el('div', 'code-wrap');
-      pre.parentNode.insertBefore(wrap, pre);
-      wrap.appendChild(pre);
-      const btn = el('button', 'code-copy', '复制');
-      btn.type = 'button';
-      btn.onclick = async () => {
-        const ok = await copyText(pre.textContent || '');
-        btn.textContent = ok ? '已复制' : '复制失败';
-        setTimeout(() => { btn.textContent = '复制'; }, 1500);
-      };
-      wrap.appendChild(btn);
-    });
+    enhanceRendered(root);
   }
 
-  function toolArg(input) {
-    if (!input) return '';
+  const TOOL_KINDS = {
+    Bash: 'command', Read: 'read', Edit: 'edit', Write: 'edit', MultiEdit: 'edit', NotebookEdit: 'edit',
+    Grep: 'search', Glob: 'search', WebSearch: 'web', WebFetch: 'web', Task: 'agent',
+    TodoWrite: 'todo', ExitPlanMode: 'plan', AskUserQuestion: 'ask'
+  };
+  const TOOL_VERBS = {
+    command: '运行', read: '读取', edit: '编辑', search: '搜索', web: '联网',
+    agent: '子代理', todo: '待办', plan: '计划', ask: '提问', other: '工具'
+  };
+  const TOOL_ICONS = {
+    command: '<path d="M5 7l4 5-4 5M12 17h7"/>',
+    read: '<path d="M6 3h9l4 4v14H6z"/><path d="M15 3v5h5M9 13h7M9 17h5"/>',
+    edit: '<path d="M4 20l4-1 11-11-3-3L5 16z"/><path d="M14 5l3 3"/>',
+    search: '<circle cx="11" cy="11" r="6"/><path d="M16 16l4 4"/>',
+    web: '<circle cx="12" cy="12" r="8"/><path d="M4 12h16M12 4c3 3 3 13 0 16M12 4c-3 3-3 13 0 16"/>',
+    agent: '<rect x="4" y="7" width="16" height="12" rx="3"/><path d="M12 3v4M8 12h.01M16 12h.01M9 16h6"/>',
+    todo: '<path d="M9 6h11M9 12h11M9 18h11"/><path d="M4 6l1.2 1.2L7.5 4.8M4 12l1.2 1.2L7.5 10.8M4 18l1.2 1.2L7.5 16.8"/>',
+    plan: '<path d="M5 4h14v16H5z"/><path d="M8 8h8M8 12h8M8 16h5"/>',
+    ask: '<path d="M4 5h16v11H9l-5 4z"/><path d="M8 9h8M8 12h5"/>',
+    think: '<path d="M9 18h6M10 21h4M8 14a5 5 0 1 1 8 0c-.8.8-1 1.5-1 3H9c0-1.5-.2-2.2-1-3z"/>',
+    other: '<path d="M5 5h14v14H5z"/><path d="M9 9h6v6H9z"/>'
+  };
+
+  function toolKindOf(name) {
+    return TOOL_KINDS[name] || 'other';
+  }
+
+  function toolIcon(kind) {
+    return `<svg viewBox="0 0 24 24" aria-hidden="true">${TOOL_ICONS[kind] || TOOL_ICONS.other}</svg>`;
+  }
+
+  function oneLine(s, max = 160) {
+    return String(s == null ? '' : s).replace(/\s+/g, ' ').trim().slice(0, max);
+  }
+
+  function toolDetail(name, input) {
+    if (!input || typeof input !== 'object') return '';
+    const kind = toolKindOf(name);
+    if (kind === 'command') return oneLine(input.command || input.description || '');
+    if (kind === 'edit') {
+      const info = editToolInfo(name, input);
+      return info ? info.path + (info.added || info.removed ? `  +${info.added} -${info.removed}` : '') : '';
+    }
+    if (kind === 'read') return oneLine(input.file_path || input.path || '');
+    if (kind === 'search') {
+      const where = input.path || input.glob || '';
+      return oneLine((input.pattern || input.query || '') + (where ? ' · ' + where : ''));
+    }
+    if (kind === 'web') return oneLine(input.query || input.url || input.prompt || '');
+    if (kind === 'agent') return oneLine(input.description || input.prompt || input.task || '');
+    if (kind === 'todo') {
+      const todos = Array.isArray(input.todos) ? input.todos : [];
+      return todos.length ? `${todos.length} 项` : '';
+    }
+    if (kind === 'plan') return '计划待确认';
+    if (kind === 'ask') {
+      const qs = Array.isArray(input.questions) ? input.questions : [];
+      return qs.length ? oneLine(qs[0].question || qs[0].header || '') : '';
+    }
     const pick = input.command || input.file_path || input.path || input.pattern ||
       input.query || input.url || input.description || input.prompt || input.task || '';
-    if (typeof pick === 'string' && pick.trim()) {
-      return pick.replace(/\s+/g, ' ').trim().slice(0, 160);
-    }
-    try {
-      const s = JSON.stringify(input);
-      return s === '{}' ? '' : s.slice(0, 160);
-    } catch { return ''; }
+    return typeof pick === 'string' ? oneLine(pick) : '';
   }
 
   function pretty(x) {
@@ -1565,26 +2322,37 @@
     try { return JSON.stringify(x, null, 2); } catch { return String(x); }
   }
 
-  function toolNode(b) {
-    const d = el('details', 'tool');
-    const sum = el('summary');
-    const name = el('span', 'tool-name', b.name || '工具');
-    const arg = el('span', 'tool-arg', toolArg(b.input));
-    const state = el('span', 'tool-state');
-    sum.append(name, arg, state);
+  function thinkingSnippet(b, max = 80) {
+    let t = String((b && (b.text || b.thinking)) || '').replace(/\s+/g, ' ').trim();
+    if (!t) return '';
+    const sentence = t.match(/^(.{1,80}?)[。.!?！？](?:\s|$)/);
+    if (sentence) t = sentence[1] + sentence[0].slice(sentence[1].length).trim();
+    else if (t.length > max) t = t.slice(0, max) + '…';
+    return t;
+  }
 
-    const body = el('div', 'tool-body');
-    const inputPre = el('pre', 'tool-input', b.input ? pretty(b.input) : '');
-    const resultPre = el('pre', 'tool-result');
-    if (b.result != null) {
-      resultPre.textContent = String(b.result);
-      if (b.isError) resultPre.classList.add('err');
-    } else {
-      resultPre.remove();
-    }
-    body.append(inputPre, resultPre);
-    d.append(sum, body);
-    d._refs = { arg, state, body, inputPre, resultPre };
+  function thinkingRow(b) {
+    const d = el('div', 'tool tool-thinking');
+    const ico = el('span', 'tool-ico');
+    ico.innerHTML = toolIcon('think');
+    const name = el('span', 'tool-name', '思考');
+    const arg = el('span', 'tool-arg', thinkingSnippet(b));
+    d.append(ico, name, arg);
+    d._textEl = arg;
+    return d;
+  }
+
+  function toolNode(b) {
+    const kind = toolKindOf(b.name);
+    const d = el('div', 'tool tool-' + kind);
+    const ico = el('span', 'tool-ico');
+    ico.innerHTML = toolIcon(kind);
+    const label = kind === 'other' ? (b.name || '工具') : (TOOL_VERBS[kind] || b.name || '工具');
+    const name = el('span', 'tool-name', label);
+    const arg = el('span', 'tool-arg', toolDetail(b.name, b.input));
+    const state = el('span', 'tool-state');
+    d.append(ico, name, arg, state);
+    d._refs = { arg, state };
     updateToolNode(d, b);
     return d;
   }
@@ -1593,17 +2361,14 @@
     if (!d || !d._refs) return;
     d._block = { ...(d._block || {}), ...b };
     const r = d._refs;
-    const arg = toolArg(d._block.input);
-    if (arg) r.arg.textContent = arg;
-    if (d._block.input && !r.inputPre.textContent) r.inputPre.textContent = pretty(d._block.input);
+    const detail = toolDetail(d._block.name, d._block.input);
+    r.arg.textContent = detail;
+    r.arg.hidden = !detail;
 
-    if (d._block.result != null) {
-      if (!r.resultPre.isConnected) r.body.appendChild(r.resultPre);
-      r.resultPre.textContent = String(d._block.result);
-      r.resultPre.classList.toggle('err', !!d._block.isError);
-      r.state.textContent = d._block.isError ? '失败' : '完成';
-      r.state.className = 'tool-state ' + (d._block.isError ? 'err' : 'ok');
-    } else if (d._block.done) {
+    if (d._block.isError) {
+      r.state.textContent = '失败';
+      r.state.className = 'tool-state err';
+    } else if (d._block.result != null || d._block.done) {
       r.state.textContent = '完成';
       r.state.className = 'tool-state ok';
     } else {
@@ -1627,8 +2392,7 @@
     S.liveProcessMeta = null;
     S.liveProcessState = null;
     S.liveProcessCollapse = null;
-    S.liveProcessCount = 0;
-    S.liveProcessFiles = new Set();
+    S.liveProcessBlocks = [];
   }
 
   /** 实时一轮的「过程」：默认合上，摘要里显示步数/文件数和当前步骤 */
@@ -1651,8 +2415,7 @@
     S.liveProcessMeta = meta;
     S.liveProcessState = state;
     S.liveProcessCollapse = null;
-    S.liveProcessCount = 0;
-    S.liveProcessFiles = new Set();
+    S.liveProcessBlocks = [];
     return d;
   }
 
@@ -1661,14 +2424,12 @@
   }
 
   function bumpLiveProcess(b) {
-    S.liveProcessCount += 1;
-    const f = editedFileOf(b);
-    if (f) S.liveProcessFiles.add(f);
+    if (S.liveProcessBlocks) S.liveProcessBlocks.push(b);
     if (S.liveProcessMeta) {
-      S.liveProcessMeta.textContent = processMetaText(S.liveProcessCount, S.liveProcessFiles);
+      S.liveProcessMeta.textContent = processMetaText(S.liveProcessBlocks || []);
     }
     if (b.type === 'thinking') setLiveProcessState('思考中…');
-    else if (b.type === 'tool_use') setLiveProcessState(`${b.name || '工具'} 运行中…`);
+    else if (b.type === 'tool_use') setLiveProcessState(toolRunningText(toolKindOf(b.name)));
   }
 
   function renderLiveTurn() {
@@ -1691,6 +2452,14 @@
       for (const u of byPos.get(i) || []) box.appendChild(userNode(u));
       if (i >= blocks.length) continue;
       const b = blocks[i];
+      if (b.type === 'thinking') {
+        ensureLiveProcess(box);
+        const row = thinkingRow(b);
+        S.liveProcessBody.insertBefore(row, S.liveProcessCollapse);
+        S.liveEls.set(b.key, { thinkingRow: row, textEl: row._textEl, text: b.text || '' });
+        bumpLiveProcess(b);
+        continue;
+      }
       const built = liveBlockNode(b);
       if (!built) continue;
       if (b.type === 'thinking' || b.type === 'tool_use') {
@@ -1738,25 +2507,11 @@
     if (b.type === 'text') {
       const d = el('div', 'msg assistant');
       const t = el('div', 'txt');
-      t.textContent = b.text || '';
+      t.textContent = '';
+      renderMarkdown(t, b.text || '', { streaming: true });
       d.appendChild(t);
-      return { node: d, ref: { textEl: t } };
-    }
-    if (b.type === 'thinking') {
-      const d = el('details', 'think');
-      d.appendChild(el('summary', null, '思考过程'));
-      const t = el('div', 'think-text');
-      t.textContent = b.text || b.thinking || '';
-      d.appendChild(t);
-      const c = el('button', 'collapse-btn small', '收起');
-      c.type = 'button';
-      c.onclick = e => {
-        e.preventDefault();
-        e.stopPropagation();
-        d.open = false;
-      };
-      d.appendChild(c);
-      return { node: d, ref: { textEl: t } };
+      attachMsgActions(d, { role: 'assistant', blocks: [b] });
+      return { node: d, ref: { textEl: t, text: b.text || '', block: b } };
     }
     if (b.type === 'tool_use') {
       const d = toolNode(b);
@@ -1772,6 +2527,18 @@
     if (b.type === 'text') b.text = b.text || '';
     if (b.type === 'thinking') b.text = b.text || b.thinking || '';
     live.blocks.push(b);
+    if (b.type === 'tool_use' && b.name === 'TodoWrite') updateTodosFromTool(b.input);
+    if (b.type === 'thinking') {
+      const box = $('#liveTurn');
+      if (!box) return;
+      ensureLiveProcess(box);
+      const row = thinkingRow(b);
+      S.liveProcessBody.insertBefore(row, S.liveProcessCollapse);
+      S.liveEls.set(ev.key, { thinkingRow: row, textEl: row._textEl, text: b.text || '' });
+      bumpLiveProcess(b);
+      setRunProgress(progressForThinking(b), 'thinking');
+      return;
+    }
 
     const box = $('#liveTurn');
     if (!box) return;
@@ -1792,15 +2559,14 @@
   function onBlockSet(ev) {
     const ref = S.liveEls.get(ev.key);
     if (!ref || !ref.tool) return;
-    updateToolNode(ref.tool, ev.block || {});
-    const f = editedFileOf(ref.tool._block || {});
-    if (f && S.liveProcessFiles) {
-      S.liveProcessFiles.add(f);
-      if (S.liveProcessMeta) {
-        S.liveProcessMeta.textContent = processMetaText(S.liveProcessCount, S.liveProcessFiles);
-      }
-    }
-    setLiveProcessState(`${(ref.tool._block && ref.tool._block.name) || '工具'} 运行中…`);
+    const next = ev.block || {};
+    updateToolNode(ref.tool, next);
+    if (next.name === 'TodoWrite') updateTodosFromTool(next.input);
+    const liveBlock = (S.live.blocks || []).find(b => b.key === ev.key);
+    if (liveBlock) Object.assign(liveBlock, next);
+    if (S.liveProcessMeta) S.liveProcessMeta.textContent = processMetaText(S.liveProcessBlocks || []);
+    const kind = toolKindOf(ref.tool._block && ref.tool._block.name);
+    setLiveProcessState(toolRunningText(kind));
   }
 
   function onToolResult(ev) {
@@ -1813,16 +2579,25 @@
   // ---------------------------------------------------------------- 运行状态行
 
   function progressForThinking(b) {
-    const t = String((b && (b.text || b.thinking)) || '').replace(/\s+/g, ' ').trim();
-    return t ? '正在思考：' + (t.length > 64 ? t.slice(0, 64) + '…' : t) : '正在思考…';
+    const t = thinkingSnippet(b, 80);
+    return t ? '正在思考：' + t : '正在思考…';
+  }
+
+  function toolRunningText(kind) {
+    if (kind === 'todo') return '更新中…';
+    if (kind === 'plan') return '提交中…';
+    if (kind === 'ask') return '等待回答…';
+    return (TOOL_VERBS[kind] || '工具') + '中…';
   }
 
   function progressForTool(b) {
-    const name = (b && b.name) || '工具';
-    const raw = b && b.input ? toolArg(b.input) : '';
-    const summary = String(raw || '').replace(/\s+/g, ' ').trim();
-    return '正在执行 ' + name +
-      (summary ? '：' + (summary.length > 80 ? summary.slice(0, 80) + '…' : summary) : '…');
+    const kind = toolKindOf((b && b.name) || '');
+    const detail = toolDetail((b && b.name) || '', b && b.input);
+    if (kind === 'todo') return '正在更新待办…';
+    if (kind === 'plan') return '正在整理计划…';
+    if (kind === 'ask') return '等待你的回答…';
+    const verb = TOOL_VERBS[kind] || '执行';
+    return '正在' + verb + (detail ? '：' + (detail.length > 80 ? detail.slice(0, 80) + '…' : detail) : '…');
   }
 
   function setRunProgress(text, kind) {
@@ -1877,6 +2652,8 @@
 
     // 列表页 / 其他对话：只刷新徽标
     if (!S.convId || ev.convId !== S.convId) {
+      if (t === 'run_end' && ev.convId) S.unread.add(ev.convId);
+      if (t === 'run_start' && ev.convId) S.unread.delete(ev.convId);
       if (t === 'run_start' || t === 'run_end' || t === 'permission' || t === 'ask') {
         scheduleBootRefresh();
       }
@@ -1886,6 +2663,10 @@
     switch (t) {
       case 'run_start': {
         S.running = true;
+        if (S.todos && S.todos.every(t => t.status === 'completed')) {
+          S.todos = null;
+          renderTodoBar();
+        }
         notifyPageTask(true);
         // 新消息的 user_echo 通常先到，先记下来，重建实时区时不能把它弄丢
         const pending = S.pendingEcho;
@@ -1957,7 +2738,19 @@
       case 'delta': {
         const ref = S.liveEls.get(ev.key);
         if (!ref || !ref.textEl) break;
-        ref.textEl.textContent += ev.text || '';
+        if (ref.thinkingRow) {
+          ref.text = (ref.text + (ev.text || '')).slice(0, 160);
+          if (ref.textEl) ref.textEl.textContent = thinkingSnippet({ text: ref.text });
+          setRunProgress(progressForThinking({ text: ref.text }), 'thinking');
+          break;
+        }
+        if (ev.kind === 'text' && ref.text != null) {
+          ref.text += ev.text || '';
+          if (ref.block) ref.block.text = ref.text;
+          scheduleMarkdownRender(ref);
+        } else {
+          ref.textEl.textContent += ev.text || '';
+        }
         if (ev.kind === 'text') setRunProgress('', '');
         else if (ev.kind === 'thinking') {
           setRunProgress(progressForThinking({ text: ref.textEl.textContent }), 'thinking');
@@ -2066,7 +2859,7 @@
       const loaded = S.conv && Array.isArray(S.conv.messages) ? S.conv.messages.length : 30;
       const limit = Math.max(30, Math.min(200, loaded + 10));
       const data = await api('/api/conversation?id=' + encodeURIComponent(S.convId) +
-        '&limit=' + limit + '&light=1', { timeout: 30000 });
+        '&limit=' + limit + '&light=1&compact=1', { timeout: 30000 });
       renderConversation(data);
     } catch { /* 下次事件再试 */ }
     finally { refreshing = false; }
@@ -2088,7 +2881,7 @@
       // 后台期间可能完成了一整轮任务，多拉一些历史，避免回前台只看到半截。
       const limit = Math.min(200, Math.max(60, loaded + 40));
       const data = await api('/api/conversation?id=' + encodeURIComponent(id) +
-        '&limit=' + limit + '&light=1', { timeout: 15000 });
+        '&limit=' + limit + '&light=1&compact=1', { timeout: 15000 });
       if (!S.convId || S.convId !== id) return;
       if (!data.running) {
         S.running = false;
@@ -2132,7 +2925,7 @@
     const wantId = S.convId;
     try {
       const data = await api('/api/conversation?id=' + encodeURIComponent(wantId) +
-        '&limit=1&light=1', { timeout: 8000 });
+        '&limit=1&light=1&compact=1', { timeout: 8000 });
       if (!S.convId || S.convId !== wantId) return;
       if (!data.running) {
         if (S.running) {
@@ -2198,7 +2991,7 @@
     }
     try {
       const data = await api('/api/conversation?id=' + encodeURIComponent(S.convId) +
-        '&limit=30&before=' + encodeURIComponent(S.conv.start || 0) + '&light=1', { timeout: 30000 });
+        '&limit=30&before=' + encodeURIComponent(S.conv.start || 0) + '&light=1&compact=1', { timeout: 30000 });
       const older = data.messages || [];
       if (older.length) {
         S.conv.messages = older.concat(S.conv.messages || []);
@@ -2464,6 +3257,240 @@
     });
   }
 
+  function quoteBlockText(q) {
+    const meta = JSON.stringify({
+      source: String((q && q.source) || ''),
+      conv: String((q && q.sourceId) || ''),
+      role: String((q && q.role) || '')
+    });
+    const excerpt = String((q && q.text) || '')
+      .replace(/\r\n?/g, '\n')
+      .replace(/<\/?gui-quote/gi, m => '&lt;' + m.slice(1))
+      .trim();
+    return '<gui-quote>\n' + meta + '\n' + excerpt + '\n</gui-quote>';
+  }
+
+  function withQuoteBlocks(text, quotes) {
+    const blocks = (quotes || []).map(quoteBlockText).filter(Boolean).join('\n\n');
+    const t = String(text || '').trim();
+    return blocks ? (blocks + (t ? '\n\n' + t : '')) : t;
+  }
+
+  function renderPendingQuotes() {
+    const box = $('#pendingQuotes');
+    if (!box) return;
+    box.innerHTML = '';
+    box.hidden = S.pendingQuotes.length === 0;
+    S.pendingQuotes.forEach(q => {
+      const chip = el('span', 'ref-chip quote-chip');
+      chip.title = q.text || '';
+      chip.appendChild(el('span', 'quote-ic', '❝'));
+      chip.appendChild(el('span', 'lbl', quotePreview(q.text)));
+      const x = el('button', null, '×');
+      x.type = 'button';
+      x.title = '移除引用';
+      x.onclick = () => {
+        S.pendingQuotes = S.pendingQuotes.filter(xq => xq.id !== q.id);
+        renderPendingQuotes();
+        updateSendState();
+      };
+      chip.appendChild(x);
+      box.appendChild(chip);
+    });
+  }
+
+  function addPendingQuote(q) {
+    const text = String((q && q.text) || '').trim();
+    if (!text) return false;
+    const key = String(q.sourceId || '') + '\u0000' + text;
+    if (S.pendingQuotes.some(x => String(x.sourceId || '') + '\u0000' + x.text === key)) {
+      toast('这段已经引用过了');
+      return false;
+    }
+    if (S.pendingQuotes.length >= 5) {
+      toast('最多同时引用 5 段文字', 'err');
+      return false;
+    }
+    S.pendingQuotes.push({
+      id: 'q' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
+      text,
+      source: String(q.source || '当前对话'),
+      sourceId: String(q.sourceId || ''),
+      role: String(q.role || '')
+    });
+    renderPendingQuotes();
+    updateSendState();
+    const input = $('#input');
+    if (input) input.focus();
+    return true;
+  }
+
+  function messagePlainText(m) {
+    if (!m) return '';
+    if (m.role === 'user') {
+      const info = userTextInfo(m.text || '');
+      const quotes = (info.quotes || []).map(q => q.text).filter(Boolean).join('\n\n');
+      return [quotes, info.text].filter(x => x && x.trim()).join('\n\n');
+    }
+    return ((m.blocks || [])
+      .filter(b => b && b.type === 'text')
+      .map(b => b.text || '')
+      .filter(Boolean)).join('\n\n');
+  }
+
+  let msgActionGuardUntil = 0;
+
+  function showMsgActions(m) {
+    const text = messagePlainText(m);
+    if (!text.trim()) {
+      toast('这条消息没有可复制或引用的文字');
+      return;
+    }
+    S.msgAction = {
+      text,
+      role: m.role === 'user' ? 'user' : 'assistant',
+      source: (S.conv && (S.conv.title || '新对话')) || '当前对话',
+      sourceId: (S.conv && S.conv.id) || ''
+    };
+    hideToast();
+    $('#msgActionPreview').textContent = msgPreview(text);
+    msgActionGuardUntil = Date.now() + 400;
+    $('#msgActions').hidden = false;
+  }
+
+  function closeMsgActions() {
+    $('#msgActions').hidden = true;
+    S.msgAction = null;
+  }
+
+  async function handleMsgAction(act) {
+    const a = S.msgAction;
+    closeMsgActions();
+    if (!a) return;
+    if (act === 'copy') {
+      const ok = await copyText(a.text);
+      toast(ok ? '已复制' : '复制失败', ok ? '' : 'err');
+      return;
+    }
+    if (act === 'quote') {
+      if (addPendingQuote(a)) toast('已加入引用');
+      return;
+    }
+    if (act === 'quoteOther') {
+      openQuoteTarget(a);
+    }
+  }
+
+  function attachMsgActions(node, m) {
+    if (!node || node._msgActionsBound) return;
+    node._msgActionsBound = true;
+    node.classList.add('msg-actionable');
+    let pressTimer = null;
+    let longPressed = false;
+    let sx = 0;
+    let sy = 0;
+    const clear = () => {
+      if (pressTimer) {
+        clearTimeout(pressTimer);
+        pressTimer = null;
+      }
+      if (cancelMsgPress === clear) cancelMsgPress = null;
+    };
+    const start = e => {
+      if (e.target.closest('button, a, summary, img, .code-tools')) return;
+      if (e.type === 'mousedown' && e.button !== 0) return;
+      if (Date.now() - lastMsgScrollAt < 250) return;
+      sx = e.clientX;
+      sy = e.clientY;
+      longPressed = false;
+      clear();
+      cancelMsgPress = clear;
+      pressTimer = setTimeout(() => {
+        longPressed = true;
+        const sel = window.getSelection();
+        if (sel && !sel.isCollapsed) sel.removeAllRanges();
+        showMsgActions(m);
+      }, 520);
+    };
+    const move = e => {
+      if (Math.abs(e.clientX - sx) > 4 || Math.abs(e.clientY - sy) > 4) clear();
+    };
+    const end = () => clear();
+    node.addEventListener('touchstart', start, { passive: true });
+    node.addEventListener('touchmove', move, { passive: true });
+    node.addEventListener('touchend', end);
+    node.addEventListener('touchcancel', end);
+    node.addEventListener('mousedown', start);
+    node.addEventListener('mousemove', move);
+    node.addEventListener('mouseup', end);
+    node.addEventListener('mouseleave', end);
+    node.addEventListener('contextmenu', e => {
+      if (e.target.closest('button, a, img, summary, .code-tools')) return;
+      e.preventDefault();
+      showMsgActions(m);
+    });
+    node.addEventListener('click', e => {
+      if (!longPressed) return;
+      longPressed = false;
+      e.preventDefault();
+      e.stopPropagation();
+    }, true);
+  }
+
+  function openQuoteTarget(q) {
+    hideToast();
+    S.quoteTarget = q;
+    $('#quoteTargetSearch').value = '';
+    renderQuoteTarget();
+    $('#quoteTargetSheet').hidden = false;
+    setTimeout(() => {
+      try { $('#quoteTargetSearch').focus(); } catch { /* ignore */ }
+    }, 60);
+  }
+
+  function closeQuoteTarget() {
+    $('#quoteTargetSheet').hidden = true;
+    S.quoteTarget = null;
+  }
+
+  function renderQuoteTarget() {
+    const box = $('#quoteTargetList');
+    if (!box) return;
+    box.innerHTML = '';
+    const q = ($('#quoteTargetSearch').value || '').trim().toLowerCase();
+    const convs = allConversations()
+      .filter(c => c.id !== S.convId)
+      .filter(c => !q || `${c.title || ''} ${c.preview || ''} ${c.folder || ''}`.toLowerCase().includes(q))
+      .sort((a, b) => new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0));
+    if (!convs.length) {
+      box.innerHTML = '<div class="empty">没有可引用的对话</div>';
+      return;
+    }
+    for (const c of convs) {
+      const row = el('button', 'ref-item quote-target-row');
+      row.type = 'button';
+      const folderName = String(c.folder || '').split(/[\\/]/).filter(Boolean).pop() || '';
+      row.innerHTML =
+        `<span class="quote-target-ic">❝</span>` +
+        `<span class="main"><span class="t">${escapeHtml(c.title || '未命名对话')}</span>` +
+        `<span class="d">${escapeHtml(c.preview || '（没有预览）')}</span>` +
+        `<span class="m">${escapeHtml(folderName)} · ${escapeHtml(convTime(c.updatedAt))}</span></span>`;
+      row.onclick = () => quoteToConversation(c.id);
+      box.appendChild(row);
+    }
+  }
+
+  async function quoteToConversation(id) {
+    const q = S.quoteTarget;
+    closeQuoteTarget();
+    if (!q) return;
+    if (S.convId !== id) {
+      await openConv(id, true);
+      if (S.convId !== id) return;
+    }
+    if (addPendingQuote(q)) toast('已加入引用');
+  }
+
   const MAX_PENDING_FILES = 10;
 
   function renderPendingFiles() {
@@ -2726,7 +3753,9 @@
     const images = S.pendingImages.map(x => ({ media_type: x.media_type, data: x.data }));
     const refs = S.pendingRefs.slice();
     const files = S.pendingFiles.slice();
-    if ((!text && !images.length && !refs.length && !files.length) || !S.convId || S.sending) return;
+    const quotes = S.pendingQuotes.slice();
+    if ((!text && !images.length && !refs.length && !files.length && !quotes.length) ||
+        !S.convId || S.sending) return;
 
     S.sending = true;
     const btn = $('#sendBtn');
@@ -2742,6 +3771,7 @@
         toast('正在整理引用…');
         finalText = await composeWithRefs(text, refs);
       }
+      if (quotes.length) finalText = withQuoteBlocks(finalText, quotes);
 
       const filePaths = [];
       const needsUpload = files.some(f => !f.path);
@@ -2814,11 +3844,13 @@
       input.value = '';
       S.pendingImages = [];
       S.pendingRefs = [];
+      S.pendingQuotes = [];
       S.pendingFiles = [];
       S.refSel = new Map();
       S.drafts.delete(sendConvId);
       renderPendingImages();
       renderPendingRefs();
+      renderPendingQuotes();
       renderPendingFiles();
       autoGrow();
       maybeScroll(true);
@@ -3116,6 +4148,88 @@
   const EFFORT_LABELS = {
     low: '低', medium: '中', high: '高', xhigh: '极高', max: '最高'
   };
+  const FONT_SIZE_LABELS = { small: '小', normal: '标准', large: '大', xlarge: '特大' };
+  let optionOnPick = null;
+
+  function effortLevels() {
+    return (S.boot && S.boot.settings && S.boot.settings.effortLevels) ||
+      ['low', 'medium', 'high', 'xhigh', 'max'];
+  }
+
+  function currentEffortValue() {
+    const levels = effortLevels();
+    const cur = (S.conv && S.conv.effort) ||
+      (S.boot && S.boot.settings && S.boot.settings.defaultEffort) || 'max';
+    if (levels.includes(cur)) return cur;
+    return levels.includes('max') ? 'max' : (levels[levels.length - 1] || 'max');
+  }
+
+  function optionPickerOptions(sel) {
+    return [...(sel ? sel.options : [])].map(o => ({ value: o.value, label: o.textContent }));
+  }
+
+  function updatePickButton(id) {
+    const sel = $('#' + id);
+    const btn = $('#' + id + 'Btn');
+    if (!sel || !btn) return;
+    const o = sel.options[sel.selectedIndex];
+    btn.textContent = o ? o.textContent : (sel.value || '未设置');
+    btn.title = o ? o.textContent : '';
+  }
+
+  function updateModeTone() {
+    const sel = $('#setMode');
+    const btn = $('#setModeBtn');
+    if (!sel || !btn) return;
+    btn.classList.remove('mode-danger', 'mode-warn', 'mode-safe', 'mode-plan');
+    const tone = {
+      bypassPermissions: 'mode-danger',
+      auto: 'mode-warn',
+      acceptEdits: 'mode-safe',
+      plan: 'mode-plan'
+    }[sel.value];
+    if (tone) btn.classList.add(tone);
+  }
+
+  function openOptionPicker(title, options, value, onPick) {
+    optionOnPick = onPick;
+    const t = $('#optionTitle');
+    if (t) t.textContent = title;
+    const list = $('#optionList');
+    if (!list) return;
+    list.innerHTML = '';
+    (options || []).forEach(opt => {
+      const b = el('button', 'option-item' + (String(opt.value) === String(value) ? ' sel' : ''));
+      b.type = 'button';
+      b.innerHTML = `<span class="opt-main"><span class="opt-label">${escapeHtml(opt.label)}</span>` +
+        (opt.desc ? `<span class="opt-desc">${escapeHtml(opt.desc)}</span>` : '') +
+        `</span><span class="opt-radio" aria-hidden="true"></span>`;
+      b.onclick = () => {
+        const fn = optionOnPick;
+        closeOptionPicker();
+        if (fn) fn(opt.value);
+      };
+      list.appendChild(b);
+    });
+    const sheet = $('#optionSheet');
+    if (sheet) sheet.hidden = false;
+  }
+
+  function closeOptionPicker() {
+    optionOnPick = null;
+    const sheet = $('#optionSheet');
+    if (sheet) sheet.hidden = true;
+  }
+
+  function pickSelectOption(id, title, onPick) {
+    const sel = $('#' + id);
+    if (!sel) return;
+    openOptionPicker(title, optionPickerOptions(sel), sel.value, v => {
+      sel.value = v;
+      updatePickButton(id);
+      if (onPick) onPick(v);
+    });
+  }
 
   function fillSelect(sel, items) {
     sel.innerHTML = '';
@@ -3136,31 +4250,33 @@
 
     const modes = app.permissionModes || Object.keys(MODE_LABELS);
     fillSelect($('#setMode'), modes.map(m => ({ value: m, label: MODE_LABELS[m] || m })));
-    $('#setMode').value = S.conv.permissionMode || '';
+    const modeVal = S.conv.permissionMode || settings.defaultPermissionMode || modes[0] || '';
+    $('#setMode').value = modeVal;
+    updatePickButton('setMode');
+    updateModeTone();
 
-    const models = [{ value: '', label: '默认（跟随设置）' }].concat(
-      (settings.availableModels || []).map(m => ({
-        value: m.id,
-        label: m.id + (m.roles && m.roles.length ? `（${m.roles.join(' / ')}）` : '')
-      }))
-    );
-    if (S.conv.model && !models.some(m => m.value === S.conv.model)) {
-      models.push({ value: S.conv.model, label: S.conv.model });
+    const models = (settings.availableModels || []).map(m => ({
+      value: m.id,
+      label: m.id
+    }));
+    const modelVal = S.conv.model || settings.defaultModel || (models[0] && models[0].value) || '';
+    if (modelVal && !models.some(m => m.value === modelVal)) {
+      models.unshift({ value: modelVal, label: modelVal });
     }
     fillSelect($('#setModel'), models);
-    $('#setModel').value = S.conv.model || '';
+    $('#setModel').value = modelVal;
+    updatePickButton('setModel');
 
-    const efforts = [{ value: '', label: '默认' }].concat(
-      (settings.effortLevels || []).map(e => ({ value: e, label: EFFORT_LABELS[e] || e }))
-    );
-    fillSelect($('#setEffort'), efforts);
-    $('#setEffort').value = S.conv.effort || '';
+    fillSelect($('#setFontSize'), Object.keys(FONT_SIZE_LABELS).map(k => ({ value: k, label: FONT_SIZE_LABELS[k] })));
+    $('#setFontSize').value = S.fontScale;
+    updatePickButton('setFontSize');
 
     $('#chatSettings').hidden = false;
   }
 
   function closeChatSettings() {
     $('#chatSettings').hidden = true;
+    closeOptionPicker();
   }
 
   async function saveChatSettings() {
@@ -3168,7 +4284,6 @@
     const body = {
       title: $('#setTitle').value.trim(),
       model: $('#setModel').value,
-      effort: $('#setEffort').value,
       permissionMode: $('#setMode').value
     };
     try {
@@ -3181,6 +4296,8 @@
       S.conv.model = conv.model != null ? conv.model : body.model;
       S.conv.effort = conv.effort || '';
       S.conv.permissionMode = conv.permissionMode || body.permissionMode;
+      const fontSize = $('#setFontSize');
+      if (fontSize) applyFontScale(fontSize.value);
       $('#chatTitle').textContent = S.conv.title || '未命名对话';
       closeChatSettings();
       updateHeader();
@@ -3244,7 +4361,7 @@
 
   function connect() {
     try { if (S.es) S.es.close(); } catch { /* ignore */ }
-    const es = new EventSource('/api/stream?token=' + encodeURIComponent(TOKEN));
+    const es = new EventSource('/api/stream?token=' + encodeURIComponent(TOKEN) + '&compact=1');
     S.es = es;
     es.onopen = () => {
       clearTimeout(reconnectTimer);
@@ -3285,6 +4402,21 @@
       }
     });
     $('#searchInput').addEventListener('input', renderList);
+    const filterRow = $('#filterRow');
+    if (filterRow) filterRow.addEventListener('click', e => {
+      const b = e.target.closest('[data-filter]');
+      if (!b) return;
+      S.filter = b.dataset.filter || 'all';
+      renderList();
+    });
+    $('#convList').addEventListener('click', e => {
+      const b = e.target.closest('[data-empty-act]');
+      if (!b) return;
+      if (b.dataset.emptyAct === 'new') openSheet();
+      else { S.filter = 'all'; renderList(); }
+    });
+    const todoToggle = $('#todoToggle');
+    if (todoToggle) todoToggle.onclick = toggleTodoBar;
     $('#backBtn').onclick = () => closeChat();
     $('#stopBtn').onclick = stopRun;
     $('#cancelStop').onclick = closeStopConfirm;
@@ -3292,8 +4424,27 @@
     $('#confirmStop').addEventListener('click', e => {
       if (e.target === $('#confirmStop')) closeStopConfirm();
     });
-    const quickEffort = $('#quickEffort');
-    if (quickEffort) quickEffort.onchange = changeQuickEffort;
+    const quickEffortBtn = $('#quickEffortBtn');
+    if (quickEffortBtn) quickEffortBtn.onclick = () => {
+      const sel = $('#quickEffort');
+      if (!sel) return;
+      openOptionPicker('推理档位', optionPickerOptions(sel), sel.value, v => {
+        sel.value = v;
+        changeQuickEffort(v);
+      });
+    };
+    [['setMode', '权限模式'], ['setModel', '模型'],
+      ['setFontSize', '对话字号']].forEach(([id, title]) => {
+      const btn = $('#' + id + 'Btn');
+      if (btn) btn.onclick = () => pickSelectOption(id, title,
+        id === 'setMode' ? updateModeTone : null);
+    });
+    const optionClose = $('#optionClose');
+    if (optionClose) optionClose.onclick = closeOptionPicker;
+    const optionSheet = $('#optionSheet');
+    if (optionSheet) optionSheet.addEventListener('click', e => {
+      if (e.target === optionSheet) closeOptionPicker();
+    });
     $('#chatMenuBtn').onclick = openChatSettings;
     $('#settingsClose').onclick = closeChatSettings;
     $('#settingsSave').onclick = saveChatSettings;
@@ -3330,6 +4481,12 @@
       closeAttachSheet();
       $('#fileInput').click();
     };
+    const pickCamera = $('#pickCamera');
+    if (pickCamera) pickCamera.onclick = () => {
+      closeAttachSheet();
+      const input = $('#cameraInput');
+      if (input) input.click();
+    };
     $('#pickRef').onclick = () => {
       closeAttachSheet();
       openRefPicker();
@@ -3363,6 +4520,29 @@
     $('#refSheet').addEventListener('click', e => {
       if (e.target === $('#refSheet')) closeRefSheet();
     });
+    const msgActions = $('#msgActions');
+    if (msgActions) msgActions.addEventListener('click', e => {
+      if (e.target === msgActions) {
+        if (Date.now() < msgActionGuardUntil) return;
+        return closeMsgActions();
+      }
+      const b = e.target.closest('[data-act]');
+      if (b) handleMsgAction(b.dataset.act);
+    });
+    const quoteTargetClose = $('#quoteTargetClose');
+    if (quoteTargetClose) quoteTargetClose.onclick = closeQuoteTarget;
+    const quoteTargetSearch = $('#quoteTargetSearch');
+    if (quoteTargetSearch) quoteTargetSearch.addEventListener('input', renderQuoteTarget);
+    const quoteTargetSheet = $('#quoteTargetSheet');
+    if (quoteTargetSheet) quoteTargetSheet.addEventListener('click', e => {
+      if (e.target === quoteTargetSheet) closeQuoteTarget();
+    });
+    const diffClose = $('#diffClose');
+    if (diffClose) diffClose.onclick = closeDiffSheet;
+    const diffSheet = $('#diffSheet');
+    if (diffSheet) diffSheet.addEventListener('click', e => {
+      if (e.target === diffSheet) closeDiffSheet();
+    });
     $('#balanceBtn').onclick = () => { loadBalance(true); };
     $('#reconnectBtn').onclick = () => location.reload();
     $('#reconnectBtn2').onclick = () => location.reload();
@@ -3384,6 +4564,11 @@
       addImageFiles(e.target.files);
       e.target.value = '';
     });
+    const cameraInput = $('#cameraInput');
+    if (cameraInput) cameraInput.addEventListener('change', e => {
+      addImageFiles(e.target.files);
+      e.target.value = '';
+    });
     $('#input').addEventListener('paste', e => {
       const files = [...((e.clipboardData && e.clipboardData.items) || [])]
         .filter(it => it.kind === 'file' && /^image\//.test(it.type))
@@ -3397,6 +4582,10 @@
 
     $('#messages').addEventListener('touchstart', holdAutoScroll, { passive: true });
     $('#messages').addEventListener('wheel', holdAutoScroll, { passive: true });
+    $('#messages').addEventListener('scroll', () => {
+      lastMsgScrollAt = Date.now();
+      if (cancelMsgPress) cancelMsgPress();
+    }, { passive: true });
     $('#messages').addEventListener('scroll', () => {
       scheduleProcessCollapseUpdate();
       const m = $('#messages');
@@ -3412,10 +4601,22 @@
       window.visualViewport.addEventListener('scroll', syncViewportHeight);
     }
     syncViewportHeight();
+    setupSheetBackHandling();
 
-    $('#imgViewerClose').onclick = closeImageViewer;
-    // 点图片本身或空白处都可以关掉看图，符合“再点一下返回”
-    $('#imgViewer').addEventListener('click', closeImageViewer);
+    const imgViewerClose = $('#imgViewerClose');
+    if (imgViewerClose) imgViewerClose.onclick = closeImageViewer;
+    const imgViewerPrev = $('#imgViewerPrev');
+    if (imgViewerPrev) imgViewerPrev.onclick = () => stepImageViewer(-1);
+    const imgViewerNext = $('#imgViewerNext');
+    if (imgViewerNext) imgViewerNext.onclick = () => stepImageViewer(1);
+    // 点图片外的空白关闭；图片本身用单指点按关闭、双击放大、左右滑切图。
+    const imgViewerStage = $('#imgViewerStage');
+    if (imgViewerStage) {
+      imgViewerStage.addEventListener('click', e => {
+        if (e.target === imgViewerStage) closeImageViewer();
+      });
+      setupImageViewerGestures();
+    }
     document.addEventListener('keydown', e => {
       if (e.key === 'Escape') {
         closeImageViewer();
@@ -3426,10 +4627,20 @@
         closeRefSheet();
         closeDownloadsSheet();
         closePcFileSheet();
+        closeMsgActions();
+        closeQuoteTarget();
+        closeDiffSheet();
+        closeOptionPicker();
       }
     });
 
     window.addEventListener('popstate', e => {
+      if (sheetHistoryCleanup) {
+        sheetHistoryCleanup = false;
+        return;
+      }
+      if (closeTopSheetFromHistory()) return;
+      if (e.state && e.state.sheet) return;
       const st = e.state;
       if (st && st.conv) openConv(st.conv, false);
       else closeChat(false);
@@ -3506,6 +4717,7 @@
     bind();
     ensureModeBadge();
     loadFolderCollapsed();
+    loadFontScale();
     connect();
 
     try {
@@ -3565,6 +4777,33 @@
       }
     } catch { /* 非 App 环境 */ }
   });
+
+  /** App 原生返回键统一入口：先关最上面的弹层，再退对话，最后才退页面。 */
+  window.__workbenchBack = () => {
+    if (sheetStack.length) {
+      closeTopSheetFromHistory();
+      return 'handled';
+    }
+    const open = [...document.querySelectorAll('.sheet')].filter(e => !e.hidden);
+    if (open.length) {
+      const el = open[open.length - 1];
+      if (el.id === 'imgViewer') closeImageViewer();
+      else el.hidden = true;
+      return 'handled';
+    }
+    const viewer = document.getElementById('imgViewer');
+    if (viewer && !viewer.hidden) {
+      closeImageViewer();
+      return 'handled';
+    }
+    const chat = document.getElementById('chatScreen');
+    const back = document.getElementById('backBtn');
+    if (chat && !chat.hidden && back) {
+      back.click();
+      return 'handled';
+    }
+    return '';
+  };
 
   // 调试入口：控制台里可以看状态；不影响正常使用
   window.__m = S;

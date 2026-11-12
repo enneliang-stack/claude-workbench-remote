@@ -1,10 +1,10 @@
 {
-  "versionCode": 80,
-  "versionName": "2.4.39",
+  "versionCode": 91,
+  "versionName": "2.4.50",
   "apk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.21/ClaudeWorkbench-full.apk",
   "sha256": "4177f27dc3e3446f50130fb2ea3cbfc5731578247a37fc7eba2314162342e53e",
   "slimApk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/latest/download/ClaudeWorkbench-slim.apk",
-  "slimSha256": "fdec000c8b4d83fe72ab0708bb854c5f78d301a3dbed004353c4fb49e6b0f8eb",
+  "slimSha256": "6a3d0034415a250e06c78e431784b89570df2c70249a28b4bc80c77653c552ca",
   "important": true,
-  "notes": "2.4.39：重要更新（用于验证主页左下角提醒）。功能与 2.4.38 相同；安装 2.4.38 后，主页左下角会出现“重要更新 v2.4.39”，点它即可更新到本版。长截图仍自动按文件发送，普通图片仍按图片发送。PC 客户端仍为 1.2.13；完整包保持 2.4.21，已装环境直接装精简包。"
+  "notes": "2.4.50：重要更新。手机页过程只保留思考/运行/编辑等一行摘要，不再下发工具输出和详情，长对话与运行中更轻；头部去掉 token 数，「运行中」完整显示；推理档位显示最高，设置改成应用内选择弹层；返回键先关弹层、缓慢滑动不误触长按；主页设置卡片、状态颜色和重要更新提醒优化。PC 远程页需重启一次工作台；手机本机页安装本包。"
 }
