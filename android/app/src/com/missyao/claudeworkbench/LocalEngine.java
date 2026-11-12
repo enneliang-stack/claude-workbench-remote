@@ -51,7 +51,7 @@ public final class LocalEngine {
                     + ALPINE_VERSION + "-aarch64.tar.gz"
     };
     private static final int SERVER_PORT = 4712;
-    private static final int ASSET_VERSION = 46;
+    private static final int ASSET_VERSION = 47;
     private static final String GCS_BASE =
             "https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases";
     private static final String FALLBACK_CLAUDE_VERSION = "2.1.319";
@@ -1154,7 +1154,9 @@ public final class LocalEngine {
             } catch (Exception ignored) {
             }
 
-            long deadline = System.currentTimeMillis() + 90000;
+            // 首轮经常是旧进程/网络还没就绪，健康连接通常 3-5 秒内完成；10 秒没连上就尽早重试。
+            long timeout = attempt <= 1 ? 10000 : 60000;
+            long deadline = System.currentTimeMillis() + timeout;
             String last = "";
             while (System.currentTimeMillis() < deadline) {
                 JSONObject st = tsStatus();
@@ -1202,13 +1204,13 @@ public final class LocalEngine {
             }
             stopTailscaleProxy(c);
             if (attempt < 2) {
-                log(c, "内置 Tailscale 连接超时，自动重试一次");
+                log(c, "内置 Tailscale 连接超时（" + (timeout / 1000) + "s），自动重试一次");
                 progress(listener, "内置 Tailscale 连接超时，正在自动重试…");
                 sleepBeforeTsRetry();
                 startTailscaleProxy(c, listener, attempt + 1);
                 return;
             }
-            throw new IOException("内置 Tailscale 连接超时" + (last.isEmpty() ? "" : "：" + last));
+            throw new IOException("内置 Tailscale 连接超时（" + (timeout / 1000) + "s）" + (last.isEmpty() ? "" : "：" + last));
         }
     }
 

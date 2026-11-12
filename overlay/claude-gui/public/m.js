@@ -411,6 +411,8 @@
     S.convId = data.id;
     S.live = data.live || null;
     S.running = !!data.running;
+    // 任务已经结束：历史里已经有这条用户消息，本地乐观回声不能再画一次
+    if (!S.running) S.pendingEcho = null;
     if (S.running) notifyPageTask(true);
     S.loadingOlder = false;
     S.conv.start = Number.isFinite(data.start) ? data.start : 0;
@@ -601,7 +603,23 @@
     live.id = 'liveTurn';
     box.appendChild(live);
     if (S.live) renderLiveTurn();
-    else if (S.pendingEcho) live.appendChild(userNode(S.pendingEcho));
+    else if (S.pendingEcho) {
+      // 服务器历史里已经有这条用户消息时不再重复画（后台回来/任务刚结束的常见情况）
+      const echo = S.pendingEcho;
+      const msgs = (S.conv && S.conv.messages) || [];
+      let lastUser = null;
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        if (msgs[i] && msgs[i].role === 'user') { lastUser = msgs[i]; break; }
+      }
+      let dup = false;
+      if (lastUser && String(lastUser.text || '') === String(echo.text || '') &&
+          !!lastUser.steer === !!echo.steer) {
+        const lt = lastUser.ts ? Date.parse(lastUser.ts) : 0;
+        const et = echo.ts ? Date.parse(echo.ts) : 0;
+        dup = !lt || !et || Math.abs(lt - et) < 120000;
+      }
+      if (!dup) live.appendChild(userNode(echo));
+    }
 
     if (anchor) {
       // 往上补了内容：保持当前正在看的那一段不动
@@ -1992,6 +2010,7 @@
 
       case 'run_end':
         S.running = false;
+        S.pendingEcho = null;
         notifyPageTask(false);
         stopLivePolling();
         syncLiveCursor();

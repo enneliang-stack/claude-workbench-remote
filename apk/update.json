@@ -1,9 +1,9 @@
 {
-  "versionCode": 71,
-  "versionName": "2.4.30",
+  "versionCode": 72,
+  "versionName": "2.4.31",
   "apk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.21/ClaudeWorkbench-full.apk",
   "sha256": "4177f27dc3e3446f50130fb2ea3cbfc5731578247a37fc7eba2314162342e53e",
   "slimApk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/latest/download/ClaudeWorkbench-slim.apk",
-  "slimSha256": "960d2e9baa5032dbdafe8fa3eb0f0e881d67740c1bd6d32fee9b2e2f4db5aa51",
-  "notes": "2.4.30：手机页支持文字引用小框——只显示前 5 个字和出处，点开可看全文；同时更新手机端本地模式资源版本，升级后不会继续用缓存里的旧页面。完整包保持 2.4.21，已装环境直接装精简包。"
+  "slimSha256": "e5d7fd6253ae35db4309ffd46554fc20f17b780038dcd91f0cf10e01ca6ff1eb",
+  "notes": "2.4.31：内置 Tailscale 首轮连接最多等 10 秒（原 90 秒），卡住时尽早重试，第二轮仍给 60 秒；手机页修复从小窗/后台回来、任务结束后同一条用户消息重复显示在底部的问题。完整包保持 2.4.21，已装环境直接装精简包。"
 }
