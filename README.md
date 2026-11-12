@@ -11,11 +11,11 @@
 电脑端使用方式：安装 1.2.0+ 的统一客户端，侧栏「手机连接」里开启访问并复制地址；
 手机 App 粘贴地址即可。同一 Wi-Fi 不需要 Tailscale 账号。
 
-## 最新 APK（2.4.51 精简 / 2.4.21 完整）
+## 最新 APK（2.4.51 精简 / 2.4.51 完整）
 
-- 完整包（新用户/未装环境）：`ClaudeWorkbench-full.apk`，2.4.21，约 194 MB
-  SHA-256：`4177f27dc3e3446f50130fb2ea3cbfc5731578247a37fc7eba2314162342e53e`
-  下载：`https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.21/ClaudeWorkbench-full.apk`
+- 完整包（新用户/未装环境）：`ClaudeWorkbench-full.apk`，2.4.51，202,562,281 字节（约 194 MB）
+  SHA-256：`3bc07db344928c6b7b3def58f6c6bc80feeffb86e9c95faba1cfb524fe76c8eb`
+  下载：`https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.51/ClaudeWorkbench-full.apk`
 - 精简包（已装手机环境）：`ClaudeWorkbench-slim.apk`，2.4.51，约 8.2 MB
   SHA-256：`e5b477353a0ee41894170d6e589ee9bc0d70a13ed54bc95b3edd5c284ab49180`
 - 2.4.51：更新弹窗改为深色卡片；包含 2.4.50 的全部改进：手机页过程只保留思考/运行/编辑等一行摘要，不再下发工具输出和详情；头部去掉 token 数，「运行中」完整显示；推理档位默认最高；应用内选择弹层；返回键先关弹层、缓慢滑动不误触长按；主页设置卡片和状态颜色。
