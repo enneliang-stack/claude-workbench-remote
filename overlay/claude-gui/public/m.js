@@ -2426,21 +2426,10 @@
     S.pendingImages.forEach((img, i) => {
       const d = el('div', 'pending-img');
       const im = el('img');
-      im.src = img.thumb || img.preview;
+      im.src = img.preview;
       im.alt = '';
-      const isSlice = !!(img.sliceIndex && img.sliceCount);
-      const tall = !isSlice && img.h && img.w && img.h / img.w > 3;
-      if (tall) {
-        im.style.objectFit = 'contain';
-        im.style.background = '#111';
-      }
       im.onclick = () => openImageViewer(img.preview);
       d.appendChild(im);
-      if (isSlice || tall) {
-        const tag = el('span', null, isSlice ? img.sliceIndex + '/' + img.sliceCount : '长图');
-        tag.style.cssText = 'position:absolute;left:3px;bottom:3px;padding:0 4px;border-radius:4px;background:rgba(0,0,0,.68);color:#fff;font-size:9px;line-height:14px;pointer-events:none;';
-        d.appendChild(tag);
-      }
       const b = el('button', null, '×');
       b.type = 'button';
       b.title = '移除';
@@ -2569,20 +2558,6 @@
     });
   }
 
-  /** 长图切点：优先找接近空白的行，避免把一行字切成两半；找不到就在接缝处带一段重叠 */
-  /** 简单重叠切法：固定步长切开，相邻片重叠一段，保证跨接缝的内容不会丢 */
-  function findSliceRanges(iw, ih, count) {
-    const step = ih / count;
-    const overlap = Math.max(60, Math.min(200, Math.round(step * 0.12)));
-    const ranges = [];
-    for (let i = 0; i < count; i++) {
-      const sy = Math.max(0, Math.round(i * step - (i > 0 ? overlap : 0)));
-      const ey = i === count - 1 ? ih : Math.round((i + 1) * step);
-      ranges.push({ sy, sh: Math.max(1, ey - sy) });
-    }
-    return ranges;
-  }
-
   /** 从文件头读真实宽高：手机 WebView 可能把超大图解码成较小尺寸，naturalWidth 不可靠 */
   function readImageDimensions(file) {
     return new Promise(resolve => {
@@ -2635,139 +2610,52 @@
     });
   }
 
-  /** 相册图片通常很大：普通图缩到 1600px；长截屏按固定步长重叠切分，最多 5 片 */
+  /** 相册图片通常很大，先缩到 1600px 再转 JPEG；保留较小的 PNG 透明背景 */
   function readImageFile(file) {
-    const url = URL.createObjectURL(file);
-    const img = new Image();
     return new Promise((resolve, reject) => {
-      img.onload = async () => {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
         try {
-          const naturalW = img.naturalWidth || img.width;
-          const naturalH = img.naturalHeight || img.height;
-          const parsed = await readImageDimensions(file);
-          const iw = (parsed && parsed.w > 0) ? parsed.w : naturalW;
-          const ih = (parsed && parsed.h > 0) ? parsed.h : naturalH;
-          if (!iw || !ih) throw new Error('无法读取图片尺寸');
-          const long = ih > 3000 && ih / iw > 3;
-          if (!long) {
-            const one = await makeImageSlice(file, img, 0, 0, iw, ih, file.name || '图片', 0, 0, iw, ih);
-            URL.revokeObjectURL(url);
-            resolve([one]);
-            return;
-          }
-          // 先把整张长图缩小到一张工作画布，再从画布切片；避免直接裁切原始超大图在部分 WebView 上画成白图
-          let work = null;
-          if (typeof createImageBitmap === 'function') {
-            try {
-              const workW = Math.min(iw, 720);
-              const workH = Math.max(1, Math.round(ih * workW / iw));
-              const bmp = await createImageBitmap(file, {
-                resizeWidth: workW,
-                resizeHeight: workH,
-                resizeQuality: 'high'
-              });
-              const c = document.createElement('canvas');
-              c.width = workW;
-              c.height = workH;
-              c.getContext('2d').drawImage(bmp, 0, 0);
-              if (bmp.close) bmp.close();
-              work = c;
-            } catch { work = null; }
+          const maxDim = 1600;
+          const iw = img.naturalWidth || img.width;
+          const ih = img.naturalHeight || img.height;
+          const scale = Math.min(1, maxDim / Math.max(iw, ih));
+          let w = Math.max(1, Math.round(iw * scale));
+          let h = Math.max(1, Math.round(ih * scale));
+
+          const canvas = document.createElement('canvas');
+          let type = (file.type === 'image/png' && file.size <= 2.5 * 1024 * 1024)
+            ? 'image/png' : 'image/jpeg';
+          const draw = () => {
+            canvas.width = w;
+            canvas.height = h;
+            const ctx = canvas.getContext('2d');
+            if (type !== 'image/png') {
+              ctx.fillStyle = '#fff';
+              ctx.fillRect(0, 0, w, h);
+            }
+            ctx.drawImage(img, 0, 0, w, h);
+          };
+          draw();
+
+          let dataUrl = canvas.toDataURL(type, 0.85);
+          if (dataUrl.length > 4.5 * 1024 * 1024) {
+            type = 'image/jpeg';
+            w = Math.max(1, Math.round(w * 0.72));
+            h = Math.max(1, Math.round(h * 0.72));
+            draw();
+            dataUrl = canvas.toDataURL('image/jpeg', 0.7);
           }
 
-          // 去掉长图顶部/底部的纯白留边，再按内容高度切片；避免第一片/最后一片是白图
-          let topOrig = 0;
-          let bottomOrig = ih;
-          if (work) {
-            try {
-              const wctx = work.getContext('2d');
-              const wd = wctx.getImageData(0, 0, work.width, work.height).data;
-              const rowInk = (y, minCount) => {
-                const base = y * work.width * 4;
-                const need = minCount || 1;
-                let n = 0;
-                for (let x = 0; x < work.width; x += 2) {
-                  const i = base + x * 4;
-                  if (wd[i + 3] > 8 && (wd[i] < 244 || wd[i + 1] < 244 || wd[i + 2] < 244)) {
-                    n++;
-                    if (n >= need) return true;
-                  }
-                }
-                return false;
-              };
-              // 一行只有一条细边框/一两个图标不算正文；连续一段都有足够多的非白像素才是正文起点。
-              const denseInk = Math.max(4, Math.round((work.width / 2) * 0.05));
-              const runNeed = Math.max(12, Math.round(work.height * 0.012));
-              let top = 0;
-              let run = 0;
-              let foundTop = -1;
-              for (let y = 0; y < work.height; y++) {
-                if (rowInk(y, denseInk)) {
-                  run++;
-                  if (run >= runNeed) { foundTop = y - runNeed + 1; break; }
-                } else run = 0;
-              }
-              if (foundTop >= 0) top = foundTop;
-              else while (top < work.height && !rowInk(top, 1)) top++;
-              let bottom = work.height - 1;
-              run = 0;
-              let foundBottom = -1;
-              for (let y = work.height - 1; y >= 0; y--) {
-                if (rowInk(y, denseInk)) {
-                  run++;
-                  if (run >= runNeed) { foundBottom = y + runNeed - 1; break; }
-                } else run = 0;
-              }
-              if (foundBottom >= 0) bottom = foundBottom;
-              else while (bottom > top && !rowInk(bottom, 1)) bottom--;
-              if (top < bottom) {
-                topOrig = Math.round(top * ih / work.height);
-                bottomOrig = Math.max(topOrig + 1, Math.round((bottom + 1) * ih / work.height));
-              }
-            } catch { /* ignore */ }
-          }
-          const effH = Math.max(1, bottomOrig - topOrig);
-          // 尽量少切：按输出宽度不低于约 720px 计算最少切几片，最多 5 片
-          const targetW = Math.min(iw, 720);
-          const count = Math.min(5, Math.max(1, Math.ceil((targetW * effH) / (iw * 1600))));
-          const ranges = findSliceRanges(iw, effH, count).map(r => ({ sy: r.sy + topOrig, sh: r.sh }));
-          const out = [];
-          for (let i = 0; i < ranges.length; i++) {
-            const { sy, sh } = ranges[i];
-            if (sh <= 0) continue;
-            const label = (file.name || '长图') + ' (' + (i + 1) + '/' + count + ')';
-            let sx2 = 0, sy2 = sy, sw2 = iw, sh2 = sh, src = null, fullW = iw, fullH = ih;
-            if (work) {
-              sx2 = 0;
-              sy2 = Math.round(sy * work.height / ih);
-              sw2 = work.width;
-              sh2 = Math.max(1, Math.round(sh * work.height / ih));
-              src = work;
-              fullW = work.width;
-              fullH = work.height;
-            }
-            const one = await makeImageSlice(file, img, sx2, sy2, sw2, sh2, label, i + 1, count, fullW, fullH, src);
-            out.push(one);
-          }
           URL.revokeObjectURL(url);
-          if (!out.length) throw new Error('这张长截图无法处理，请裁剪成几张后再发');
-          // 只丢掉真正全白的切片；白底图只要有一点文字/图标（非白像素）都会保留
-          const MIN_KEEP_INK = 0.0001;
-          let kept = out.filter(one => (one.inkRatio == null ? 1 : one.inkRatio) >= MIN_KEEP_INK);
-          if (!kept.length) {
-            kept = out.slice().sort((a, b) => (b.inkRatio || 0) - (a.inkRatio || 0)).slice(0, 1);
-          }
-          const total = kept.length;
-          const multi = total > 1;
-          kept.forEach((one, i) => {
-            one.sliceIndex = multi ? i + 1 : 0;
-            one.sliceCount = multi ? total : 0;
-            one.name = (file.name || '长图') + ' (' + (i + 1) + '/' + total + ')';
+          const comma = dataUrl.indexOf(',');
+          resolve({
+            media_type: dataUrl.slice(5, dataUrl.indexOf(';')),
+            data: dataUrl.slice(comma + 1),
+            preview: dataUrl,
+            name: file.name || '图片'
           });
-          const nominal = Math.max(out.length, Math.min(5, Math.max(1,
-            Math.ceil((Math.min(iw, 720) * ih) / (iw * 1600)))));
-          kept[0].sliceInfo = { total: nominal, kept: total, width: iw, height: ih };
-          resolve(kept);
         } catch (e) {
           URL.revokeObjectURL(url);
           reject(e);
@@ -2781,186 +2669,10 @@
     });
   }
 
-  /** 画一张图/一片长图；长图优先让 createImageBitmap 在解码时裁剪缩放，避免 WebView 画成白图 */
-  function makeImageSlice(file, img, sx, sy, sw, sh, name, sliceIndex, sliceCount, fullW, fullH, sourceCanvas) {
-    return new Promise(async (resolve, reject) => {
-      try {
-        const sliceLong = sliceCount > 0;
-        const nw = img.naturalWidth || fullW || sw;
-        const nh = img.naturalHeight || fullH || sh;
-        // 文件头尺寸和 WebView 解码尺寸不一致时，把源坐标映射到解码后的图上
-        const fx = fullW && nw ? nw / fullW : 1;
-        const fy = fullH && nh ? nh / fullH : 1;
-        const scale = Math.min(1, 1600 / Math.max(sw, sh));
-        let w = Math.max(1, Math.round(sw * scale));
-        let h = Math.max(1, Math.round(sh * scale));
-        // 普通小 PNG 保留透明背景；长截图分片和 JPEG 用白底
-        let type = (!sliceLong && file.type === 'image/png' && file.size <= 2.5 * 1024 * 1024)
-          ? 'image/png' : 'image/jpeg';
-        const canvas = document.createElement('canvas');
-        const paint = (source, dw, dh) => {
-          canvas.width = dw;
-          canvas.height = dh;
-          const ctx = canvas.getContext('2d');
-          if (type !== 'image/png') {
-            ctx.fillStyle = '#fff';
-            ctx.fillRect(0, 0, dw, dh);
-          }
-          ctx.drawImage(source, 0, 0, dw, dh);
-        };
-        let bitmap = null;
-        if (typeof createImageBitmap === 'function') {
-          try {
-            bitmap = await createImageBitmap(file, sx, sy, sw, sh, {
-              resizeWidth: w,
-              resizeHeight: h,
-              resizeQuality: 'high'
-            });
-          } catch { bitmap = null; }
-        }
-        if (sourceCanvas) {
-          canvas.width = w;
-          canvas.height = h;
-          const ctx = canvas.getContext('2d');
-          ctx.fillStyle = '#fff';
-          ctx.fillRect(0, 0, w, h);
-          ctx.drawImage(sourceCanvas, sx, sy, sw, sh, 0, 0, w, h);
-        } else if (bitmap) paint(bitmap, w, h);
-        else {
-          canvas.width = w;
-          canvas.height = h;
-          const ctx = canvas.getContext('2d');
-          if (type !== 'image/png') {
-            ctx.fillStyle = '#fff';
-            ctx.fillRect(0, 0, w, h);
-          }
-          ctx.drawImage(img, sx * fx, sy * fy, sw * fx, sh * fy, 0, 0, w, h);
-        }
-
-        const measureInk = () => {
-          try {
-            const ctx = canvas.getContext('2d');
-            const data = ctx.getImageData(0, 0, w, h).data;
-            const stepX = Math.max(1, Math.floor(w / 64));
-            const stepY = Math.max(1, Math.floor(h / 128));
-            let total = 0;
-            let ink = 0;
-            for (let y = Math.floor(stepY / 2); y < h; y += stepY) {
-              for (let x = Math.floor(stepX / 2); x < w; x += stepX) {
-                total++;
-                const i = (y * w + x) * 4;
-                if (data[i + 3] > 8 && (data[i] < 244 || data[i + 1] < 244 || data[i + 2] < 244)) ink++;
-              }
-            }
-            return total ? ink / total : 0;
-          } catch {
-            return 1;
-          }
-        };
-
-        let inkRatio = measureInk();
-        let blank = inkRatio < 0.002;
-        if (blank && bitmap) {
-          try { bitmap.close && bitmap.close(); } catch { /* ignore */ }
-          bitmap = null;
-          canvas.width = w;
-          canvas.height = h;
-          const ctx = canvas.getContext('2d');
-          if (type !== 'image/png') {
-            ctx.fillStyle = '#fff';
-            ctx.fillRect(0, 0, w, h);
-          }
-          ctx.drawImage(img, sx * fx, sy * fy, sw * fx, sh * fy, 0, 0, w, h);
-          inkRatio = measureInk();
-          blank = inkRatio < 0.002;
-        }
-
-        let dataUrl = canvas.toDataURL(type, 0.88);
-        if (dataUrl.length > 4.5 * 1024 * 1024) {
-          type = 'image/jpeg';
-          w = Math.max(1, Math.round(w * 0.72));
-          h = Math.max(1, Math.round(h * 0.72));
-          if (sourceCanvas) {
-            canvas.width = w;
-            canvas.height = h;
-            const ctx = canvas.getContext('2d');
-            ctx.fillStyle = '#fff';
-            ctx.fillRect(0, 0, w, h);
-            ctx.drawImage(sourceCanvas, sx, sy, sw, sh, 0, 0, w, h);
-          } else if (bitmap) paint(bitmap, w, h);
-          else {
-            canvas.width = w;
-            canvas.height = h;
-            const ctx = canvas.getContext('2d');
-            ctx.fillStyle = '#fff';
-            ctx.fillRect(0, 0, w, h);
-            ctx.drawImage(img, sx * fx, sy * fy, sw * fx, sh * fy, 0, 0, w, h);
-          }
-          dataUrl = canvas.toDataURL('image/jpeg', 0.72);
-        }
-        // 分片缩略图：从顶部/中部/底部挑内容最多的一条方形带，避免缩略图只看到白色页眉
-        let thumb = null;
-        if (sliceCount > 0) {
-          try {
-            const ctx = canvas.getContext('2d');
-            const data = ctx.getImageData(0, 0, w, h).data;
-            const side = Math.max(1, Math.min(w, h));
-            const positions = h > w
-              ? [0, Math.max(0, Math.floor((h - side) / 2)), Math.max(0, h - side)]
-              : [Math.max(0, Math.floor((h - side) / 2))];
-            const scoreBand = y => {
-              let score = 0;
-              const stepX = Math.max(1, Math.floor(w / 24));
-              const stepY = Math.max(1, Math.floor(side / 24));
-              for (let yy = y; yy < Math.min(h, y + side); yy += stepY) {
-                for (let xx = 0; xx < w; xx += stepX) {
-                  const i = (yy * w + xx) * 4;
-                  if (data[i + 3] > 8 && (data[i] < 244 || data[i + 1] < 244 || data[i + 2] < 244)) score++;
-                }
-              }
-              return score;
-            };
-            let best = positions[0];
-            let bestScore = -1;
-            for (const y of positions) {
-              const s = scoreBand(y);
-              if (s > bestScore) { bestScore = s; best = y; }
-            }
-            const tc = document.createElement('canvas');
-            tc.width = 116;
-            tc.height = 116;
-            const tctx = tc.getContext('2d');
-            tctx.fillStyle = '#fff';
-            tctx.fillRect(0, 0, 116, 116);
-            if (h >= w) tctx.drawImage(canvas, 0, best, w, w, 0, 0, 116, 116);
-            else tctx.drawImage(canvas, Math.max(0, Math.floor((w - h) / 2)), 0, h, h, 0, 0, 116, 116);
-            thumb = tc.toDataURL('image/jpeg', 0.82);
-          } catch { thumb = null; }
-        }
-        if (bitmap) { try { bitmap.close && bitmap.close(); } catch { /* ignore */ } }
-        const comma = dataUrl.indexOf(',');
-        resolve({
-          media_type: dataUrl.slice(5, dataUrl.indexOf(';')),
-          data: dataUrl.slice(comma + 1),
-          preview: dataUrl,
-          thumb,
-          name,
-          w,
-          h,
-          sliceIndex,
-          sliceCount,
-          blank,
-          inkRatio
-        });
-      } catch (e) {
-        reject(e);
-      }
-    });
-  }
-
   async function addImageFiles(files) {
     const list = [...(files || [])].filter(f => f && /^image\//.test(f.type));
     if (!list.length) return;
+    let skipped = 0;
     for (const file of list) {
       try {
         // 太长的截图不在手机 WebView 里切图（容易解码成白图/丢内容）；
@@ -2971,29 +2683,15 @@
           toast(`长截图 ${dims.w}×${dims.h}：已按文件发送，模型会直接读取原图`);
           continue;
         }
-        const imgs = await readImageFile(file);
-        const multi = imgs.length > 1;
-        if (!multi && S.pendingImages.length >= MAX_PENDING_IMAGES) {
-          toast(`最多 ${MAX_PENDING_IMAGES} 张图片`, 'err');
-          continue;
-        }
-        for (const img of imgs) {
-          if (S.pendingImages.length >= 10) {
-            toast('最多 10 张图片', 'err');
-            break;
-          }
-          S.pendingImages.push(img);
-        }
+        if (S.pendingImages.length >= MAX_PENDING_IMAGES) { skipped++; continue; }
+        const img = await readImageFile(file);
+        S.pendingImages.push(img);
         renderPendingImages();
-        const info = imgs[0] && imgs[0].sliceInfo;
-        if (info) {
-          if (info.kept > 1) toast(`长截图 ${info.width}×${info.height}：已拆成 ${info.kept} 张`);
-          else if (info.total > 1) toast(`长截图 ${info.width}×${info.height}：内容合并为 1 张（空白部分已省略）`);
-        }
       } catch (e) {
         toast('图片读取失败：' + (file.name || '未知文件'), 'err');
       }
     }
+    if (skipped) toast(`最多 ${MAX_PENDING_IMAGES} 张图片，多余的已忽略`, 'err');
     updateSendState();
   }
 
