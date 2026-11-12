@@ -1,9 +1,9 @@
 {
-  "versionCode": 74,
-  "versionName": "2.4.33",
+  "versionCode": 75,
+  "versionName": "2.4.34",
   "apk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.21/ClaudeWorkbench-full.apk",
   "sha256": "4177f27dc3e3446f50130fb2ea3cbfc5731578247a37fc7eba2314162342e53e",
   "slimApk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/latest/download/ClaudeWorkbench-slim.apk",
-  "slimSha256": "db7bf8b931d4ea760849e46c4e488886a02e467eec766e1c37b840b03372c1ca",
-  "notes": "2.4.33：长截图切片改为先把整张长图缩到一张 720px 宽的工作画布，再从画布切片，修复第一张切片在部分手机上画成白图的问题；继续使用固定步长重叠切法（最多 5 片），并保留 2.4.32 的真实尺寸读取、2.4.31 的 Tailscale 10 秒重试和手机页重复消息修复。完整包保持 2.4.21，已装环境直接装精简包。"
+  "slimSha256": "7290277acc60aa765b1057a058b414a668e97b3952dc0d3832b3d72160e0ca60",
+  "notes": "2.4.34：长截图切片前先裁掉顶部/底部的纯白留边，再按内容高度用工作画布重叠切分，修复第一张切片显示成白图的问题；其余保留 2.4.33 的工作画布切片、2.4.32 的真实尺寸读取、2.4.31 的 Tailscale 10 秒重试和重复消息修复。完整包保持 2.4.21，已装环境直接装精简包。"
 }

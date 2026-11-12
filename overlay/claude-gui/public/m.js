@@ -2675,10 +2675,36 @@
             } catch { work = null; }
           }
 
+          // 去掉长图顶部/底部的纯白留边，再按内容高度切片；避免第一片/最后一片是白图
+          let topOrig = 0;
+          let bottomOrig = ih;
+          if (work) {
+            try {
+              const wctx = work.getContext('2d');
+              const wd = wctx.getImageData(0, 0, work.width, work.height).data;
+              const rowInk = y => {
+                const base = y * work.width * 4;
+                for (let x = 0; x < work.width; x += 4) {
+                  const i = base + x * 4;
+                  if (wd[i + 3] > 8 && (wd[i] < 244 || wd[i + 1] < 244 || wd[i + 2] < 244)) return true;
+                }
+                return false;
+              };
+              let top = 0;
+              while (top < work.height && !rowInk(top)) top++;
+              let bottom = work.height - 1;
+              while (bottom > top && !rowInk(bottom)) bottom--;
+              if (top < bottom) {
+                topOrig = Math.round(top * ih / work.height);
+                bottomOrig = Math.max(topOrig + 1, Math.round((bottom + 1) * ih / work.height));
+              }
+            } catch { /* ignore */ }
+          }
+          const effH = Math.max(1, bottomOrig - topOrig);
           // 尽量少切：按输出宽度不低于约 720px 计算最少切几片，最多 5 片
           const targetW = Math.min(iw, 720);
-          const count = Math.min(5, Math.max(1, Math.ceil((targetW * ih) / (iw * 1600))));
-          const ranges = findSliceRanges(iw, ih, count);
+          const count = Math.min(5, Math.max(1, Math.ceil((targetW * effH) / (iw * 1600))));
+          const ranges = findSliceRanges(iw, effH, count).map(r => ({ sy: r.sy + topOrig, sh: r.sh }));
           const out = [];
           for (let i = 0; i < ranges.length; i++) {
             const { sy, sh } = ranges[i];
