@@ -7,10 +7,10 @@ https://raw.githubusercontent.com/enneliang-stack/claude-workbench-remote/main/a
 
 读取失败时会自动尝试 ghfast.top 加速镜像。
 
-当前已准备 2.4.28（versionCode 69，精简更新）：
+当前已准备 2.4.29（versionCode 70，精简更新）：
 - 精简包：apk/release/ClaudeWorkbench-slim.apk
-  SHA-256 = a19480b003348187ed11d6b8b9a25ef3379fd45a0bedf75e4078f652ae1e8da1
-- 完整包保持 2.4.21，不重发；新用户先装 2.4.21 完整包，再装 2.4.28 精简包。
+  SHA-256 = bcc249ae3c32d96d3bea4ba12fd9a340c4ab6735719b5c5d0de2fc6bda3f918c
+- 完整包保持 2.4.21，不重发；新用户先装 2.4.21 完整包，再装 2.4.29 精简包。
 - Release asset 名保持 ClaudeWorkbench-slim.apk；完整包地址继续指向 v2.4.21。
 
 清单里的 apk 使用「最新 Release 的固定资产名」，所以以后更新只需要：

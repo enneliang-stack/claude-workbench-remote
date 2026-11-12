@@ -25,6 +25,8 @@
     conv: null,
     live: null,
     running: false,
+    needsResumeSync: false, // 后台期间可能漏 run_end：回前台/发送前要重新对齐服务器状态
+    lastResumeSyncAt: 0,
     liveEls: new Map(),     // block key -> { textEl } / { tool }
     pendingPerm: null,
     pendingAsk: null,
@@ -1998,6 +2000,39 @@
     finally { refreshing = false; }
   }
 
+  // 回到前台/重新聚焦时强制对齐一次服务器状态。
+  // 手机 WebView 在后台会暂停页面，run_end 可能整条丢掉；只靠 SSE/轮询恢复会让
+  // S.running/S.live 停在旧任务上，之后发的新消息就被当成插话挂到已完成任务底部。
+  let resumeSyncing = false;
+  async function resumeSync(force = false) {
+    if (!S.convId || resumeSyncing || document.hidden) return;
+    if (!force && Date.now() - (S.lastResumeSyncAt || 0) < 1200) return;
+    resumeSyncing = true;
+    S.lastResumeSyncAt = Date.now();
+    const id = S.convId;
+    const wasRunning = S.running;
+    try {
+      const loaded = S.conv && Array.isArray(S.conv.messages) ? S.conv.messages.length : 30;
+      // 后台期间可能完成了一整轮任务，多拉一些历史，避免回前台只看到半截。
+      const limit = Math.min(200, Math.max(60, loaded + 40));
+      const data = await api('/api/conversation?id=' + encodeURIComponent(id) +
+        '&limit=' + limit + '&light=1', { timeout: 15000 });
+      if (!S.convId || S.convId !== id) return;
+      if (!data.running) {
+        S.running = false;
+        S.live = null;
+        S.pendingEcho = null;
+        stopLivePolling();
+        closeStopConfirm();
+        setRunProgress('', '');
+        if (wasRunning) notifyPageTask(false);
+      }
+      renderConversation(data);
+      S.needsResumeSync = false;
+    } catch { /* 网络没恢复：保留状态，发送时还有 steer→chat 兜底 */ }
+    finally { resumeSyncing = false; }
+  }
+
   // SSE 在手机网络/内置 Tailscale 代理上偶尔会「连接还在、事件不到」，
   // 又不会触发 onerror。运行中额外轮询实时快照，保证阶段总结和状态能更新。
   let livePollTimer = null;
@@ -2567,7 +2602,9 @@
     S.sending = true;
     const btn = $('#sendBtn');
     btn.disabled = true;
-    const wasRunning = S.running;
+    // 从后台回来直接发消息：先对一次服务器状态，避免把新消息当成旧任务的插话。
+    if (S.needsResumeSync) await resumeSync(true);
+    let wasRunning = S.running;
     let sentSteer = wasRunning;
     const sendConvId = S.convId;
     try {
@@ -2614,6 +2651,13 @@
           await api('/api/steer', { method: 'POST', body, timeout: 120000 });
         } catch (e) {
           if (e.notRunning || /刚刚结束/.test(e.message)) {
+            // 后台期间旧 run_end 丢了：先把旧 live 清掉并补回历史，再按新消息发送，
+            // 否则新气泡会被挂到已完成任务的 liveTurn 底部。
+            await resumeSync(true);
+            S.running = false;
+            S.live = null;
+            S.needsResumeSync = false;
+            renderMessages(true);
             await api('/api/chat', { method: 'POST', body, timeout: 120000 });
             sentSteer = false;
             S.running = true;
@@ -3194,7 +3238,14 @@
     $('#reconnectBtn').onclick = () => location.reload();
     $('#reconnectBtn2').onclick = () => location.reload();
     window.addEventListener('online', () => { if (!S.conn) hardReconnect(); });
-    window.addEventListener('pageshow', () => { if (!S.conn) hardReconnect(); });
+    window.addEventListener('pageshow', () => {
+      if (!S.conn) hardReconnect();
+      if (S.convId) void resumeSync(true);
+    });
+    window.addEventListener('pagehide', () => { S.needsResumeSync = true; });
+    window.addEventListener('focus', () => {
+      if (S.convId && !document.hidden) void resumeSync();
+    });
     $('#downloadsBtn').onclick = openDownloadsSheet;
     $('#downloadsClose').onclick = closeDownloadsSheet;
     $('#downloadsSheet').addEventListener('click', e => {
@@ -3256,12 +3307,16 @@
     });
 
     document.addEventListener('visibilitychange', () => {
-      if (document.hidden) return;
+      if (document.hidden) {
+        S.needsResumeSync = true;
+        return;
+      }
       if (!S.conn) hardReconnect();
       loadBoot().catch(() => {});
       if (S.convId) {
-        refreshConversation();
-        if (S.running) startLivePolling();
+        void resumeSync(true).then(() => {
+          if (S.running) startLivePolling();
+        });
       }
     });
   }

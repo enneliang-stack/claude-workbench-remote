@@ -1,9 +1,9 @@
 {
-  "versionCode": 69,
-  "versionName": "2.4.28",
+  "versionCode": 70,
+  "versionName": "2.4.29",
   "apk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.21/ClaudeWorkbench-full.apk",
   "sha256": "4177f27dc3e3446f50130fb2ea3cbfc5731578247a37fc7eba2314162342e53e",
   "slimApk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/latest/download/ClaudeWorkbench-slim.apk",
-  "slimSha256": "a19480b003348187ed11d6b8b9a25ef3379fd45a0bedf75e4078f652ae1e8da1",
-  "notes": "2.4.28：修复更新后第一次进电脑端仍失败——2.4.27 在安装前强制停掉内置 Tailscale，等于每次更新都重建连接，制造了首次连接空窗；现在不再强制停，旧代理连着的会直接复用；连接后对电脑页面探测增加 3 次重试。保留 2.4.27 的最快线路选择和返回主页不重启。完整包保持 2.4.21，已装环境直接装精简包。"
+  "slimSha256": "bcc249ae3c32d96d3bea4ba12fd9a340c4ab6735719b5c5d0de2fc6bda3f918c",
+  "notes": "2.4.29：修复 App 切到后台、任务完成后再切回来时，新发消息显示在已完成任务底部的问题——回到前台会先重新同步对话和运行状态，发送/插话前也会自动清掉过期的运行中状态。手机页同时去掉顶栏/输入区/进度按钮的实时背景模糊，降低 WebView 的 GPU 和耗电开销。完整包保持 2.4.21，已装环境直接装精简包。"
 }
