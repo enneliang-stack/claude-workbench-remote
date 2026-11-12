@@ -614,6 +614,53 @@
     scheduleProcessCollapseUpdate();
   }
 
+  function quotePreview(text) {
+    const s = String(text || '').replace(/\s+/g, ' ').trim();
+    const chars = Array.from(s);
+    return chars.slice(0, 5).join('') + (chars.length > 5 ? '…' : '');
+  }
+
+  function quoteSourceText(q) {
+    const src = String((q && q.source) || '').trim();
+    const role = q && q.role === 'user' ? '我的消息' : q && q.role === 'assistant' ? 'Claude 回复' : '';
+    return '引自「' + (src || '未知对话') + '」' + (role ? ' · ' + role : '');
+  }
+
+  function parseQuoteBlocks(text) {
+    const src = String(text || '');
+    const re = /<gui-quote>\s*\r?\n([^\n]*)\r?\n([\s\S]*?)<\/gui-quote>/g;
+    const quotes = [];
+    let out = '';
+    let last = 0;
+    let m;
+    while ((m = re.exec(src))) {
+      out += src.slice(last, m.index);
+      let meta = {};
+      try { meta = JSON.parse(m[1]) || {}; } catch { meta = {}; }
+      const t = m[2].replace(/\r\n?/g, '\n').trim();
+      if (t) quotes.push({ text: t, source: String(meta.source || ''), role: String(meta.role || '') });
+      last = re.lastIndex;
+    }
+    out += src.slice(last);
+    return { text: out.trim(), quotes };
+  }
+
+  function quoteNode(q) {
+    const box = document.createElement('details');
+    box.style.cssText = 'margin:6px 0;padding:6px 8px;border-left:2px solid rgba(229,145,99,.6);border-radius:6px;background:rgba(255,255,255,.06);';
+    const sum = document.createElement('summary');
+    sum.style.cssText = 'cursor:pointer;list-style:none;';
+    const pre = el('div', '', '“' + quotePreview(q.text) + '”');
+    pre.style.cssText = 'font-size:12px;line-height:1.45;color:#e59563;';
+    const src = el('div', '', quoteSourceText(q));
+    src.style.cssText = 'margin-top:2px;font-size:10.5px;color:rgba(255,255,255,.4);';
+    sum.append(pre, src);
+    const full = el('div', '', q.text);
+    full.style.cssText = 'margin-top:6px;white-space:pre-wrap;font-size:12px;line-height:1.5;color:rgba(255,255,255,.75);';
+    box.append(sum, full);
+    return box;
+  }
+
   function userTextInfo(text) {
     let t = String(text || '');
     let fileRef = false;
@@ -623,15 +670,20 @@
       fileRef = true;
       t = t.slice(0, idx).trim();
     }
+    let ref = false;
     const digest = window.ClaudeRefDigest;
     if (digest && typeof digest.hasBlock === 'function' && digest.hasBlock(t)) {
-      return { text: digest.stripBlock(t), ref: true, fileRef };
+      t = digest.stripBlock(t);
+      ref = true;
+    } else {
+      const re = /<gui-reference-context>[\s\S]*?<\/gui-reference-context>/;
+      if (re.test(t)) {
+        t = t.replace(re, '').trim();
+        ref = true;
+      }
     }
-    const re = /<gui-reference-context>[\s\S]*?<\/gui-reference-context>/;
-    if (re.test(t)) {
-      return { text: t.replace(re, '').trim(), ref: true, fileRef };
-    }
-    return { text: t, ref: false, fileRef };
+    const parsed = parseQuoteBlocks(t);
+    return { text: parsed.text, quotes: parsed.quotes, ref, fileRef };
   }
 
   function compactDividerNode() {
@@ -709,6 +761,7 @@
       }
       d.appendChild(grid);
     }
+    for (const q of info.quotes || []) d.appendChild(quoteNode(q));
     if (info.text) {
       const textEl = el('div', 'utext');
       textEl.innerHTML = formatText(info.text);
