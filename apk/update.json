@@ -1,9 +1,9 @@
 {
-  "versionCode": 76,
-  "versionName": "2.4.35",
+  "versionCode": 77,
+  "versionName": "2.4.36",
   "apk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.21/ClaudeWorkbench-full.apk",
   "sha256": "4177f27dc3e3446f50130fb2ea3cbfc5731578247a37fc7eba2314162342e53e",
   "slimApk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/latest/download/ClaudeWorkbench-slim.apk",
-  "slimSha256": "618076f1eaf8f38378672e62b6d14bda0d074c0e69115340c34733b822ea5b33",
-  "notes": "2.4.35：长截图顶部有状态栏或细边框时，改为按连续一段都有足够多非白像素的区域判断正文起点，避免白边裁剪卡在最上面、第一片仍是白图；完全全白的切片不再发送，白底图只要有文字或图标都会保留。其余保留 2.4.34 的工作画布与白边裁剪、2.4.33 的切片、2.4.32 的真实尺寸读取、2.4.31 的 Tailscale 10 秒重试和重复消息修复。完整包保持 2.4.21，已装环境直接装精简包。"
+  "slimSha256": "2bfa9162cf48711443c662020f62e421eca7cf55310b7f25dd8891cb5b5a4721",
+  "notes": "2.4.36：长截图不再在手机 WebView 里切图，自动按文件原样上传，模型直接读取原图，避免切图丢内容或白图；普通图片仍按图片发送。保留 2.4.35 的白边裁剪、2.4.34 的工作画布、2.4.31 的 Tailscale 10 秒重试和重复消息修复。完整包保持 2.4.21，已装环境直接装精简包。"
 }

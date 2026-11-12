@@ -2963,6 +2963,14 @@
     if (!list.length) return;
     for (const file of list) {
       try {
+        // 太长的截图不在手机 WebView 里切图（容易解码成白图/丢内容）；
+        // 直接走文件通道原样上传，模型用 Read 读原图。
+        const dims = await readImageDimensions(file);
+        if (dims && dims.w > 0 && dims.h > 3000 && dims.h / dims.w > 3) {
+          addPhoneFiles([file]);
+          toast(`长截图 ${dims.w}×${dims.h}：已按文件发送，模型会直接读取原图`);
+          continue;
+        }
         const imgs = await readImageFile(file);
         const multi = imgs.length > 1;
         if (!multi && S.pendingImages.length >= MAX_PENDING_IMAGES) {
