@@ -11,13 +11,14 @@
 电脑端使用方式：安装 1.2.0+ 的统一客户端，侧栏「手机连接」里开启访问并复制地址；
 手机 App 粘贴地址即可。同一 Wi-Fi 不需要 Tailscale 账号。
 
-## 最新 APK（2.4.75 精简 / 2.4.51 完整）
+## 最新 APK（2.4.76 精简 / 2.4.51 完整）
 
 - 完整包（新用户/未装环境）：`ClaudeWorkbench-full.apk`，2.4.51，202,562,281 字节（约 194 MB）
   SHA-256：`3bc07db344928c6b7b3def58f6c6bc80feeffb86e9c95faba1cfb524fe76c8eb`
   下载：`https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.51/ClaudeWorkbench-full.apk`
-- 精简包（已装手机环境）：`ClaudeWorkbench-slim.apk`，2.4.75，约 8.2 MB
-  SHA-256：`d1399d5223bdef51bb6198540b16c05d0c4aba0b8a9bdd090dc90f2c3f42dd69`
+- 精简包（已装手机环境）：`ClaudeWorkbench-slim.apk`，2.4.76，约 8.2 MB
+  SHA-256：`a79bc7a0bbf92fa6b1582a954db8fdaa6de26902f72b93ace344e76686f42f08`
+- 2.4.76：修复消息选字仍有系统菜单+网页工具条两个窗口；修复输入框全选后选区闪一下消失。
 - 2.4.75：输入框的复制、剪切、粘贴、全选改由 App 自己执行，修复按钮只有表面、点了没反应；消息选字不再重建系统复制项，复制恢复正常。
 - 2.4.74：修复消息选字时系统菜单和网页工具条同时出现两个窗口的问题；输入框菜单仍为复制、剪切、粘贴、全选，空输入框长按可粘贴。
 - 2.4.73：输入框菜单顺序统一为复制、剪切、粘贴、全选；空输入框或未选中文字时长按也会显示「粘贴」，可直接插入剪贴板文字；消息选字仍显示引用项。

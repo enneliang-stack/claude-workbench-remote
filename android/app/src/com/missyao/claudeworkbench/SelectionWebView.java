@@ -56,6 +56,7 @@ public class SelectionWebView extends WebView {
                 }
                 // WebView 的 onPrepare 会重新补系统项，必须在这里再补一次引用项
                 rebuildMenu(menu);
+                evaluateJavascript("window.__nativeSelectionMenu=true", null);
                 return true;
             }
 
@@ -87,7 +88,11 @@ public class SelectionWebView extends WebView {
                 }
                 if (id == MENU_SELECT_ALL) {
                     selectAllEditable();
-                    finishLater(mode);
+                    // 不能结束 ActionMode：空光标下全选是网页侧建立的选区，
+                    // 一结束菜单系统就会把选区清掉（表现为全选闪一下消失）
+                    postDelayed(() -> {
+                        try { mode.invalidate(); } catch (Exception ignored) { }
+                    }, 150);
                     return true;
                 }
                 return callback.onActionItemClicked(mode, item);
@@ -117,7 +122,15 @@ public class SelectionWebView extends WebView {
         boolean hasCopy = false;
         boolean hasSelectAll = false;
         for (int i = 0; i < menu.size(); i++) {
-            MenuItemInfo info = new MenuItemInfo(menu.getItem(i));
+            MenuItem item = menu.getItem(i);
+            int id = item.getItemId();
+            // 忽略本类上一轮加进去的项，只根据系统原始菜单判断
+            if (id == MENU_PASTE || id == MENU_COPY || id == MENU_CUT
+                    || id == MENU_SELECT_ALL || id == MENU_QUOTE
+                    || id == MENU_QUOTE_OTHER) {
+                continue;
+            }
+            MenuItemInfo info = new MenuItemInfo(item);
             if (info.isCut() || info.isPaste()) return true;
             if (info.isCopy()) hasCopy = true;
             if (info.isSelectAll()) hasSelectAll = true;
@@ -150,8 +163,13 @@ public class SelectionWebView extends WebView {
     private static void rebuildMenu(Menu menu) {
         for (int i = menu.size() - 1; i >= 0; i--) {
             MenuItem item = menu.getItem(i);
+            int id = item.getItemId();
             MenuItemInfo info = new MenuItemInfo(item);
-            if (info.isWebSearchOrShare()) menu.removeItem(item.getItemId());
+            // 清掉分享/网页搜索，以及 onCreate 时误按输入框加进来的自有项
+            if (info.isWebSearchOrShare() || id == MENU_PASTE || id == MENU_COPY
+                    || id == MENU_CUT || id == MENU_SELECT_ALL) {
+                menu.removeItem(id);
+            }
         }
         if (menu.findItem(MENU_QUOTE) == null) {
             menu.add(Menu.NONE, MENU_QUOTE, 100, "引用");
