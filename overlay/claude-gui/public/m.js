@@ -4095,6 +4095,20 @@
       }
       return true;
     };
+
+    // 输入框长按要用系统默认菜单（复制/剪切/粘贴/全选）：把当前是否点在可编辑区域同步给 App
+    const nativeSel = window.NativeSelection;
+    if (nativeSel && typeof nativeSel.setEditable === 'function') {
+      const markEditable = e => {
+        const t = e.target;
+        const editable = !!(t && t.closest && t.closest(
+          'input, textarea, [contenteditable=""], [contenteditable="true"], [contenteditable="plaintext-only"]'));
+        nativeSel.setEditable(editable);
+      };
+      document.addEventListener('touchstart', markEditable, { capture: true, passive: true });
+      document.addEventListener('mousedown', markEditable, { capture: true });
+      document.addEventListener('focusin', markEditable, { capture: true });
+    }
   }
 
   function attachMsgActions(node, m) {

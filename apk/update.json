@@ -1,10 +1,10 @@
 {
-  "versionCode": 112,
-  "versionName": "2.4.71",
+  "versionCode": 113,
+  "versionName": "2.4.72",
   "apk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.51/ClaudeWorkbench-full.apk",
   "sha256": "3bc07db344928c6b7b3def58f6c6bc80feeffb86e9c95faba1cfb524fe76c8eb",
   "slimApk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/latest/download/ClaudeWorkbench-slim.apk",
-  "slimSha256": "c6cddbdc57d5ac8f8fbdf516fdc5078379fdc61fb91a9bf37815d9d9d7f38553",
+  "slimSha256": "1cf4ae56133d7a879a900295a79d3f1aaa8fa302764b2704d948b40e60d997e1",
   "important": false,
-  "notes": "2.4.71 更新\n\n- 移除未启用的 SendUserFile 文件/图片卡片 UI 和相关传输字段，避免这个工具定义带来额外 token。\n- 保留运行中图片查看卡片和通用图片筛选：默认隐藏明显的批量/临时工作图，结果图/不确定图保留。\n- 保留工作台状态面板、计划任务保活、手机选字引用和滚动/输入法修复。\n- 手机本机页安装本包；PC 端更新客户端后重启工作台。"
+  "notes": "2.4.72 更新\n\n- 修复手机 App 输入框长按也出现「引用 / 引用至其他对话」的问题：输入框恢复系统默认的复制、剪切、粘贴、全选；只有对话消息里的长按选字才显示引用项。\n- 功能与 2.4.71 相同，已装手机环境的设备直接装精简包。"
 }

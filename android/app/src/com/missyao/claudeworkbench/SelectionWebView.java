@@ -11,15 +11,23 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 给 WebView 的系统文字选择菜单补上「引用 / 引用到其他对话」。
+ * 给 WebView 的系统文字选择菜单补上「引用 / 引用至其他对话」。
  * 网页侧通过 window.__nativeSelectionAction 接管选中文字；没有网页处理的页面不受影响。
+ * 输入框等可编辑区域保持系统默认菜单（复制/剪切/粘贴/全选），不添加引用项。
  */
 public class SelectionWebView extends WebView {
     private static final int MENU_QUOTE = 0x5E1101;
     private static final int MENU_QUOTE_OTHER = 0x5E1102;
 
+    /** 网页在 touchstart/focusin 时同步；true 表示当前操作的是输入框 */
+    private volatile boolean editableContext = false;
+
     public SelectionWebView(Context context) {
         super(context);
+    }
+
+    public void setEditableContext(boolean editable) {
+        editableContext = editable;
     }
 
     @Override
@@ -29,6 +37,7 @@ public class SelectionWebView extends WebView {
             public boolean onCreateActionMode(ActionMode mode, Menu menu) {
                 boolean ok = callback.onCreateActionMode(mode, menu);
                 if (!ok) return false;
+                if (useSystemMenu(menu)) return true;
                 rebuildMenu(menu);
                 evaluateJavascript("window.__nativeSelectionMenu=true", null);
                 return true;
@@ -38,6 +47,7 @@ public class SelectionWebView extends WebView {
             public boolean onPrepareActionMode(ActionMode mode, Menu menu) {
                 callback.onPrepareActionMode(mode, menu);
                 // WebView 的 onPrepare 会重新补系统项，必须在这里再排一次序
+                if (useSystemMenu(menu)) return true;
                 rebuildMenu(menu);
                 return true;
             }
@@ -70,7 +80,23 @@ public class SelectionWebView extends WebView {
         return super.startActionMode(wrapped, useType);
     }
 
-    /** 系统项 + 引用项重新排：复制 → 引用 → 引用到其他对话 → 其余。 */
+    /**
+     * 输入框/可编辑区域用系统原始菜单。优先看网页同步过来的状态；
+     * 老页面没有 NativeSelection 桥接时，用「剪切/粘贴」这些只在输入框出现的系统项兜底。
+     */
+    private boolean useSystemMenu(Menu menu) {
+        if (editableContext) return true;
+        for (int i = 0; i < menu.size(); i++) {
+            String title = String.valueOf(menu.getItem(i).getTitle()).toLowerCase();
+            if (title.contains("剪切") || title.contains("cut")
+                    || title.contains("粘贴") || title.contains("paste")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** 系统项 + 引用项重新排：复制 → 引用 → 引用至其他对话 → 其余。 */
     private static void rebuildMenu(Menu menu) {
         List<MenuItemInfo> keep = new ArrayList<>();
         for (int i = 0; i < menu.size(); i++) {
@@ -89,7 +115,7 @@ public class SelectionWebView extends WebView {
             if (info.isCopy()) addItem(menu, info, 0);
         }
         menu.add(Menu.NONE, MENU_QUOTE, 1, "引用");
-        menu.add(Menu.NONE, MENU_QUOTE_OTHER, 2, "引用到其他对话");
+        menu.add(Menu.NONE, MENU_QUOTE_OTHER, 2, "引用至其他对话");
         int order = 100;
         for (MenuItemInfo info : keep) {
             if (info.isCopy()) continue;
