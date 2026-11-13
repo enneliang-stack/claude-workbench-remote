@@ -191,6 +191,8 @@ public class MainActivity extends Activity {
         webView = new SelectionWebView(this);
         webView.setBackgroundColor(BG);
         webView.setVisibility(View.GONE);
+        // 长按空白处时 WebView 也会触发系统长按振动；页面本身没有长按菜单，关掉这个反馈
+        webView.setHapticFeedbackEnabled(false);
         WebSettings s = webView.getSettings();
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
@@ -2778,7 +2780,7 @@ public class MainActivity extends Activity {
         webView.evaluateJavascript(
             "(function(){" +
             "try{if(window.__workbenchBack){var r=window.__workbenchBack();if(r)return r;}}catch(e){}" +
-            "var ids=['imgViewer','confirmStop','confirmDelete','attachSheet','refSheet','chatSettings','sheet','downloadsSheet','pcFileSheet','phoneFolderPicker','optionSheet','quoteTargetSheet','msgActions','diffSheet'];" +
+            "var ids=['imgViewer','confirmStop','confirmDelete','attachSheet','refSheet','chatSettings','sheet','downloadsSheet','pcFileSheet','phoneFolderPicker','optionSheet','quoteTargetSheet','diffSheet'];" +
             "for(var i=0;i<ids.length;i++){var e=document.getElementById(ids[i]);if(e&&!e.hidden){e.hidden=true;" +
             "if(ids[i]==='imgViewer'){var im=document.getElementById('imgViewerImg');if(im)im.src='';}" +
             "return 'handled';}}" +

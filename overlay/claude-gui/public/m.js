@@ -26,6 +26,7 @@
     live: null,
     running: false,
     needsResumeSync: false, // 后台期间可能漏 run_end：回前台/发送前要重新对齐服务器状态
+    needsHistoryRender: false, // 用户在看历史时暂缓重建消息 DOM
     lastResumeSyncAt: 0,
     liveEls: new Map(),     // block key -> { textEl } / { tool }
     pendingPerm: null,
@@ -44,7 +45,6 @@
     unread: new Set(),      // 本轮结束时不在当前对话的会话 id
     todos: null,            // 最新 TodoWrite 清单
     todoOpen: false,
-    msgAction: null,        // 当前长按的消息 { text, role, source, sourceId }
     quoteTarget: null,      // 「引用至其他对话」待选择的引用
     fontScale: 'normal',
     pcPath: '',
@@ -215,8 +215,6 @@
   }
 
   // 弹层打开时压一条 history；返回键先关弹层，不直接退页面。
-  let cancelMsgPress = null;
-  let lastMsgScrollAt = 0;
   const sheetStack = [];
   let sheetObserver = null;
   let sheetHistoryCleanup = false;
@@ -263,20 +261,6 @@
     if (top.id === 'imgViewer') closeImageViewer();
     else top.hidden = true;
     return true;
-  }
-
-  function msgPreview(text) {
-    const s = String(text || '')
-      .replace(/```[\s\S]*?```/g, ' [代码] ')
-      .replace(/<gui-quote>[\s\S]*?<\/gui-quote>/g, '')
-      .replace(/^\s*\|.*\|\s*$/gm, ' ')
-      .replace(/^\s*#{1,6}\s+/gm, '')
-      .replace(/^\s*[-*+]\s+/gm, '')
-      .replace(/^\s*\d+\.\s+/gm, '')
-      .replace(/[*_~`>]/g, '')
-      .replace(/\s+/g, ' ')
-      .trim();
-    return Array.from(s).slice(0, 60).join('') + (Array.from(s).length > 60 ? '…' : '');
   }
 
   function convTime(iso) {
@@ -583,7 +567,14 @@
       readingHistory = false;
       lastScrollTop = 0;
     }
-    renderMessages(!keepScroll);
+    // 用户正在看历史时，不重建消息 DOM：重建后位置很难完全对上，
+    // 等滚回底部（或重新打开对话）再对齐，避免结束时页面跳动
+    if (keepScroll && !isNearBottom()) {
+      S.needsHistoryRender = true;
+    } else {
+      S.needsHistoryRender = false;
+      renderMessages(!keepScroll);
+    }
     renderPanels();
     if (S.running) { syncProgressFromLive(); startLivePolling(); }
     else { setRunProgress('', ''); stopLivePolling(); }
@@ -798,6 +789,29 @@
     // 重建 DOM 前记住位置：用户正在往回翻时，不要被新过程块强行拽到底部
     const wasNear = isNearBottom();
     const oldTop = box.scrollTop;
+    // 离底部的距离：用户正在看流式结论时，按这个距离跟住最终结论
+    const oldGap = box.scrollHeight - box.scrollTop - box.clientHeight;
+    const liveEl = box.querySelector('#liveTurn');
+    let liveVisible = false;
+    if (liveEl) {
+      const lr = liveEl.getBoundingClientRect();
+      const br = box.getBoundingClientRect();
+      liveVisible = lr.bottom > br.top + 1 && lr.top < br.bottom - 1;
+    }
+    // 用户正在阅读时，记下视口里第一条消息及它的屏幕位置；
+    // 回合结束时整段 DOM 会重建，只恢复 scrollTop 会因上方高度变化而跳位
+    let scrollAnchor = null;
+    if (!forceBottom && !wasNear) {
+      const boxTop = box.getBoundingClientRect().top;
+      const nodes = box.querySelectorAll('[data-mi]');
+      for (const node of nodes) {
+        const r = node.getBoundingClientRect();
+        if (r.bottom > boxTop + 1) {
+          scrollAnchor = { mi: node.dataset.mi, offset: r.top - boxTop };
+          break;
+        }
+      }
+    }
     box.innerHTML = '';
 
     if (S.conv && S.conv.hasMore) {
@@ -807,9 +821,13 @@
       box.appendChild(older);
     }
 
+    let mi = 0;
     for (const m of groupedHistory()) {
       const node = messageNode(m);
-      if (node) box.appendChild(node);
+      if (node) {
+        node.dataset.mi = String(mi++);
+        box.appendChild(node);
+      }
     }
     const live = el('div', 'live-turn');
     live.id = 'liveTurn';
@@ -836,13 +854,28 @@
     if (anchor) {
       // 往上补了内容：保持当前正在看的那一段不动
       box.scrollTop = anchor.top + (box.scrollHeight - anchor.h);
-    } else if (forceBottom || wasNear) {
+    } else if (forceBottom || wasNear || oldGap < box.clientHeight) {
+      // 离底部不足一屏：说明在看当前任务/结论，直接跟到最新内容
       maybeScroll(true);
+    } else if (liveVisible) {
+      // 正在看流式结论：保持离底部的距离，跟着最终结论走，而不是按旧 scrollTop 恢复
+      const maxTop = Math.max(0, box.scrollHeight - box.clientHeight);
+      box.scrollTop = Math.max(0, maxTop - oldGap);
+      readingHistory = false;
+      lastScrollTop = box.scrollTop;
     } else {
+      const anchorNode = scrollAnchor
+        ? box.querySelector('[data-mi="' + scrollAnchor.mi + '"]')
+        : null;
       box.scrollTop = oldTop;
+      if (anchorNode) {
+        const delta = (anchorNode.getBoundingClientRect().top - box.getBoundingClientRect().top)
+          - scrollAnchor.offset;
+        box.scrollTop = Math.max(0, box.scrollTop + delta);
+      }
       // 整段历史重建后继续保持“用户在看历史”的状态，后续状态更新不再回底
       readingHistory = true;
-      lastScrollTop = oldTop;
+      lastScrollTop = box.scrollTop;
     }
     watchOlderButton();
     scheduleProcessCollapseUpdate();
@@ -1015,7 +1048,6 @@
         d.appendChild(btn);
       }
     }
-    attachMsgActions(d, m);
     return d;
   }
 
@@ -1049,7 +1081,6 @@
     if (edits.length) wrap.appendChild(editCardNode(edits));
     // 没有分条统计时（例如旧消息没有 meta）才显示整轮合并统计。
     if (!conclusions.some(c => c.meta) && m.meta) wrap.appendChild(turnMetaNode(m.meta));
-    attachMsgActions(wrap, m);
     return wrap;
   }
 
@@ -3154,7 +3185,6 @@
       t.textContent = '';
       renderMarkdown(t, b.text || '', { streaming: true });
       d.appendChild(t);
-      attachMsgActions(d, { role: 'assistant', blocks: [b] });
       return { node: d, ref: { textEl: t, text: b.text || '', block: b } };
     }
     if (b.type === 'tool_use') {
@@ -3457,7 +3487,10 @@
         else if (ev.auto) toast('已按推荐选项自动继续');
         break;
 
-      case 'run_end':
+      case 'run_end': {
+        const msgBox = $('#messages');
+        const followLatest = msgBox &&
+          (msgBox.scrollHeight - msgBox.scrollTop - msgBox.clientHeight) < msgBox.clientHeight;
         S.running = false;
         S.pendingEcho = null;
         {
@@ -3474,11 +3507,18 @@
         setRunProgress('', '');
         updateHeader();
         updateComposer();
+        if (followLatest) {
+          requestAnimationFrame(() => {
+            const m = $('#messages');
+            if (m) m.scrollTop = m.scrollHeight;
+          });
+        }
         if (ev.error) toast(ev.error, 'err');
         else if (ev.stopped) toast('已停止');
         setTimeout(() => { if (S.convId) refreshConversation(); }, 700);
         scheduleBootRefresh();
         break;
+      }
 
       case 'error':
         setRunProgress('', '');
@@ -4031,67 +4071,6 @@
     return true;
   }
 
-  function messagePlainText(m) {
-    if (!m) return '';
-    if (m.role === 'user') {
-      const info = userTextInfo(m.text || '');
-      const quotes = (info.quotes || []).map(q => q.text).filter(Boolean).join('\n\n');
-      return [quotes, info.text].filter(x => x && x.trim()).join('\n\n');
-    }
-    return ((m.blocks || [])
-      .filter(b => b && b.type === 'text')
-      .map(b => b.text || '')
-      .filter(Boolean)).join('\n\n');
-  }
-
-  let msgActionGuardUntil = 0;
-
-  function showMsgActions(m, node) {
-    const text = messagePlainText(m);
-    if (!text.trim()) {
-      toast('这条消息没有可复制或引用的文字');
-      return;
-    }
-    S.msgAction = {
-      text,
-      node: node || null,
-      role: m.role === 'user' ? 'user' : 'assistant',
-      source: (S.conv && (S.conv.title || '新对话')) || '当前对话',
-      sourceId: (S.conv && S.conv.id) || ''
-    };
-    hideToast();
-    $('#msgActionPreview').textContent = msgPreview(text);
-    msgActionGuardUntil = Date.now() + 400;
-    $('#msgActions').hidden = false;
-  }
-
-  function closeMsgActions() {
-    $('#msgActions').hidden = true;
-    S.msgAction = null;
-  }
-
-  async function handleMsgAction(act) {
-    const a = S.msgAction;
-    closeMsgActions();
-    if (!a) return;
-    if (act === 'copy') {
-      const ok = await copyText(a.text);
-      toast(ok ? '已复制' : '复制失败', ok ? '' : 'err');
-      return;
-    }
-    if (act === 'quote') {
-      if (addPendingQuote(a)) toast('已加入引用');
-      return;
-    }
-    if (act === 'select') {
-      selectMessageText(a);
-      return;
-    }
-    if (act === 'quoteOther') {
-      openQuoteTarget(a);
-    }
-  }
-
   // ---------------------------------------------------------------- 选中文字
 
   let selBarInfo = null;
@@ -4170,34 +4149,6 @@
     watchSelToolbar();
   }
 
-  function refreshSelToolbar() {
-    const info = selectionMessageInfo();
-    if (info) placeSelToolbar(info);
-    else hideSelToolbar();
-  }
-
-  function selectMessageText(a) {
-    window.__nativeSelectionMenu = false;
-    let node = a && a.node;
-    // 打开菜单后消息列表可能刷新过，旧节点会脱离文档；按角色和开头文字找回当前节点
-    if (!node || !document.contains(node)) {
-      const role = a && a.role === 'user' ? 'user' : 'assistant';
-      const all = [...document.querySelectorAll('.msg.' + role)];
-      const needle = String((a && a.text) || '').slice(0, 40);
-      node = all.find(el => (el.innerText || '').includes(needle)) || all[all.length - 1] || null;
-    }
-    if (!node) return;
-    const target = node.querySelector('.txt, .utext') || node;
-    if (!document.contains(target)) return;
-    const range = document.createRange();
-    range.selectNodeContents(target);
-    const sel = window.getSelection();
-    if (!sel) return;
-    sel.removeAllRanges();
-    sel.addRange(range);
-    setTimeout(refreshSelToolbar, 30);
-  }
-
   async function handleSelAction(act) {
     const info = selBarInfo;
     if (!info) return;
@@ -4248,7 +4199,6 @@
       selChangeTimer = setTimeout(() => {
         const info = selectionMessageInfo();
         if (info) {
-          if (cancelMsgPress) cancelMsgPress();
           placeSelToolbar(info);
         } else {
           window.__nativeSelectionMenu = false;
@@ -4305,68 +4255,6 @@
       }
     };
     window.__nativeToast = msg => toast(msg, 'err');
-  }
-
-  function attachMsgActions(node, m) {
-    if (!node || node._msgActionsBound) return;
-    node._msgActionsBound = true;
-    node.classList.add('msg-actionable');
-    let pressTimer = null;
-    let longPressed = false;
-    let sx = 0;
-    let sy = 0;
-    const clear = () => {
-      if (pressTimer) {
-        clearTimeout(pressTimer);
-        pressTimer = null;
-      }
-      if (cancelMsgPress === clear) cancelMsgPress = null;
-    };
-    const start = e => {
-      if (e.target.closest('button, a, summary, img, .code-tools')) return;
-      if (e.type === 'mousedown' && e.button !== 0) return;
-      if (Date.now() - lastMsgScrollAt < 250) return;
-      sx = e.clientX;
-      sy = e.clientY;
-      longPressed = false;
-      clear();
-      cancelMsgPress = clear;
-      pressTimer = setTimeout(() => {
-        longPressed = true;
-        // 长按正文时优先让系统选字；已经出现选区就不再抢长按菜单
-        const sel = window.getSelection();
-        if (sel && !sel.isCollapsed && selectionMessageInfo()) {
-          refreshSelToolbar();
-          return;
-        }
-        showMsgActions(m, node);
-      }, 650);
-    };
-    const move = e => {
-      if (Math.abs(e.clientX - sx) > 4 || Math.abs(e.clientY - sy) > 4) clear();
-    };
-    const end = () => clear();
-    node.addEventListener('touchstart', start, { passive: true });
-    node.addEventListener('touchmove', move, { passive: true });
-    node.addEventListener('touchend', end);
-    node.addEventListener('touchcancel', end);
-    node.addEventListener('mousedown', start);
-    node.addEventListener('mousemove', move);
-    node.addEventListener('mouseup', end);
-    node.addEventListener('mouseleave', end);
-    node.addEventListener('contextmenu', e => {
-      if (e.target.closest('button, a, img, summary, .code-tools')) return;
-      // 正文交给系统长按选字；空白处仍弹出整条消息菜单
-      if (e.target.closest('.txt, .utext, pre, code, .md-p, .md-list, blockquote')) return;
-      e.preventDefault();
-      showMsgActions(m, node);
-    });
-    node.addEventListener('click', e => {
-      if (!longPressed) return;
-      longPressed = false;
-      e.preventDefault();
-      e.stopPropagation();
-    }, true);
   }
 
   function openQuoteTarget(q) {
@@ -4692,6 +4580,11 @@
     btn.disabled = true;
     // 从后台回来直接发消息：先对一次服务器状态，避免把新消息当成旧任务的插话。
     if (S.needsResumeSync) await resumeSync(true);
+    // 之前在看历史时暂缓了历史重建，发送前先对齐，避免新任务接在旧流式内容后面
+    if (S.needsHistoryRender) {
+      S.needsHistoryRender = false;
+      renderMessages(true);
+    }
     let wasRunning = S.running;
     let sentSteer = wasRunning;
     const sendConvId = S.convId;
@@ -4854,10 +4747,16 @@
   let lastScrollTop = 0;
   // 用户主动上滑看历史后，状态更新不要把人拽回底部
   let readingHistory = false;
+  // 只有手指真正滑动/滚轮时才判断“在看历史”，避免流式内容重排的滚动被误判
+  let lastUserScrollAt = 0;
 
   /** 用户手指刚碰过消息区，短时间内不要自动回到底部，避免和滑动抢 */
   function holdAutoScroll() {
     scrollHoldUntil = Date.now() + 1200;
+  }
+
+  function markUserScroll() {
+    lastUserScrollAt = Date.now();
   }
 
   function maybeScroll(force) {
@@ -5456,15 +5355,6 @@
     $('#refSheet').addEventListener('click', e => {
       if (e.target === $('#refSheet')) closeRefSheet();
     });
-    const msgActions = $('#msgActions');
-    if (msgActions) msgActions.addEventListener('click', e => {
-      if (e.target === msgActions) {
-        if (Date.now() < msgActionGuardUntil) return;
-        return closeMsgActions();
-      }
-      const b = e.target.closest('[data-act]');
-      if (b) handleMsgAction(b.dataset.act);
-    });
     const quoteTargetClose = $('#quoteTargetClose');
     if (quoteTargetClose) quoteTargetClose.onclick = closeQuoteTarget;
     const quoteTargetSearch = $('#quoteTargetSearch');
@@ -5527,15 +5417,23 @@
     });
 
     $('#messages').addEventListener('touchstart', holdAutoScroll, { passive: true });
-    $('#messages').addEventListener('wheel', holdAutoScroll, { passive: true });
+    $('#messages').addEventListener('touchmove', markUserScroll, { passive: true });
+    $('#messages').addEventListener('wheel', e => {
+      holdAutoScroll();
+      markUserScroll();
+    }, { passive: true });
     $('#messages').addEventListener('scroll', () => {
-      lastMsgScrollAt = Date.now();
       const m = $('#messages');
       const top = m.scrollTop;
-      if (top < lastScrollTop - 3 && !isNearBottom()) readingHistory = true;
-      else if (isNearBottom()) readingHistory = false;
+      if (Date.now() - lastUserScrollAt < 1200) {
+        if (top < lastScrollTop - 3 && !isNearBottom()) readingHistory = true;
+      }
+      if (isNearBottom()) readingHistory = false;
       lastScrollTop = top;
-      if (cancelMsgPress) cancelMsgPress();
+      if (S.needsHistoryRender && isNearBottom()) {
+        S.needsHistoryRender = false;
+        renderMessages(true);
+      }
     }, { passive: true });
     $('#messages').addEventListener('scroll', () => {
       scheduleProcessCollapseUpdate();
@@ -5585,7 +5483,6 @@
         closeDownloadsSheet();
         closeStatusSheet();
         closePcFileSheet();
-        closeMsgActions();
         closeQuoteTarget();
         closeDiffSheet();
         closeOptionPicker();
