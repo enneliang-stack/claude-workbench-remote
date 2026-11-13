@@ -188,7 +188,7 @@ public class MainActivity extends Activity {
         root.addView(homeView, new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        webView = new WebView(this);
+        webView = new SelectionWebView(this);
         webView.setBackgroundColor(BG);
         webView.setVisibility(View.GONE);
         WebSettings s = webView.getSettings();

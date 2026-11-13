@@ -1,10 +1,10 @@
 {
-  "versionCode": 100,
-  "versionName": "2.4.59",
+  "versionCode": 111,
+  "versionName": "2.4.70",
   "apk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.51/ClaudeWorkbench-full.apk",
   "sha256": "3bc07db344928c6b7b3def58f6c6bc80feeffb86e9c95faba1cfb524fe76c8eb",
   "slimApk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/latest/download/ClaudeWorkbench-slim.apk",
-  "slimSha256": "1eb5be70e0dc826a96cadf58e0f0aa65c47c9dbe044d81c044129631e658a5c0",
+  "slimSha256": "7d5ed8708947bff70d4143c3646b8d26cd5d335c40ce2783d30d6a6f60400c8e",
   "important": false,
-  "notes": "2.4.59：普通更新。上下文压缩分隔线改为两侧细横线 + 中间文字，文字和线留间距；包含 2.4.58 的网络切换重连修复、2.4.57 的重要更新提醒修复和 2.4.56 的全部手机页改进。手机本机页安装本包；PC 远程页刷新即可。"
+  "notes": "2.4.70 更新\n\n- 新增运行中图片卡片：支持缩略图、多图布局、查看器左右切换和缩放。\n- 图片查看卡片增加通用筛选：默认隐藏批量/临时工作图，结果图和不确定图保留。\n- 手机页：长按选中文字可复制/引用/引用到其他对话；系统选择菜单增加引用项；上滑看历史时状态更新不再拉回底部；引用窗口不自动弹输入法；思考进度最多 50 字。\n- 新增工作台状态面板：计划任务、代理/子任务、Git/Worktree；计划任务保活和托盘退出提醒。\n- SendUserFile 默认关闭，避免每次请求多约 768 input token；需要文件交付卡片可设置环境变量。\n- 手机本机页对应本 APK；PC 端更新客户端后重启工作台。"
 }

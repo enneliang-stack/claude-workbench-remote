@@ -14,7 +14,7 @@
 <link rel="apple-touch-icon" href="/icon-180.png">
 <link rel="icon" href="/icon-192.png" type="image/png">
 <title>Claude Code 工作台</title>
-<link rel="stylesheet" href="/m.css?v=20261113j">
+<link rel="stylesheet" href="/m.css?v=20261113q">
 </head>
 <body>
 <div id="app">
@@ -28,6 +28,7 @@
       </div>
       <div class="hd-right">
         <button id="balanceBtn" class="balance-btn" type="button" title="查看 DeepSeek 余额">¥ --</button>
+        <button id="statusBtn" class="icon-btn" type="button" title="工作台状态" aria-label="工作台状态">▤</button>
         <button id="refreshBtn" class="icon-btn" title="刷新">↻</button>
         <button id="newBtn" class="new-btn" title="新对话">＋</button>
       </div>
@@ -228,14 +229,35 @@
     </div>
   </div>
 
+  <div id="statusSheet" class="sheet" hidden>
+    <div class="sheet-card" role="dialog" aria-modal="true" aria-label="工作台状态">
+      <header class="sheet-hd">
+        <b>工作台状态</b>
+        <div class="sheet-hd-actions">
+          <button id="statusRefresh" class="icon-btn" type="button" title="刷新">↻</button>
+          <button id="statusClose" class="icon-btn" type="button" title="关闭">×</button>
+        </div>
+      </header>
+      <div class="sheet-note" id="statusNote">计划任务 · 代理 · 工作区</div>
+      <div id="statusBody" class="status-body"></div>
+    </div>
+  </div>
+
   <div id="msgActions" class="sheet action-sheet" hidden>
     <div class="action-card" role="dialog" aria-modal="true" aria-label="消息操作">
       <div id="msgActionPreview" class="action-preview"></div>
       <button type="button" class="action-item" data-act="copy"><span class="action-ico">⧉</span>复制</button>
       <button type="button" class="action-item" data-act="quote"><span class="action-ico">❝</span>引用</button>
+      <button type="button" class="action-item" data-act="select"><span class="action-ico">⌶</span>选择文字</button>
       <button type="button" class="action-item" data-act="quoteOther"><span class="action-ico">↗</span>引用至其他对话</button>
       <button type="button" class="action-item muted" data-act="cancel">取消</button>
     </div>
+  </div>
+
+  <div id="selToolbar" class="sel-toolbar" hidden>
+    <button type="button" data-sel="copy">复制</button>
+    <button type="button" data-sel="quote">引用</button>
+    <button type="button" data-sel="quoteOther">引用到其他对话</button>
   </div>
 
   <div id="quoteTargetSheet" class="sheet" hidden>
@@ -285,6 +307,6 @@
 </div>
 <script>window.__GUI_TOKEN__ = "__TOKEN__";</script>
 <script src="/ref-digest.js?v=20261112n"></script>
-<script src="/m.js?v=20261113i"></script>
+<script src="/m.js?v=20261113q"></script>
 </body>
 </html>

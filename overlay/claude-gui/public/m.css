@@ -216,6 +216,109 @@ button { -webkit-tap-highlight-color: transparent; }
 .msg.assistant img {
   max-width: 100%; border-radius: 10px; display: block; margin-top: 6px;
 }
+.msg.assistant img.md-image {
+  max-width: min(100%, 320px);
+  max-height: 240px;
+  width: auto; height: auto;
+  margin: 8px 0 3px;
+  border-radius: 8px;
+  cursor: zoom-in;
+}
+.md-image-grid {
+  display: flex; flex-wrap: wrap; gap: 8px;
+  margin: 8px 0 4px;
+  align-items: flex-start;
+}
+.msg.assistant .md-image-grid img.md-image {
+  flex: 0 0 auto;
+  margin: 0;
+  max-width: calc(50% - 4px);
+  max-height: 120px;
+}
+.msg.assistant .md-image-grid.n3 img.md-image {
+  max-width: calc(33.333% - 6px);
+  max-height: 90px;
+}
+.md-image-more { color: var(--faint); font-size: 12px; padding: 2px 0; }
+.image-view {
+  margin: 8px 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  overflow: hidden;
+}
+.image-view-head {
+  display: flex; align-items: center; gap: 8px;
+  width: 100%; padding: 8px 10px;
+  border: 0; background: none;
+  text-align: left; font-size: 12px; color: var(--muted);
+  user-select: none;
+}
+.image-view-chev {
+  flex: 0 0 auto; color: var(--faint);
+  font-size: 16px; line-height: 1;
+  transition: transform .15s;
+}
+.image-view.open .image-view-chev { transform: rotate(90deg); }
+.image-view-ico { flex: 0 0 auto; display: flex; color: var(--faint); }
+.image-view-ico svg { width: 15px; height: 15px; }
+.image-view-title { color: var(--muted); }
+.image-view-thumbs {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  padding: 0 10px 10px;
+}
+.image-view-thumb {
+  display: block;
+  width: 64px; height: 48px;
+  object-fit: cover;
+  border-radius: 5px;
+  background: #000;
+}
+.send-file {
+  margin: 8px 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  overflow: hidden;
+}
+.send-file-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px;
+  font-size: 12px; color: var(--muted);
+}
+.send-file-ico { flex: 0 0 auto; display: flex; color: var(--faint); }
+.send-file-ico svg { width: 15px; height: 15px; }
+.send-file-title { color: var(--muted); }
+.send-file-badge {
+  margin-left: auto; padding: 1px 6px;
+  border: 1px solid #4a3324; border-radius: 999px;
+  color: var(--accent); font-size: 10px;
+}
+.send-file-images {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  padding: 0 10px 10px;
+}
+.msg.assistant img.send-file-image {
+  display: block;
+  max-width: min(100%, 320px);
+  max-height: 240px;
+  margin: 0;
+  border-radius: 8px;
+  background: #000;
+  cursor: zoom-in;
+}
+.msg.assistant .send-file-images.n2 img.send-file-image { max-width: calc(50% - 3px); max-height: 120px; }
+.msg.assistant .send-file-images.n3 img.send-file-image { max-width: calc(33.333% - 4px); max-height: 90px; }
+.send-file-list { display: flex; flex-direction: column; gap: 6px; padding: 0 10px 10px; }
+.send-file-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.send-file-row .send-file-ico svg { width: 14px; height: 14px; }
+.send-file-name { flex: 0 0 auto; font-size: 12px; color: var(--muted); }
+.send-file-path {
+  flex: 1; min-width: 0;
+  font-size: 11px; color: var(--faint);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.send-file-caption { padding: 0 10px 10px; color: var(--faint); font-size: 12px; line-height: 1.5; }
 .msg.user .user-images {
   display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px;
   margin-bottom: 7px;
@@ -750,6 +853,47 @@ details.process[open] > summary::before { content: "▾"; }
 .sheet-hd b { font-size: 15px; }
 .sheet-hd .icon-btn { margin-left: auto; }
 .sheet-note { padding: 0 16px 8px; color: var(--faint); font-size: 12px; }
+.sheet-hd-actions { margin-left: auto; display: flex; gap: 4px; }
+.sheet-hd-actions .icon-btn { margin-left: 0; }
+#statusBtn { position: relative; }
+.status-body {
+  flex: 1; min-height: 0; overflow-y: auto;
+  padding: 0 14px calc(12px + var(--safe-bottom));
+  display: flex; flex-direction: column; gap: 6px;
+}
+.status-group {
+  margin: 10px 2px 2px;
+  font-size: 10.5px; letter-spacing: .8px;
+  color: var(--faint);
+}
+.status-row {
+  display: flex; align-items: flex-start; gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line); border-radius: 10px;
+  background: var(--panel-2);
+}
+.status-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.status-title {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 12.5px; color: var(--text); min-width: 0;
+}
+.status-title b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.status-desc {
+  font-size: 11.5px; color: var(--muted);
+  overflow: hidden; display: -webkit-box;
+  -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+}
+.status-meta {
+  font-size: 10.5px; color: var(--faint);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.status-badge {
+  flex: 0 0 auto; font-size: 10px;
+  padding: 1px 5px; border-radius: 99px;
+  border: 1px solid var(--line); color: var(--faint);
+}
+.status-badge.bad { color: var(--red); border-color: #5a2a2a; }
+.status-empty { padding: 8px 10px; color: var(--faint); font-size: 12px; line-height: 1.5; }
 .folder-list { overflow-y: auto; padding: 0 10px; min-height: 60px; }
 .folder-pick {
   width: 100%; text-align: left; border: 0; background: transparent;
@@ -1038,6 +1182,30 @@ body { line-height: 1.58; }
 /* 引用 chip */
 .quote-chip { border-color: #4a3324; background: rgba(224, 138, 95, .07); color: #f0c9a8; }
 .quote-chip .quote-ic { flex: 0 0 auto; color: var(--accent); font-size: 13px; }
+
+/* 消息文字选择：长按由系统接管，工具条负责复制/引用选中段 */
+.msg .txt, .msg .utext, .msg .md-p, .msg .md-list, .msg .md-list li,
+.msg .txt pre, .msg .txt code, .msg .txt blockquote,
+.msg .utext pre, .msg .utext code, .msg .utext blockquote {
+  -webkit-user-select: text; user-select: text;
+  -webkit-touch-callout: default;
+}
+.sel-toolbar {
+  position: fixed; z-index: 1200;
+  display: flex; align-items: center; gap: 2px;
+  padding: 4px; border-radius: 12px;
+  background: rgba(32, 37, 45, .98);
+  border: 1px solid #3a424e;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .35);
+  transform: translate(-50%, -100%);
+  white-space: nowrap;
+}
+.sel-toolbar.below { transform: translate(-50%, 0); }
+.sel-toolbar button {
+  border: 0; background: transparent; color: var(--text);
+  padding: 7px 10px; border-radius: 8px; font-size: 12.5px;
+}
+.sel-toolbar button:active { background: var(--panel-2); }
 
 /* 消息长按菜单 */
 .action-sheet { align-items: flex-end; }

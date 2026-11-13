@@ -14,11 +14,20 @@ const fsp = fs.promises;
 const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
+const { fileURLToPath } = require('url');
 const { spawn, execFile } = require('child_process');
 
 const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, 'public');
 const DATA_DIR = path.join(ROOT, 'data');
+const TOOL_IMAGE_DIR = path.join(DATA_DIR, 'tool-images');
+const TOOL_IMAGE_MAX_PER_RESULT = 4;
+const TOOL_IMAGE_MAX_CARDS_PER_RUN = 8;
+const TOOL_IMAGE_BURST_WINDOW_MS = 25000;
+const TOOL_IMAGE_BURST_MAX = 4;
+const TOOL_IMAGE_MAX_BYTES = 8 * 1024 * 1024;
+const TOOL_IMAGE_MAX_FILES = 400;
+const TOOL_IMAGE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const STATE_FILE = path.join(DATA_DIR, 'state.json');
 const TURN_META_FILE = path.join(DATA_DIR, 'turn-meta.json');
 const HOME = os.homedir();
@@ -115,9 +124,7 @@ const ASK_GUIDE = [
   '否则不要向用户提问，自行选择合理默认值并在结果里说明。',
   '必须使用 AskUserQuestion 时：把推荐选项放在第一个；在 header 开头标注【重要】',
   '（方向性/不可逆决策，必须等用户回答）或【次要】（小问题，用户未及时回答就按第一个选项继续）。',
-  '只要本轮需要调用工具，就在第一次调用工具前用正文（用户可见）写一句不超过 20 字的中文说明要做什么；',
-  '之后每完成一个关键阶段或准备收尾时再说一句，不要每个工具调用都说，也不要把进度只写进思考；',
-  '不需要工具的纯问答不用写。子代理直接返回结果，不用写这类短话。'
+  '过程提示用中文，一句话不超过 20 字；只在开始和关键阶段说，也不要把进度只写进思考。'
 ].join('');
 
 // 聊天图片（粘贴的截图）限制。Claude API 的 5MB 限制算的是 base64 之后的大小。
@@ -463,6 +470,168 @@ function sniffImageType(buf) {
   return null;
 }
 
+const TOOL_IMAGE_EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif' };
+const toolImageHistoryCache = new Map();
+
+// 通用工作图特征：批量帧、缩略图、临时/缓存目录；不绑定具体业务或工具。
+const IMAGE_WORK_PATH_RE = /(^|[/\\])(frames?|tiles?|sprites?|thumbs?|thumbnails?|contact[-_]?sheets?)([/\\]|$)|(?:^|[/\\])frame[-_]?\d+/i;
+const IMAGE_TEMP_PATH_RE = /(^|[/\\])(temp|tmp|cache|\.cache|node_modules)([/\\]|$)/i;
+const IMAGE_WORK_TOOL_RE = /(frame|video|extract|thumbnail|sprite|tile|contact[-_]?sheet)/i;
+const IMAGE_RESULT_TOOL_RE = /(screenshot|capture|browser|playwright|preview|render|snapshot|screen)/i;
+
+/** 从工具参数里找图片路径；不同 MCP 工具命名不统一，只取常见的路径字段。 */
+function inputImagePaths(input) {
+  const out = [];
+  if (!input || typeof input !== 'object') return out;
+  const one = v => {
+    if (typeof v === 'string' && v.trim()) out.push(v.trim());
+  };
+  for (const k of [
+    'file_path', 'path', 'filename', 'image_path', 'imagePath',
+    'output_path', 'outputPath', 'save_path', 'savePath',
+    'target_path', 'targetPath', 'screenshot_path', 'screenshotPath'
+  ]) one(input[k]);
+  for (const k of ['files', 'paths', 'images']) {
+    const arr = input[k];
+    if (!Array.isArray(arr)) continue;
+    for (const v of arr) {
+      if (typeof v === 'string') one(v);
+      else if (v && typeof v === 'object') {
+        one(v.path);
+        one(v.file_path);
+        one(v.filename);
+      }
+    }
+  }
+  return out;
+}
+
+function statImagePath(p, cwd) {
+  try {
+    if (typeof p !== 'string' || !p.trim()) return null;
+    if (/^(\\\\|\/\/)/.test(p.trim())) return null;
+    const full = path.isAbsolute(p.trim()) ? p.trim() : path.resolve(cwd || HOME, p.trim());
+    const st = fs.statSync(full);
+    return st.isFile() ? { mtimeMs: st.mtimeMs, path: full } : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 判断一张工具结果图是“工作图”还是“结果/验收图”。
+ * 只看已有元数据：工具名、参数里的路径、图片数量、本轮开始时间和文件修改时间，
+ * 不调用模型；不确定时返回 unknown，界面默认保留。
+ */
+function classifyToolImage(block, images, turnStart, cwd) {
+  const name = String((block && block.name) || '');
+  const input = (block && block.input) || {};
+  const paths = inputImagePaths(input);
+  const stats = paths.map(p => statImagePath(p, cwd)).filter(Boolean);
+  const newest = stats.length ? Math.max(...stats.map(s => s.mtimeMs)) : 0;
+  const start = Number(turnStart) || 0;
+  const isNew = !!(newest && start && newest >= start - 120000);
+  const pathText = paths.join(' ') + ' ' + stats.map(s => s.path).join(' ');
+
+  if (IMAGE_WORK_TOOL_RE.test(name) || IMAGE_WORK_PATH_RE.test(pathText)) return 'working';
+  if (IMAGE_TEMP_PATH_RE.test(pathText) && (!isNew || images.length > 1)) return 'working';
+  if (isNew) return 'result';
+  if (IMAGE_RESULT_TOOL_RE.test(name)) return 'result';
+  if (newest && start && newest < start - 120000) return 'working';
+  return 'unknown';
+}
+
+function toolResultImages(content) {
+  if (!Array.isArray(content)) return [];
+  const picked = [];
+  let count = 0;
+  for (const b of content) {
+    if (!b || b.type !== 'image') continue;
+    const src = b.source && b.source.type === 'base64' ? b.source : null;
+    const mediaType = (src && src.media_type) || b.mime_type || b.mimeType || '';
+    const data = (src && src.data) || b.data || '';
+    if (!TOOL_IMAGE_EXT[mediaType] || typeof data !== 'string' || !data) continue;
+    count += 1;
+    if (count > TOOL_IMAGE_MAX_PER_RESULT) return [];
+    if (data.length * 3 / 4 > TOOL_IMAGE_MAX_BYTES) continue;
+    picked.push({ media_type: mediaType, data });
+  }
+  return picked;
+}
+
+function saveToolImage(img) {
+  try {
+    const buf = Buffer.from(String(img.data || ''), 'base64');
+    if (!buf.length) return null;
+    const type = sniffImageType(buf);
+    if (!type) return null;
+    const ext = TOOL_IMAGE_EXT[type];
+    if (!ext) return null;
+    const name = crypto.createHash('sha1').update(buf).digest('hex').slice(0, 20) + '.' + ext;
+    const file = path.join(TOOL_IMAGE_DIR, name);
+    if (!fs.existsSync(file)) {
+      fs.mkdirSync(TOOL_IMAGE_DIR, { recursive: true });
+      fs.writeFileSync(file, buf);
+    }
+    return { url: '/api/tool-image?name=' + name, media_type: type };
+  } catch (e) {
+    console.error('[image] 保存工具图片失败：' + e.message);
+    return null;
+  }
+}
+
+function pruneToolImages() {
+  try {
+    if (!fs.existsSync(TOOL_IMAGE_DIR)) return;
+    const now = Date.now();
+    const files = [];
+    for (const name of fs.readdirSync(TOOL_IMAGE_DIR)) {
+      if (!/^[a-f0-9]{20}\.(png|jpg|webp|gif)$/.test(name)) continue;
+      const file = path.join(TOOL_IMAGE_DIR, name);
+      try {
+        const st = fs.statSync(file);
+        files.push({ file, mtime: st.mtimeMs });
+      } catch { /* ignore */ }
+    }
+    files.sort((a, b) => a.mtime - b.mtime);
+    let keep = files.filter(f => now - f.mtime <= TOOL_IMAGE_MAX_AGE_MS);
+    if (keep.length > TOOL_IMAGE_MAX_FILES) keep = keep.slice(keep.length - TOOL_IMAGE_MAX_FILES);
+    const keepSet = new Set(keep.map(f => f.file));
+    for (const f of files) {
+      if (keepSet.has(f.file)) continue;
+      try { fs.unlinkSync(f.file); } catch { /* ignore */ }
+    }
+  } catch (e) {
+    console.error('[image] 清理工具图片失败：' + e.message);
+  }
+}
+
+const LOCAL_IMAGE_TYPES = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif']);
+const MAX_LOCAL_IMAGE_BYTES = 20 * 1024 * 1024;
+
+function resolveLocalImagePath(raw, conv) {
+  let p = String(raw || '').trim();
+  if (!p) return null;
+  if (p.startsWith('<') && p.endsWith('>')) p = p.slice(1, -1).trim();
+  if (p.includes('\0')) return null;
+  if (/^file:\/\//i.test(p)) {
+    try { p = fileURLToPath(p); } catch { return null; }
+  }
+  if (process.platform === 'win32') {
+    p = p.replace(/\//g, '\\');
+    if (/^\\[a-zA-Z]:\\/.test(p)) p = p.slice(1);
+    // 拒绝 UNC / 设备路径，避免模型输出触发 SMB 或设备访问
+    if (/^\\\\/.test(p)) return null;
+  } else if (/^\/\//.test(p)) {
+    return null;
+  }
+  if (!path.isAbsolute(p)) {
+    if (!conv || !conv.cwd) return null;
+    p = path.resolve(conv.cwd, p);
+  }
+  return path.normalize(p);
+}
+
 /** 校验并规范化前端传来的图片数组：[{ media_type, data(base64) }] */
 function validateImages(raw) {
   if (raw == null) return [];
@@ -545,6 +714,9 @@ function spawnClaude(args, cwd) {
       // 压缩会用满 32k 输出预算，DeepSeek 会返回 400；降到 900K 后留出约 148K 余量。
       // 真正的轮内兜底在客户端：930K 停止本轮并手动压缩。
       CLAUDE_CODE_AUTO_COMPACT_WINDOW: '900000'
+      // SendUserFile 工具默认不开启：它的工具定义会让每次请求多约 768 个 input token。
+      // 需要文件交付卡片时，用户可在系统环境变量里设 CLAUDE_CODE_ATTACHMENTS_BY_PATH=1，
+      // 这里会原样继承；客户端已有对应的卡片渲染。
     },
     stdio: ['pipe', 'pipe', 'pipe']
   });
@@ -1019,6 +1191,12 @@ function parseTranscript(text) {
   const toolBlocks = new Map();
   const steerSeen = new Set();
   let lastAssistant = null;
+  let lastCwd = null;
+  let gitBranch = null;
+  let cliVersion = null;
+  let turnStartTs = null;
+  let imageCardCount = 0;
+  let imageTimes = [];
   // 顺带统计压缩后的上下文占用，避免为了这个数字再完整解析一遍 JSONL
   let ctxTokens = 0;
   let compacted = false;
@@ -1027,6 +1205,9 @@ function parseTranscript(text) {
     if (!line) continue;
     let o;
     try { o = JSON.parse(line); } catch { continue; }
+    if (typeof o.cwd === 'string' && o.cwd) lastCwd = o.cwd;
+    if (typeof o.gitBranch === 'string' && o.gitBranch) gitBranch = o.gitBranch;
+    if (typeof o.version === 'string' && o.version) cliVersion = o.version;
 
     if (o.type === 'system' && o.subtype === 'compact_boundary') {
       const cm = o.compactMetadata || o.compact_metadata || {};
@@ -1077,6 +1258,8 @@ function parseTranscript(text) {
 
       if (!textPart.trim() && !images.length) continue;
       lastAssistant = null;
+      imageCardCount = 0;
+      imageTimes = [];
       messages.push({
         id: o.uuid || key,
         role: 'user',
@@ -1105,6 +1288,52 @@ function parseTranscript(text) {
             if (blk) {
               blk.result = truncate(toolResultText(b.content), 20000);
               blk.isError = !!b.is_error;
+              if (imageCardCount < TOOL_IMAGE_MAX_CARDS_PER_RUN) {
+                const ts = Date.parse(o.timestamp);
+                const hasTs = Number.isFinite(ts);
+                const recent = hasTs
+                  ? imageTimes.filter(t => ts - t <= TOOL_IMAGE_BURST_WINDOW_MS)
+                  : imageTimes;
+                if (!hasTs || recent.length < TOOL_IMAGE_BURST_MAX) {
+                  const id = b.tool_use_id;
+                  let saved = toolImageHistoryCache.get(id) || null;
+                  if (saved && !saved.every(x => {
+                    const n = String(x.url || '').split('name=')[1] || '';
+                    return n && fs.existsSync(path.join(TOOL_IMAGE_DIR, n));
+                  })) {
+                    toolImageHistoryCache.delete(id);
+                    saved = null;
+                  }
+                  if (saved) {
+                    // 旧缓存也要重新判一次，避免升级后继续展示工作图
+                    if (classifyToolImage(blk, saved, blk.turnStart || ts, lastCwd) === 'working') saved = null;
+                  } else {
+                    const toolImgs = toolResultImages(b.content);
+                    if (toolImgs.length &&
+                        classifyToolImage(blk, toolImgs, blk.turnStart || ts, lastCwd) !== 'working') {
+                      const out = [];
+                      const seen = new Set();
+                      for (const img of toolImgs) {
+                        const one = saveToolImage(img);
+                        if (one && !seen.has(one.url)) { seen.add(one.url); out.push(one); }
+                      }
+                      if (out.length) {
+                        saved = out;
+                        toolImageHistoryCache.set(id, saved);
+                        if (toolImageHistoryCache.size > 1000) {
+                          const first = toolImageHistoryCache.keys().next().value;
+                          if (first) toolImageHistoryCache.delete(first);
+                        }
+                      }
+                    }
+                  }
+                  if (saved) {
+                    blk.images = saved;
+                    imageCardCount += 1;
+                    if (hasTs) imageTimes = recent.concat(ts);
+                  }
+                }
+              }
             }
           } else if (b.type === 'text') {
             textPart += b.text || '';
@@ -1124,6 +1353,9 @@ function parseTranscript(text) {
       if (o.origin && o.origin.kind && o.origin.kind !== 'human') continue;
 
       lastAssistant = null;
+      turnStartTs = Date.parse(o.timestamp) || turnStartTs;
+      imageCardCount = 0;
+      imageTimes = [];
       const compactSummary = !hasRefContextBlock(textPart) &&
         (!!o.isCompactSummary || looksLikeCompactSummaryText(textPart));
       messages.push({
@@ -1159,7 +1391,12 @@ function parseTranscript(text) {
           entry.blocks.push({ type: 'thinking', thinking: b.thinking });
         } else if (b.type === 'tool_use') {
           if (entry.blocks.some(x => x.type === 'tool_use' && x.id === b.id)) continue;
-          const blk = { type: 'tool_use', id: b.id, name: b.name, input: b.input || {}, result: null, isError: false };
+          const blk = {
+            type: 'tool_use', id: b.id, name: b.name, input: b.input || {},
+            result: null, isError: false,
+            ts: Date.parse(entry.ts) || null,
+            turnStart: turnStartTs
+          };
           entry.blocks.push(blk);
           toolBlocks.set(b.id, blk);
         }
@@ -1176,7 +1413,10 @@ function parseTranscript(text) {
   return {
     messages: messages.filter(m => m.role === 'user' || m.blocks.length),
     contextTokens: ctxTokens,
-    compacted
+    compacted,
+    lastCwd,
+    gitBranch,
+    version: cliVersion
   };
 }
 
@@ -1283,7 +1523,10 @@ async function readTranscript(file) {
   return {
     messages: parsed.messages,
     contextTokens: parsed.contextTokens,
-    compacted: parsed.compacted
+    compacted: parsed.compacted,
+    lastCwd: parsed.lastCwd,
+    gitBranch: parsed.gitBranch,
+    version: parsed.version
   };
 }
 
@@ -1948,6 +2191,12 @@ function compactToolInput(input) {
         }
       : e);
   }
+  if (Array.isArray(input.files)) {
+    out.files = input.files.slice(0, 20).map(p => compactValue('file_path', String(p || '')));
+  }
+  for (const k of ['caption', 'display', 'status']) {
+    if (input[k] != null) out[k] = compactValue(k, String(input[k]));
+  }
   if (!Object.keys(out).length) {
     try {
       const s = JSON.stringify(input);
@@ -1970,6 +2219,7 @@ function compactToolBlock(b) {
   };
   if (b.input != null) out.input = compactToolInput(b.input);
   if (b.result != null) out.done = true;
+  if (Array.isArray(b.images) && b.images.length) out.images = b.images;
   // 手机端过程只展示一行摘要，不接收工具输出。
   return out;
 }
@@ -2032,6 +2282,16 @@ function compactLive(live) {
   return { ...live, blocks: (live.blocks || []).map(compactBlock) };
 }
 
+/** 计划任务是否还需要保持 CLI 进程存活（与状态面板、托盘提醒共用同一口径）。 */
+function isActiveScheduledTask(t, sessionId, now = Date.now()) {
+  if (!t || !t.id) return false;
+  if (t.createdBySessionId && t.createdBySessionId !== sessionId) return false;
+  if (t.recurring === false && t.lastFiredAt) return false;
+  const created = Number(t.createdAt) || 0;
+  if (t.recurring !== false && created && now - created > 7 * 24 * 3600 * 1000) return false;
+  return true;
+}
+
 class Runner {
   constructor(conv) {
     this.id = conv.id;
@@ -2052,6 +2312,12 @@ class Runner {
     this.model = conv.model || '';
     this.effort = conv.effort || '';
     this.idleTimer = null;
+    // 定时任务/自我唤醒期间不要结束 CLI 进程；否则没人发消息时任务不会触发
+    this.wakeAt = 0;
+    this.pendingWake = new Map();
+    // 非持久 Cron 任务只存在 CLI 内存里，进程被杀就没了；记下它们的有效期
+    this.pendingCron = new Map();
+    this.sessionCronIds = new Map();
     this.seq = 0;
     // 当前这轮的实时快照：切走再切回来时用它恢复正在流式输出的内容
     this.live = null;
@@ -2096,13 +2362,43 @@ class Runner {
     b.text += text;
   }
 
-  liveSetToolResult(toolUseId, content, isError) {
+  liveSetToolResult(toolUseId, content, isError, images = []) {
     if (!this.live) return;
     const b = this.live.blocks.find(x => x.type === 'tool_use' && x.id === toolUseId);
     if (!b) return;
     b.result = content;
     b.isError = !!isError;
     b.done = true;
+    if (images.length) b.images = images;
+  }
+
+  captureToolImages(content, block) {
+    if (!this.live) return [];
+    const imgs = toolResultImages(content);
+    if (!imgs.length) return [];
+    if (classifyToolImage(block, imgs, this.live.startedAt, this.cwd) === 'working') return [];
+
+    const shown = this.live.blocks.filter(x =>
+      x.type === 'tool_use' && Array.isArray(x.images) && x.images.length).length;
+    if (shown >= TOOL_IMAGE_MAX_CARDS_PER_RUN) return [];
+    const now = Date.now();
+    const times = (this.live.imageViewTimes || [])
+      .filter(t => now - t <= TOOL_IMAGE_BURST_WINDOW_MS);
+    if (times.length >= TOOL_IMAGE_BURST_MAX) return [];
+    const out = [];
+    const seen = new Set();
+    for (const img of imgs) {
+      const saved = saveToolImage(img);
+      if (saved && !seen.has(saved.url)) {
+        seen.add(saved.url);
+        out.push(saved);
+      }
+    }
+    if (out.length) {
+      times.push(now);
+      this.live.imageViewTimes = times;
+    }
+    return out;
   }
 
   /** 返回给 GET /api/conversation：客户端切回正在运行的对话时据此重建实时视图 */
@@ -2331,6 +2627,22 @@ class Runner {
       for (const b of ev.message.content || []) {
         if (b && b.type === 'tool_use') {
           const key = 'tool:' + b.id;
+          if (b.name === 'CronCreate') {
+            this.pendingCron.set(b.id, b.input || {});
+          } else if (b.name === 'CronDelete') {
+            const id = String((b.input && b.input.id) || '').trim();
+            if (id) this.sessionCronIds.delete(id);
+          }
+          if (b.name === 'ScheduleWakeup') {
+            const input = b.input || {};
+            if (input.stop) {
+              this.wakeAt = 0;
+              this.pendingWake.clear();
+            } else {
+              const delay = Number(input.delaySeconds);
+              if (delay > 0) this.pendingWake.set(b.id, Date.now() + delay * 1000 + 60 * 1000);
+            }
+          }
           if (this.live) {
             const lb = this.liveBlock(key);
             if (lb) {
@@ -2363,13 +2675,36 @@ class Runner {
       if (Array.isArray(c)) {
         for (const b of c) {
           if (b && b.type === 'tool_result') {
+            if (this.pendingWake.has(b.tool_use_id)) {
+              const at = this.pendingWake.get(b.tool_use_id);
+              this.pendingWake.delete(b.tool_use_id);
+              if (!b.is_error) this.wakeAt = Math.max(this.wakeAt, at);
+            }
             const content = truncate(toolResultText(b.content), 24000);
-            this.liveSetToolResult(b.tool_use_id, content, b.is_error);
+            if (this.pendingCron.has(b.tool_use_id)) {
+              const input = this.pendingCron.get(b.tool_use_id) || {};
+              this.pendingCron.delete(b.tool_use_id);
+              if (!b.is_error) {
+                const m = String(content || '').match(/job\s+([A-Za-z0-9_-]{4,})/i);
+                if (m) {
+                  const recurring = input.recurring !== false;
+                  this.sessionCronIds.set(m[1], {
+                    createdAt: Date.now(),
+                    expiresAt: Date.now() + (recurring ? 7 * 24 * 3600 * 1000 : 24 * 3600 * 1000)
+                  });
+                }
+              }
+            }
+            const toolBlock = this.live && this.live.blocks.find(x =>
+              x.type === 'tool_use' && x.id === b.tool_use_id) || null;
+            const images = this.captureToolImages(b.content, toolBlock);
+            this.liveSetToolResult(b.tool_use_id, content, b.is_error, images);
             this.emit({
               t: 'tool_result',
               toolUseId: b.tool_use_id,
               content,
-              isError: !!b.is_error
+              isError: !!b.is_error,
+              images: images.length ? images : undefined
             });
           }
         }
@@ -2757,14 +3092,32 @@ class Runner {
     if (this.idleTimer) { clearTimeout(this.idleTimer); this.idleTimer = null; }
   }
 
+  hasPendingScheduledWork() {
+    const now = Date.now();
+    if (this.wakeAt > now) return true;
+    for (const [id, info] of this.sessionCronIds) {
+      if (now < info.expiresAt) return true;
+      this.sessionCronIds.delete(id);
+    }
+    const data = readJsonFile(path.join(this.cwd, '.claude', 'scheduled_tasks.json'));
+    const list = data && Array.isArray(data.tasks) ? data.tasks : [];
+    return list.some(t => isActiveScheduledTask(t, this.id, now));
+  }
+
   scheduleIdleKill() {
     this.clearIdle();
-    this.idleTimer = setTimeout(() => {
-      if (!this.busy) {
-        this.kill();
-        runners.delete(this.id);
+    const check = () => {
+      this.idleTimer = null;
+      if (this.busy) return;
+      if (this.hasPendingScheduledWork()) {
+        // 还有计划任务/唤醒：保持进程，20 分钟后再检查一次
+        this.idleTimer = setTimeout(check, 20 * 60 * 1000);
+        return;
       }
-    }, 20 * 60 * 1000);
+      this.kill();
+      runners.delete(this.id);
+    };
+    this.idleTimer = setTimeout(check, 20 * 60 * 1000);
   }
 }
 
@@ -3040,6 +3393,301 @@ function localModels() {
 
 // ---------------------------------------------------------------- 路由
 
+// ---------------------------------------------------------------- 工作台状态
+
+const workbenchStatusCache = new Map();
+const WORKBENCH_STATUS_TTL = 3000;
+
+function clipStr(s, n) {
+  s = String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
+  return s.length > n ? s.slice(0, n - 1) + '…' : s;
+}
+
+async function readGitStatus(cwd) {
+  const base = { isGitRepo: false, cwd, error: null, repoRoot: '', branch: '', head: '', upstream: '', ahead: 0, behind: 0, dirty: 0, entries: [] };
+  if (!cwd || !fs.existsSync(cwd)) return { ...base, error: '目录不存在' };
+  const st = await execFileP('git', ['--no-optional-locks', '-C', cwd, 'status', '--porcelain=v2', '--branch'], {
+    timeout: 5000, maxBuffer: 1024 * 1024
+  });
+  if (!st.ok) {
+    if (/not a git repository/i.test(st.stderr)) return base;
+    if (st.code === -1 && !st.stderr) return { ...base, error: 'git 不可用' };
+    return { ...base, error: clipStr(st.stderr || st.stdout, 200) };
+  }
+
+  let branch = '';
+  let head = '';
+  let upstream = '';
+  let ahead = 0;
+  let behind = 0;
+  let dirty = 0;
+  for (const line of st.stdout.split('\n')) {
+    if (line.startsWith('# branch.head ')) branch = line.slice(14).trim();
+    else if (line.startsWith('# branch.oid ')) head = line.slice(13).trim();
+    else if (line.startsWith('# branch.upstream ')) upstream = line.slice(18).trim();
+    else if (line.startsWith('# branch.ab ')) {
+      const m = line.match(/\+(\d+)\s+-(\d+)/);
+      if (m) { ahead = Number(m[1]) || 0; behind = Number(m[2]) || 0; }
+    } else if (/^[12u?] /.test(line)) dirty += 1;
+  }
+
+  const wt = await execFileP('git', ['--no-optional-locks', '-C', cwd, 'worktree', 'list', '--porcelain'], {
+    timeout: 5000, maxBuffer: 1024 * 1024
+  });
+  const entries = [];
+  let cur = null;
+  for (const line of wt.stdout.split('\n')) {
+    if (!line.trim()) {
+      if (cur) { entries.push(cur); cur = null; }
+      continue;
+    }
+    const sp = line.indexOf(' ');
+    const key = sp < 0 ? line : line.slice(0, sp);
+    const val = sp < 0 ? '' : line.slice(sp + 1);
+    if (key === 'worktree') {
+      if (cur) entries.push(cur);
+      cur = { path: val, head: '', branch: '', detached: false, bare: false, locked: false, prunable: false };
+    } else if (cur) {
+      if (key === 'HEAD') cur.head = val;
+      else if (key === 'branch') cur.branch = val.replace(/^refs\/heads\//, '');
+      else if (key === 'detached') cur.detached = true;
+      else if (key === 'bare') cur.bare = true;
+      else if (key === 'locked') cur.locked = true;
+      else if (key === 'prunable') cur.prunable = true;
+    }
+  }
+  if (cur) entries.push(cur);
+
+  const norm = p => path.resolve(p).toLowerCase();
+  const cwdNorm = norm(cwd);
+  for (const e of entries) {
+    e.isCurrent = cwdNorm === norm(e.path) || cwdNorm.startsWith(norm(e.path) + path.sep);
+    e.isClaudeManaged = /[\\/]\.claude[\\/]worktrees[\\/]/i.test(e.path);
+  }
+  return {
+    ...base,
+    isGitRepo: true,
+    repoRoot: entries[0] ? entries[0].path : cwd,
+    branch, head, upstream, ahead, behind, dirty,
+    entries
+  };
+}
+
+/** 客户端重启后，项目里的持久计划任务需要重新挂到一个 CLI 进程上才会触发。 */
+function conversationsWithScheduledTasks() {
+  const now = Date.now();
+  const ids = new Set();
+  for (const [id, c] of Object.entries(state.conversations || {})) {
+    if (!c || !c.cwd) continue;
+    const data = readJsonFile(path.join(c.cwd, '.claude', 'scheduled_tasks.json'));
+    const list = data && Array.isArray(data.tasks) ? data.tasks : [];
+    if (list.some(t => isActiveScheduledTask(t, id, now))) ids.add(id);
+  }
+  return ids;
+}
+
+async function resumeScheduledRunners() {
+  for (const id of conversationsWithScheduledTasks()) {
+    const conv = lookupConv(id);
+    if (!conv) continue;
+    const r = runnerFor(conv);
+    if (r.child) continue;
+    try {
+      await r.ensure(conv);
+      r.scheduleIdleKill();
+    } catch (e) {
+      console.error('[schedule] 恢复计划任务失败：' + e.message);
+    }
+  }
+}
+
+async function buildWorkbenchStatus(conv) {
+  const errors = [];
+  const file = await findSessionFile(conv.id);
+  let parsed = { messages: [], lastCwd: null, gitBranch: null, version: null };
+  if (file) {
+    try { parsed = await readTranscript(file); } catch (e) { errors.push('读取会话失败：' + e.message); }
+  }
+  const statusCwd = parsed.lastCwd || conv.cwd;
+  const runner = runners.get(conv.id);
+  const running = !!(runner && runner.busy);
+
+  const toolCalls = [];
+  for (const m of parsed.messages || []) {
+    for (const b of m.blocks || []) {
+      if (!b || b.type !== 'tool_use') continue;
+      toolCalls.push({
+        id: b.id,
+        name: b.name,
+        input: b.input || {},
+        result: b.result || '',
+        isError: !!b.isError,
+        ts: m.ts || null
+      });
+    }
+  }
+
+  // 计划任务：项目 .claude/scheduled_tasks.json + 会话里的 Cron/ScheduleWakeup 记录
+  const durableFiles = [...new Set([statusCwd, conv.cwd].filter(Boolean))]
+    .map(cwd => path.join(cwd, '.claude', 'scheduled_tasks.json'));
+  const durableById = new Map();
+  for (const f of durableFiles) {
+    const data = readJsonFile(f);
+    const list = data && Array.isArray(data.tasks) ? data.tasks : [];
+    for (const t of list) {
+      if (!isActiveScheduledTask(t, conv.id)) continue;
+      durableById.set(t.id, {
+        id: t.id,
+        cron: clipStr(t.cron, 80),
+        prompt: clipStr(t.prompt, 240),
+        recurring: t.recurring !== false,
+        permanent: !!t.permanent,
+        createdAt: Number(t.createdAt) || null,
+        lastFiredAt: Number(t.lastFiredAt) || null,
+        createdInProject: t.createdInProject || '',
+        source: 'durable'
+      });
+    }
+  }
+  const transcriptCron = new Map();
+  for (const c of toolCalls) {
+    if (c.name === 'CronCreate') {
+      const m = String(c.result || '').match(/job\s+([A-Za-z0-9_-]{4,})/i);
+      const id = m ? m[1] : (c.id || '');
+      transcriptCron.set(id, {
+        id,
+        cron: clipStr(c.input.cron, 80),
+        prompt: clipStr(c.input.prompt, 240),
+        recurring: c.input.recurring !== false,
+        durable: !!c.input.durable,
+        createdAt: Date.parse(c.ts) || null,
+        result: clipStr(c.result, 200),
+        source: 'session'
+      });
+    } else if (c.name === 'CronDelete') {
+      const id = String(c.input.id || '').trim();
+      if (id) transcriptCron.delete(id);
+    }
+  }
+  const scheduledTasks = [...durableById.values()];
+  for (const t of transcriptCron.values()) {
+    if (durableById.has(t.id)) continue;
+    if (durableById.size && [...durableById.values()].some(d => d.cron === t.cron && d.prompt === t.prompt)) continue;
+    scheduledTasks.push(t);
+  }
+  const wakeups = toolCalls
+    .filter(c => c.name === 'ScheduleWakeup')
+    .slice(-8)
+    .map(c => ({
+      delaySeconds: Number(c.input.delaySeconds) || null,
+      reason: clipStr(c.input.reason, 100),
+      prompt: clipStr(c.input.prompt, 160),
+      stop: !!c.input.stop,
+      noop: !!c.input.noop,
+      ts: c.ts || null
+    }));
+
+  // 代理：本机运行的会话 + 当前会话的子代理 + 团队配置
+  const sessions = [];
+  try {
+    const dir = path.join(HOME, '.claude', 'sessions');
+    for (const name of fs.readdirSync(dir)) {
+      if (!name.endsWith('.json')) continue;
+      const d = readJsonFile(path.join(dir, name));
+      if (!d || typeof d.pid !== 'number') continue;
+      sessions.push({
+        pid: d.pid,
+        sessionId: d.sessionId || '',
+        name: d.name || '',
+        cwd: d.cwd || '',
+        status: d.status || '',
+        kind: d.kind || '',
+        updatedAt: Number(d.updatedAt) || null,
+        isCurrent: d.sessionId === conv.id
+      });
+    }
+    sessions.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  } catch { /* ignore */ }
+
+  const subagents = [];
+  if (file) {
+    try {
+      const dir = path.join(path.dirname(file), conv.id, 'subagents');
+      for (const name of fs.readdirSync(dir)) {
+        if (!name.endsWith('.meta.json')) continue;
+        const meta = readJsonFile(path.join(dir, name));
+        if (!meta) continue;
+        const agentId = name.replace(/^agent-/, '').replace(/\.meta\.json$/, '');
+        subagents.push({
+          agentId,
+          agentType: meta.agentType || '',
+          description: clipStr(meta.description, 200),
+          toolUseId: meta.toolUseId || '',
+          spawnDepth: Number(meta.spawnDepth) || 0,
+          requestShape: meta.requestShape || '',
+          finished: meta.finished === true
+        });
+      }
+    } catch { /* ignore */ }
+  }
+  const teams = [];
+  try {
+    const teamsDir = path.join(process.env.CLAUDE_CONFIG_DIR || path.join(HOME, '.claude'), 'teams');
+    for (const name of fs.readdirSync(teamsDir)) {
+      const cfg = readJsonFile(path.join(teamsDir, name, 'config.json'));
+      if (!cfg || !Array.isArray(cfg.members)) continue;
+      const members = cfg.members.map(m => ({
+        agentId: m.agentId || '',
+        name: m.name || '',
+        agentType: m.agentType || '',
+        cwd: m.cwd || ''
+      }));
+      const relevant = cfg.leadSessionId === conv.id ||
+        members.some(m => m.cwd && statusCwd && path.resolve(m.cwd).toLowerCase() === path.resolve(statusCwd).toLowerCase());
+      if (!relevant) continue;
+      teams.push({
+        teamName: cfg.name || name,
+        leadAgentId: cfg.leadAgentId || '',
+        leadSessionId: cfg.leadSessionId || '',
+        createdAt: Number(cfg.createdAt) || null,
+        members
+      });
+    }
+  } catch { /* ignore */ }
+
+  // Git / Worktree
+  let worktrees = { isGitRepo: false, cwd: statusCwd, entries: [], error: null };
+  try { worktrees = await readGitStatus(statusCwd); }
+  catch (e) { errors.push('读取 Git 状态失败：' + e.message); }
+
+  return {
+    ok: true,
+    generatedAt: Date.now(),
+    conv: {
+      id: conv.id,
+      cwd: conv.cwd,
+      title: conv.title || '',
+      running,
+      transcriptCwd: statusCwd,
+      gitBranch: parsed.gitBranch || '',
+      version: parsed.version || ''
+    },
+    scheduled: {
+      tasks: scheduledTasks.slice(0, 30),
+      wakeups,
+      durableFiles: durableFiles.filter(f => fs.existsSync(f)),
+      errors: []
+    },
+    agents: {
+      sessions: sessions.slice(0, 8),
+      subagents: subagents.slice(0, 12),
+      teams: teams.slice(0, 5)
+    },
+    worktrees,
+    errors
+  };
+}
+
 async function handleApi(req, res, url) {
   const p = url.pathname;
 
@@ -3047,6 +3695,25 @@ async function handleApi(req, res, url) {
 
   const token = requestToken(req, url);
   if (token !== TOKEN) return json(res, { error: '未授权' }, 401);
+
+  if (p === '/api/workbench-status' && req.method === 'GET') {
+    const id = String(url.searchParams.get('conv') || '');
+    const conv = lookupConv(id);
+    if (!conv) return json(res, { error: '会话不存在' }, 404);
+    const cached = workbenchStatusCache.get(id);
+    if (cached && Date.now() - cached.at < WORKBENCH_STATUS_TTL) return json(res, cached.data);
+    try {
+      const data = await buildWorkbenchStatus(conv);
+      workbenchStatusCache.set(id, { at: Date.now(), data });
+      if (workbenchStatusCache.size > 30) {
+        const first = workbenchStatusCache.keys().next().value;
+        if (first) workbenchStatusCache.delete(first);
+      }
+      return json(res, data);
+    } catch (e) {
+      return json(res, { error: '读取工作台状态失败：' + e.message }, 500);
+    }
+  }
 
   if (p === '/api/upload' && req.method === 'POST') {
     const id = url.searchParams.get('id') || '';
@@ -3160,6 +3827,59 @@ async function handleApi(req, res, url) {
     const stream = fs.createReadStream(targetReal);
     stream.on('error', () => { try { res.destroy(); } catch { /* ignore */ } });
     stream.pipe(res);
+    return;
+  }
+
+  if (p === '/api/tool-image' && req.method === 'GET') {
+    const name = String(url.searchParams.get('name') || '');
+    if (!/^[a-f0-9]{20}\.(png|jpg|webp|gif)$/.test(name)) {
+      return json(res, { error: '图片无效' }, 400);
+    }
+    let data;
+    try { data = await fsp.readFile(path.join(TOOL_IMAGE_DIR, name)); }
+    catch { return json(res, { error: '图片不存在' }, 404); }
+    res.writeHead(200, {
+      'content-type': sniffImageType(data) || 'application/octet-stream',
+      'content-length': data.length,
+      'cache-control': 'private, max-age=86400',
+      'x-content-type-options': 'nosniff'
+    });
+    res.end(data);
+    return;
+  }
+
+  if (p === '/api/local-image' && req.method === 'GET') {
+    const convId = String(url.searchParams.get('conv') || '');
+    const conv = convId ? lookupConv(convId) : null;
+    const file = resolveLocalImagePath(url.searchParams.get('path'), conv);
+    if (!file) return json(res, { error: '图片路径无效' }, 400);
+    if (!LOCAL_IMAGE_TYPES.has(path.extname(file).toLowerCase())) {
+      return json(res, { error: '不是支持的图片格式' }, 415);
+    }
+    let stat;
+    try { stat = await fsp.stat(file); }
+    catch { return json(res, { error: '图片不存在' }, 404); }
+    if (!stat.isFile()) return json(res, { error: '不是文件' }, 400);
+    if (stat.size > MAX_LOCAL_IMAGE_BYTES) return json(res, { error: '图片超过 20MB' }, 413);
+    const etag = `W/"${Math.round(stat.mtimeMs).toString(36)}-${stat.size.toString(36)}"`;
+    if (req.headers['if-none-match'] === etag) {
+      res.writeHead(304, { etag, 'cache-control': 'private, no-cache' });
+      res.end();
+      return;
+    }
+    let data;
+    try { data = await fsp.readFile(file); }
+    catch { return json(res, { error: '读取图片失败' }, 500); }
+    const type = sniffImageType(data);
+    if (!type) return json(res, { error: '不是有效图片' }, 415);
+    res.writeHead(200, {
+      'content-type': type,
+      'content-length': data.length,
+      etag,
+      'cache-control': 'private, no-cache',
+      'x-content-type-options': 'nosniff'
+    });
+    res.end(data);
     return;
   }
 
@@ -3918,6 +4638,7 @@ async function main() {
   ensurePlaywrightSkill();
   await resolveClaude();
   fs.mkdirSync(DATA_DIR, { recursive: true });
+  pruneToolImages();
 
   const startPort = SERVER_PORT;
   let port = startPort;
@@ -3954,6 +4675,7 @@ async function main() {
       console.log('');
       openBrowser(url);
       setTimeout(() => { backfillTitles().catch(() => {}); }, 1500);
+      setTimeout(() => { resumeScheduledRunners().catch(() => {}); }, 4000).unref?.();
       return;
     }
 

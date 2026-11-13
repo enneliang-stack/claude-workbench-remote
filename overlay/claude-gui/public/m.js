@@ -54,6 +54,7 @@
     collapsedFolders: new Set(),
     drafts: new Map(),      // convId -> { text, images, refs, files, quotes }
     downloads: [],          // 手机 App 已下载的文件
+    status: { data: null, open: false, loading: false, timer: 0 },
     loadingOlder: false,
     sending: false,
     liveProcessEl: null,
@@ -544,7 +545,7 @@
     loadBoot().catch(() => {});
   }
 
-  function renderConversation(data) {
+  function renderConversation(data, keepScroll = false) {
     S.conv = data;
     S.convId = data.id;
     S.live = data.live || null;
@@ -571,7 +572,11 @@
     } catch { /* 非 App 环境 */ }
     updateHeader();
     updateComposer();
-    renderMessages(true);
+    if (!keepScroll) {
+      readingHistory = false;
+      lastScrollTop = 0;
+    }
+    renderMessages(!keepScroll);
     renderPanels();
     if (S.running) { syncProgressFromLive(); startLivePolling(); }
     else { setRunProgress('', ''); stopLivePolling(); }
@@ -828,6 +833,9 @@
       maybeScroll(true);
     } else {
       box.scrollTop = oldTop;
+      // 整段历史重建后继续保持“用户在看历史”的状态，后续状态更新不再回底
+      readingHistory = true;
+      lastScrollTop = oldTop;
     }
     watchOlderButton();
     scheduleProcessCollapseUpdate();
@@ -984,7 +992,8 @@
     for (const q of info.quotes || []) d.appendChild(quoteNode(q));
     if (info.text) {
       const textEl = el('div', 'utext');
-      textEl.innerHTML = formatText(info.text);
+      // 用户自己写的 Markdown 图片语法只当文字，不加载本地/远程图片
+      textEl.innerHTML = formatText(info.text, { images: false });
       enhanceCodeBlocks(textEl);
       d.appendChild(textEl);
       if (isLongUserText(info.text)) {
@@ -1021,6 +1030,15 @@
     if (proc.length || processTexts.length) {
       wrap.appendChild(processNode(proc, processTexts));
     }
+    // SendUserFile 的交付物展示在过程区外面
+    for (const b of blocks) {
+      if (b.type === 'tool_use' && b.name === 'SendUserFile' && !b.isError &&
+          b.input && Array.isArray(b.input.files) && b.input.files.length) {
+        const card = sendFileCardNode(b.input);
+        card.dataset.sendFileId = b.id || '';
+        wrap.appendChild(card);
+      }
+    }
     for (const c of conclusions) {
       const node = blockNode(c.block);
       if (!node) continue;
@@ -1041,6 +1059,7 @@
     if (!b || b.type !== 'text') return null;
     const d = el('div', 'txt');
     d.innerHTML = formatText(b.text);
+    layoutMarkdownImages(d);
     enhanceCodeBlocks(d);
     return d;
   }
@@ -1523,6 +1542,189 @@
     $('#downloadsSheet').hidden = true;
   }
 
+  // ---------------------------------------------------------------- 工作台状态
+
+  function fmtStatusTime(ts) {
+    if (!ts) return '';
+    const d = new Date(ts);
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleString('zh-CN', { hour12: false });
+  }
+
+  function statusConvId() {
+    return S.convId || (S.boot && S.boot.lastConversation) || '';
+  }
+
+  function statusRowNode(title, opts = {}) {
+    const row = el('div', 'status-row');
+    const main = el('div', 'status-main');
+    const titleEl = el('div', 'status-title');
+    titleEl.appendChild(el('b', null, title || '（未命名）'));
+    if (opts.badge) {
+      titleEl.appendChild(el('span', 'status-badge' + (opts.bad ? ' bad' : ''), opts.badge));
+    }
+    main.appendChild(titleEl);
+    if (opts.desc) main.appendChild(el('div', 'status-desc', opts.desc));
+    if (opts.meta) main.appendChild(el('div', 'status-meta', opts.meta));
+    row.appendChild(main);
+    return row;
+  }
+
+  function renderStatus(data) {
+    const body = $('#statusBody');
+    const note = $('#statusNote');
+    if (!body) return;
+    body.innerHTML = '';
+    if (!data) {
+      body.appendChild(el('div', 'status-empty', '读取中…'));
+      return;
+    }
+    const group = title => body.appendChild(el('div', 'status-group', title));
+    const empty = text => body.appendChild(el('div', 'status-empty', text));
+
+    const sched = data.scheduled || {};
+    const tasks = Array.isArray(sched.tasks) ? sched.tasks : [];
+    const wakeups = Array.isArray(sched.wakeups) ? sched.wakeups : [];
+    group('计划任务');
+    if (!tasks.length && !wakeups.length) empty('暂无计划任务');
+    for (const t of tasks) {
+      const bits = ['cron ' + (t.cron || '?')];
+      if (t.permanent) bits.push('持久');
+      if (t.source === 'session') bits.push('本会话');
+      if (t.lastFiredAt) bits.push('上次 ' + fmtStatusTime(t.lastFiredAt));
+      body.appendChild(statusRowNode(t.prompt || ('任务 ' + (t.id || '')), {
+        desc: bits.join(' · '),
+        meta: [t.createdInProject, t.id].filter(Boolean).join(' · '),
+        badge: t.recurring === false ? '一次' : '重复'
+      }));
+    }
+    for (const w of wakeups) {
+      const bits = [];
+      if (w.delaySeconds) bits.push(w.delaySeconds + ' 秒后');
+      if (w.ts) bits.push(fmtStatusTime(w.ts));
+      body.appendChild(statusRowNode(w.reason || w.prompt || '稍后继续', {
+        desc: w.prompt || '',
+        meta: bits.join(' · '),
+        badge: w.stop ? '已停止' : '唤醒',
+        bad: !!w.stop
+      }));
+    }
+
+    const agents = data.agents || {};
+    const sessions = Array.isArray(agents.sessions) ? agents.sessions : [];
+    const subagents = Array.isArray(agents.subagents) ? agents.subagents : [];
+    const teams = Array.isArray(agents.teams) ? agents.teams : [];
+    group('代理 / 子任务');
+    if (!sessions.length && !subagents.length && !teams.length) empty('暂无代理或子任务');
+    for (const s of sessions.slice(0, 8)) {
+      body.appendChild(statusRowNode(s.name || s.sessionId || ('进程 ' + s.pid), {
+        desc: s.cwd || '',
+        meta: [s.kind, s.pid ? 'PID ' + s.pid : ''].filter(Boolean).join(' · '),
+        badge: s.isCurrent ? '当前' : (s.status || '会话')
+      }));
+    }
+    for (const a of subagents.slice(0, 8)) {
+      body.appendChild(statusRowNode(a.description || a.agentType || '子代理', {
+        desc: [a.agentType, a.agentId].filter(Boolean).join(' · '),
+        badge: a.finished ? '完成' : '运行中'
+      }));
+    }
+    for (const t of teams.slice(0, 5)) {
+      body.appendChild(statusRowNode(t.teamName || '代理团队', {
+        desc: (t.members || []).map(m => m.name || m.agentType).filter(Boolean).join('、'),
+        badge: `${(t.members || []).length} 人`
+      }));
+    }
+
+    const wt = data.worktrees || {};
+    group('工作区');
+    if (!wt.isGitRepo) {
+      empty(wt.error ? ('Git 不可用：' + wt.error) : '当前目录不是 Git 仓库');
+    } else {
+      body.appendChild(statusRowNode(wt.branch || 'HEAD', {
+        desc: wt.repoRoot || wt.cwd || '',
+        meta: [wt.head ? 'HEAD ' + String(wt.head).slice(0, 8) : '',
+          wt.ahead ? '领先 ' + wt.ahead : '',
+          wt.behind ? '落后 ' + wt.behind : ''].filter(Boolean).join(' · '),
+        badge: wt.dirty ? `${wt.dirty} 处改动` : '干净'
+      }));
+      for (const e of (wt.entries || []).filter(x => !x.isCurrent)) {
+        body.appendChild(statusRowNode(e.branch || e.path || 'worktree', {
+          desc: e.path || '',
+          meta: e.isClaudeManaged ? 'Claude 管理' : '',
+          badge: e.isClaudeManaged ? 'Claude' : ''
+        }));
+      }
+    }
+
+    const schedCount = tasks.length + wakeups.length;
+    const agentCount = sessions.length + subagents.length + teams.length;
+    const gitLabel = wt.isGitRepo ? (wt.branch || 'Git') : '非 Git';
+    if (note) note.textContent = `${schedCount} 个计划任务 · ${agentCount} 个代理/子任务 · ${gitLabel}`;
+  }
+
+  async function refreshStatus(force = false) {
+    if (S.status.loading) return;
+    if (!force && !S.status.open) return;
+    const convId = statusConvId();
+    if (!convId) {
+      renderStatus(null);
+      const body = $('#statusBody');
+      if (body) {
+        body.innerHTML = '';
+        body.appendChild(el('div', 'status-empty', '先打开一个对话再查看工作台状态'));
+      }
+      return;
+    }
+    S.status.loading = true;
+    try {
+      const data = await api('/api/workbench-status?conv=' + encodeURIComponent(convId));
+      if (!S.status.open) return;
+      S.status.data = data;
+      renderStatus(data);
+    } catch (e) {
+      if (!S.status.open) return;
+      const body = $('#statusBody');
+      if (body) {
+        body.innerHTML = '';
+        body.appendChild(el('div', 'status-empty', /会话不存在/.test(e.message)
+          ? '先打开一个对话再查看工作台状态'
+          : /404/.test(e.message)
+            ? '状态接口还没生效，请重启一次工作台'
+            : '读取状态失败：' + e.message));
+      }
+    } finally {
+      S.status.loading = false;
+    }
+  }
+
+  function openStatusSheet() {
+    const sheet = $('#statusSheet');
+    if (!sheet) return;
+    S.status.open = true;
+    sheet.hidden = false;
+    if (S.status.data) renderStatus(S.status.data);
+    else {
+      const body = $('#statusBody');
+      if (body) {
+        body.innerHTML = '';
+        body.appendChild(el('div', 'status-empty', '读取中…'));
+      }
+    }
+    refreshStatus(true);
+    clearInterval(S.status.timer);
+    S.status.timer = setInterval(() => refreshStatus(false), 5000);
+  }
+
+  function closeStatusSheet() {
+    const sheet = $('#statusSheet');
+    if (!sheet || sheet.hidden) return;
+    sheet.hidden = true;
+    S.status.open = false;
+    clearInterval(S.status.timer);
+    S.status.timer = 0;
+  }
+
   window.__onDownloadComplete = (source, ok, error) => {
     refreshDownloads();
     if (ok) toast('下载完成');
@@ -1764,8 +1966,8 @@
     const count = $('#imgViewerCount');
     count.hidden = n < 2;
     count.textContent = n > 1 ? `${imgView.index + 1} / ${n}` : '';
-    $('#imgViewerPrev').hidden = n < 2;
-    $('#imgViewerNext').hidden = n < 2;
+    $('#imgViewerPrev').hidden = n < 2 || imgView.index <= 0;
+    $('#imgViewerNext').hidden = n < 2 || imgView.index >= n - 1;
   }
 
   function openImageViewer(src, list, index) {
@@ -1792,7 +1994,9 @@
 
   function stepImageViewer(delta) {
     if (imgView.list.length < 2) return;
-    imgView.index = (imgView.index + delta + imgView.list.length) % imgView.list.length;
+    const next = imgView.index + delta;
+    if (next < 0 || next >= imgView.list.length) return;
+    imgView.index = next;
     imgView.scale = 1;
     imgView.tx = 0;
     imgView.ty = 0;
@@ -1925,6 +2129,9 @@
         ? thinkingRow(b)
         : (b.type === 'tool_use' ? toolNode(b) : null);
       if (node) body.appendChild(node);
+      if (b.type === 'tool_use' && Array.isArray(b.images) && b.images.length) {
+        body.appendChild(imageCardNode(b.images));
+      }
     }
 
     d.append(sum, body);
@@ -2045,6 +2252,79 @@
 
   // ---------------------------------------------------------------- Markdown
 
+  /** 结论里的本地图片：走本地接口，<img> 需要自己带令牌 */
+  function localImageUrl(p) {
+    const params = new URLSearchParams();
+    if (S.convId) params.set('conv', S.convId);
+    params.set('path', p);
+    params.set('token', TOKEN);
+    return '/api/local-image?' + params.toString();
+  }
+
+  function localImageSrc(p) {
+    return localImageUrl(p).replace(/&/g, '&amp;');
+  }
+
+  function markdownImageHtml(alt, rawPath) {
+    let p = String(rawPath || '').trim();
+    if (!p) return null;
+    p = p.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+    if (p.startsWith('<') && p.endsWith('>')) p = p.slice(1, -1).trim();
+    p = p.replace(/\s+(?:"[^"]*"|'[^']*')$/, '').trim();
+    const safeAlt = String(alt || '').replace(/"/g, '&quot;');
+    if (/^https?:/i.test(p)) {
+      return `<img class="md-image md-image-remote" src="${p.replace(/"/g, '&quot;')}" alt="${safeAlt}" loading="lazy">`;
+    }
+    if (/^(data:|blob:)/i.test(p)) return null;
+    const clean = p.replace(/^file:\/\//i, '').split(/[?#]/)[0];
+    if (!/\.(png|jpe?g|webp|gif)$/i.test(clean)) return null;
+    return `<img class="md-image" src="${localImageSrc(p)}" alt="${safeAlt}" loading="lazy" decoding="async">`;
+  }
+
+  let mdAllowImages = true;
+
+  /** 扫描 Markdown 图片，支持路径里的括号 */
+  function replaceMarkdownImages(s, cb) {
+    let out = '';
+    let i = 0;
+    while (i < s.length) {
+      const start = s.indexOf('![', i);
+      if (start < 0) { out += s.slice(i); break; }
+      if (start > 0 && s[start - 1] === '\\') {
+        out += s.slice(i, start + 2);
+        i = start + 2;
+        continue;
+      }
+      const mid = s.indexOf('](', start + 2);
+      if (mid < 0) { out += s.slice(i); break; }
+      const alt = s.slice(start + 2, mid);
+      if (alt.includes('\n')) {
+        out += s.slice(i, start + 2);
+        i = start + 2;
+        continue;
+      }
+      let depth = 1;
+      let j = mid + 2;
+      for (; j < s.length; j++) {
+        const ch = s[j];
+        if (ch === '\\') { j++; continue; }
+        if (ch === '\n') break;
+        if (ch === '(') depth++;
+        else if (ch === ')') { depth--; if (depth === 0) break; }
+      }
+      if (depth !== 0 || j >= s.length) {
+        out += s.slice(i, mid + 2);
+        i = mid + 2;
+        continue;
+      }
+      out += s.slice(i, start);
+      out += cb(alt, s.slice(mid + 2, j), s.slice(start, j + 1));
+      i = j + 1;
+    }
+    return out;
+  }
+
   /** 行内格式。输入已经 HTML 转义；行内 code 先占位，避免里面的 ** / _ 被误处理。 */
   function formatInline(escaped) {
     const codes = [];
@@ -2052,8 +2332,10 @@
       codes.push(`<code>${code}</code>`);
       return `\u0001${codes.length - 1}\u0001`;
     });
-    out = out.replace(/!\[([^\]\n]*)\]\((https?:\/\/[^\s)]+)\)/g,
-      '<img src="$2" alt="$1" loading="lazy">');
+    out = replaceMarkdownImages(out, (alt, p) => {
+      if (!mdAllowImages) return alt ? `[图片：${alt}]` : '[图片]';
+      return markdownImageHtml(alt, p) || (alt ? `[图片：${alt}]` : '[图片]');
+    });
     out = out.replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g,
       '<a href="$2" target="_blank" rel="noopener">$1</a>');
     out = out.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
@@ -2123,7 +2405,8 @@
     return parts.join('');
   }
 
-  function markdownBlocks(text, streaming) {
+  function markdownBlocks(text, streaming, opts = {}) {
+    mdAllowImages = opts.images !== false && !streaming;
     let src = String(text || '').replace(/\r\n?/g, '\n');
     if (streaming) {
       // 只有标记、还没有内容的末行先不显示，避免先闪一下符号
@@ -2255,7 +2538,14 @@
     root.querySelectorAll('img').forEach(img => {
       if (img.dataset.enhanced) return;
       img.dataset.enhanced = '1';
-      img.onclick = () => openImageViewer(img.src);
+      img.onclick = () => {
+        const imgs = [...root.querySelectorAll('img.md-image')];
+        if (img.classList.contains('md-image') && imgs.length > 1) {
+          openImageViewer(img.src, imgs.map(x => x.src), imgs.indexOf(img));
+        } else {
+          openImageViewer(img.src);
+        }
+      };
     });
   }
 
@@ -2279,11 +2569,56 @@
       node.innerHTML = blocks.map(b => b.html).join('');
     }
     node._mdKeys = keys;
+    if (!streaming) layoutMarkdownImages(node);
     enhanceRendered(node);
   }
 
-  function formatText(text) {
-    return markdownBlocks(text, false).map(b => b.html).join('');
+  function formatText(text, opts = {}) {
+    return markdownBlocks(text, false, opts).map(b => b.html).join('');
+  }
+
+  /** 多张结论图：连续纯图片段落合成两列/三列，最多显示 6 张 */
+  function layoutMarkdownImages(root) {
+    if (!root) return;
+    let images = [...root.querySelectorAll('img.md-image')];
+    if (!images.length) return;
+
+    let hidden = 0;
+    if (images.length > 6) {
+      const extra = images.slice(6);
+      hidden = extra.length;
+      const parents = new Set(extra.map(img => img.parentElement).filter(Boolean));
+      for (const img of extra) img.remove();
+      images = images.slice(0, 6);
+      for (const p of parents) {
+        if (p.classList.contains('md-p') && !p.textContent.trim() && !p.querySelector('img.md-image')) p.remove();
+      }
+    }
+
+    const isImageOnly = node =>
+      node && node.classList && node.classList.contains('md-p') &&
+      !!node.querySelector('img.md-image') && !node.textContent.trim();
+    const children = [...root.children];
+    let i = 0;
+    while (i < children.length) {
+      if (!isImageOnly(children[i])) { i++; continue; }
+      const group = [];
+      while (i < children.length && isImageOnly(children[i])) group.push(children[i++]);
+      const imgs = group.flatMap(p => [...p.querySelectorAll('img.md-image')]);
+      if (imgs.length < 2) continue;
+      const grid = document.createElement('div');
+      grid.className = 'md-image-grid ' + (imgs.length >= 5 ? 'n3' : 'n2');
+      for (const img of imgs) grid.appendChild(img);
+      root.insertBefore(grid, group[0]);
+      for (const p of group) p.remove();
+    }
+
+    if (hidden > 0) {
+      const note = document.createElement('div');
+      note.className = 'md-image-more';
+      note.textContent = `还有 ${hidden} 张图片未展示`;
+      root.appendChild(note);
+    }
   }
 
   function scheduleMarkdownRender(ref) {
@@ -2393,13 +2728,16 @@
     try { return JSON.stringify(x, null, 2); } catch { return String(x); }
   }
 
-  function thinkingSnippet(b, max = 80) {
-    let t = String((b && (b.text || b.thinking)) || '').replace(/\s+/g, ' ').trim();
+  function thinkingSnippet(b, max = 50) {
+    const t = String((b && (b.text || b.thinking)) || '').replace(/\s+/g, ' ').trim();
     if (!t) return '';
-    const sentence = t.match(/^(.{1,80}?)[。.!?！？](?:\s|$)/);
-    if (sentence) t = sentence[1] + sentence[0].slice(sentence[1].length).trim();
-    else if (t.length > max) t = t.slice(0, max) + '…';
-    return t;
+    // 不足 max 就原样显示，不补内容；超过时截到 max，避免停在 “1.” 这类句点上
+    const chars = Array.from(t);
+    if (chars.length <= max) return t;
+    let cut = chars.slice(0, max).join('').replace(/\s+$/, '');
+    const space = cut.lastIndexOf(' ');
+    if (space >= 30) cut = cut.slice(0, space);
+    return cut + '…';
   }
 
   function thinkingRow(b) {
@@ -2446,6 +2784,144 @@
       r.state.textContent = '运行中…';
       r.state.className = 'tool-state run';
     }
+  }
+
+  const IMAGE_VIEW_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="M21 15l-5-5L5 20"/></svg>';
+
+  function toolImageSrc(url) {
+    if (!url) return '';
+    return url + (url.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(TOKEN);
+  }
+
+  /** 运行中/过程里的「查看了 N 张图片」卡片，默认收起 */
+  function imageCardNode(images) {
+    const wrap = el('div', 'image-view');
+    const head = el('button', 'image-view-head');
+    head.type = 'button';
+    const chev = el('span', 'image-view-chev', '›');
+    const ico = el('span', 'image-view-ico');
+    ico.innerHTML = IMAGE_VIEW_ICON;
+    const title = el('span', 'image-view-title');
+    head.append(chev, ico, title);
+
+    const thumbs = el('div', 'image-view-thumbs');
+    thumbs.hidden = true;
+    const render = list => {
+      thumbs.innerHTML = '';
+      for (const im of list || []) {
+        if (!im || !im.url) continue;
+        const img = el('img', 'image-view-thumb');
+        img.src = toolImageSrc(im.url);
+        img.alt = '工具查看的图片';
+        img.loading = 'lazy';
+        img.onclick = () => {
+          const imgs = [...thumbs.querySelectorAll('img')];
+          openImageViewer(img.src, imgs.map(x => x.src), imgs.indexOf(img));
+        };
+        thumbs.appendChild(img);
+      }
+      title.textContent = (list && list.length) === 1
+        ? '查看了 1 张图片'
+        : `查看了 ${(list && list.length) || 0} 张图片`;
+    };
+    render(images);
+    head.onclick = () => {
+      wrap.classList.toggle('open');
+      thumbs.hidden = !wrap.classList.contains('open');
+    };
+    wrap.append(head, thumbs);
+    wrap._update = render;
+    return wrap;
+  }
+
+  function upsertLiveImageCard(toolUseId, images) {
+    if (!images || !images.length) return;
+    const key = 'imgview:' + toolUseId;
+    const ref = S.liveEls.get(key);
+    if (ref && ref.imageCard && ref.imageCard.isConnected) {
+      ref.imageCard._update(images);
+      return;
+    }
+    const card = imageCardNode(images);
+    const box = $('#liveTurn');
+    if (!box) return;
+    box.appendChild(card);
+    S.liveEls.set(key, { imageCard: card });
+    maybeScroll();
+  }
+
+  const SEND_FILE_IMAGE_RE = /\.(png|jpe?g|webp|gif)$/i;
+  function isSendFileImage(p) {
+    return SEND_FILE_IMAGE_RE.test(String(p || '').replace(/^file:\/\//i, '').split(/[?#]/)[0]);
+  }
+
+  /** Claude Code 内置 SendUserFile 的图片/文件卡片 */
+  function sendFileCardNode(block) {
+    const files = (Array.isArray(block && block.files) ? block.files : [])
+      .map(String).filter(Boolean);
+    const images = block && block.display === 'attach' ? [] : files.filter(isSendFileImage);
+    const otherFiles = files.filter(p => !images.includes(p));
+
+    const wrap = el('div', 'send-file');
+    const head = el('div', 'send-file-head');
+    const ico = el('span', 'send-file-ico');
+    ico.innerHTML = images.length ? IMAGE_VIEW_ICON : toolIcon('read');
+    head.append(ico, el('span', 'send-file-title', images.length ? '发送的图片' : '发送的文件'));
+    if (block && block.status === 'proactive') {
+      head.appendChild(el('span', 'send-file-badge', '主动发送'));
+    }
+    wrap.appendChild(head);
+
+    if (images.length) {
+      const box = el('div', 'send-file-images' +
+        (images.length >= 5 ? ' n3' : images.length >= 2 ? ' n2' : ''));
+      const els = [];
+      for (const p of images) {
+        const img = el('img', 'send-file-image');
+        img.src = localImageUrl(p);
+        img.alt = p.split(/[\\/]/).pop() || '';
+        img.loading = 'lazy';
+        img.onclick = () => {
+          openImageViewer(img.src, els.map(x => x.src), els.indexOf(img));
+        };
+        els.push(img);
+        box.appendChild(img);
+      }
+      wrap.appendChild(box);
+    }
+
+    if (otherFiles.length) {
+      const list = el('div', 'send-file-list');
+      for (const p of otherFiles) {
+        const row = el('div', 'send-file-row');
+        const icon = el('span', 'send-file-ico');
+        icon.innerHTML = toolIcon('read');
+        row.append(
+          icon,
+          el('span', 'send-file-name', p.split(/[\\/]/).pop() || p),
+          el('span', 'send-file-path', p)
+        );
+        list.appendChild(row);
+      }
+      wrap.appendChild(list);
+    }
+
+    if (block && block.caption) {
+      wrap.appendChild(el('div', 'send-file-caption', String(block.caption)));
+    }
+    return wrap;
+  }
+
+  function upsertLiveSendFile(toolUseId, input) {
+    if (!input || !Array.isArray(input.files) || !input.files.length) return;
+    const box = $('#liveTurn');
+    if (!box) return;
+    const id = String(toolUseId || '');
+    if (id && [...box.querySelectorAll('.send-file')].some(c => c.dataset.sendFileId === id)) return;
+    const card = sendFileCardNode(input);
+    if (id) card.dataset.sendFileId = id;
+    box.appendChild(card);
+    maybeScroll();
   }
 
   // ---------------------------------------------------------------- 实时一轮
@@ -2541,6 +3017,15 @@
         box.appendChild(built.node);
       }
       S.liveEls.set(b.key, built.ref);
+      const toolId = b.id || (b.key && b.key.startsWith('tool:') ? b.key.slice(5) : '');
+      if (b.type === 'tool_use' && Array.isArray(b.images) && b.images.length) {
+        const card = imageCardNode(b.images);
+        box.appendChild(card);
+        if (toolId) S.liveEls.set('imgview:' + toolId, { imageCard: card });
+      }
+      if (!b.isError && b.type === 'tool_use' && b.name === 'SendUserFile' && b.input && Array.isArray(b.input.files)) {
+        upsertLiveSendFile(toolId, b.input);
+      }
     }
 
     const last = blocks[blocks.length - 1];
@@ -2644,13 +3129,28 @@
     const ref = S.liveEls.get('tool:' + ev.toolUseId);
     if (!ref || !ref.tool) return;
     updateToolNode(ref.tool, { result: ev.content, isError: ev.isError, done: true });
+    const liveBlock = (S.live && S.live.blocks || [])
+      .find(b => b.key === 'tool:' + ev.toolUseId);
+    if (liveBlock) {
+      liveBlock.result = ev.content;
+      liveBlock.isError = !!ev.isError;
+      liveBlock.done = true;
+    }
+    if (Array.isArray(ev.images) && ev.images.length) {
+      const liveBlock = (S.live && S.live.blocks || []).find(b => b.key === 'tool:' + ev.toolUseId);
+      if (liveBlock) liveBlock.images = ev.images;
+      upsertLiveImageCard(ev.toolUseId, ev.images);
+    }
+    if (!ev.isError && ref.tool._block && ref.tool._block.name === 'SendUserFile') {
+      upsertLiveSendFile(ev.toolUseId, ref.tool._block.input);
+    }
     setLiveProcessState(ev.isError ? '失败' : '完成');
   }
 
   // ---------------------------------------------------------------- 运行状态行
 
   function progressForThinking(b) {
-    const t = thinkingSnippet(b, 80);
+    const t = thinkingSnippet(b, 50);
     return t ? '正在思考：' + t : '正在思考…';
   }
 
@@ -2845,7 +3345,7 @@
         S.pendingPerm = ev;
         renderPanels();
         setRunProgress('等待你的确认：' + (ev.toolName || '操作') + '…', 'wait');
-        maybeScroll(true);
+        maybeScroll();
         break;
 
       case 'permission_resolved':
@@ -2859,7 +3359,7 @@
         initAskState();
         renderPanels();
         setRunProgress('等待你的回答…', 'wait');
-        maybeScroll(true);
+        maybeScroll();
         break;
 
       case 'ask_resolved':
@@ -2875,6 +3375,13 @@
       case 'run_end':
         S.running = false;
         S.pendingEcho = null;
+        {
+          // 结束后把过程图片卡片收回「过程」里；随后刷新历史时会按 images 重新渲染
+          const box = $('#liveTurn');
+          if (box && S.liveProcessBody) {
+            box.querySelectorAll(':scope > .image-view').forEach(card => S.liveProcessBody.appendChild(card));
+          }
+        }
         notifyPageTask(false);
         stopLivePolling();
         syncLiveCursor();
@@ -2931,7 +3438,7 @@
       const limit = Math.max(30, Math.min(200, loaded + 10));
       const data = await api('/api/conversation?id=' + encodeURIComponent(S.convId) +
         '&limit=' + limit + '&light=1&compact=1', { timeout: 30000 });
-      renderConversation(data);
+      renderConversation(data, true);
     } catch { /* 下次事件再试 */ }
     finally { refreshing = false; }
   }
@@ -3003,7 +3510,7 @@
         setRunProgress('', '');
         if (wasRunning) notifyPageTask(false);
       }
-      renderConversation(data);
+      renderConversation(data, true);
       S.needsResumeSync = false;
     } catch { /* 网络没恢复：保留状态，发送时还有 steer→chat 兜底 */ }
     finally { resumeSyncing = false; }
@@ -3332,7 +3839,10 @@
       const im = el('img');
       im.src = img.preview;
       im.alt = '';
-      im.onclick = () => openImageViewer(img.preview);
+      im.onclick = () => {
+        // 只在输入框这一批待发图片里切换
+        openImageViewer(img.preview, S.pendingImages.map(x => x.preview), i);
+      };
       d.appendChild(im);
       const b = el('button', null, '×');
       b.type = 'button';
@@ -3451,7 +3961,7 @@
 
   let msgActionGuardUntil = 0;
 
-  function showMsgActions(m) {
+  function showMsgActions(m, node) {
     const text = messagePlainText(m);
     if (!text.trim()) {
       toast('这条消息没有可复制或引用的文字');
@@ -3459,6 +3969,7 @@
     }
     S.msgAction = {
       text,
+      node: node || null,
       role: m.role === 'user' ? 'user' : 'assistant',
       source: (S.conv && (S.conv.title || '新对话')) || '当前对话',
       sourceId: (S.conv && S.conv.id) || ''
@@ -3487,9 +3998,192 @@
       if (addPendingQuote(a)) toast('已加入引用');
       return;
     }
+    if (act === 'select') {
+      selectMessageText(a);
+      return;
+    }
     if (act === 'quoteOther') {
       openQuoteTarget(a);
     }
+  }
+
+  // ---------------------------------------------------------------- 选中文字
+
+  let selBarInfo = null;
+  let selChangeTimer = 0;
+  let selWatchTimer = 0;
+
+  function selectionMessageInfo() {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || !sel.rangeCount) return null;
+    const text = sel.toString().replace(/\s+/g, ' ').trim();
+    if (!text) return null;
+    const range = sel.getRangeAt(0);
+    let node = range.commonAncestorContainer;
+    if (node && node.nodeType === 3) node = node.parentNode;
+    const msg = node && node.closest ? node.closest('.msg') : null;
+    if (!msg) return null;
+    return { text, range, msg };
+  }
+
+  function hideSelToolbar() {
+    const bar = $('#selToolbar');
+    if (bar) {
+      bar.hidden = true;
+      bar.classList.remove('below');
+    }
+    selBarInfo = null;
+    if (selWatchTimer) {
+      clearInterval(selWatchTimer);
+      selWatchTimer = 0;
+    }
+  }
+
+  // 消息区刷新/流式重绘可能把选区弄丢，但不会触发 selectionchange；工具条显示期间轻量校验
+  function watchSelToolbar() {
+    if (selWatchTimer) return;
+    selWatchTimer = setInterval(() => {
+      if (!selBarInfo) return;
+      const info = selectionMessageInfo();
+      if (!info) hideSelToolbar();
+      else placeSelToolbar(info);
+    }, 300);
+  }
+
+  function placeSelToolbar(info) {
+    const bar = $('#selToolbar');
+    if (!bar || !info) return;
+    // App 的系统选择菜单已经带了引用项，页面工具条不再叠在系统 UI 上
+    if (window.__nativeSelectionMenu) {
+      hideSelToolbar();
+      return;
+    }
+    selBarInfo = {
+      text: info.text,
+      role: info.msg.classList.contains('user') ? 'user' : 'assistant',
+      source: (S.conv && (S.conv.title || '新对话')) || '当前对话',
+      sourceId: (S.conv && S.conv.id) || ''
+    };
+    bar.hidden = false;
+    const rect = info.range.getBoundingClientRect();
+    const bw = bar.offsetWidth || 200;
+    const bh = bar.offsetHeight || 38;
+    const cx = Math.min(
+      Math.max(rect.left + rect.width / 2, bw / 2 + 8),
+      window.innerWidth - bw / 2 - 8
+    );
+    // 手机 App 里系统菜单通常在选区上方，页面工具条优先放下方，避免互相遮挡
+    const appSpaceBelow = window.innerHeight - rect.bottom;
+    let below = !!window.AndroidDownloads
+      ? appSpaceBelow > bh + 24
+      : (rect.top - 8 - bh < 8);
+    let top = rect.top - 8;
+    if (below) top = Math.min(rect.bottom + 8, window.innerHeight - 8);
+    bar.classList.toggle('below', below);
+    bar.style.left = cx + 'px';
+    bar.style.top = top + 'px';
+    watchSelToolbar();
+  }
+
+  function refreshSelToolbar() {
+    const info = selectionMessageInfo();
+    if (info) placeSelToolbar(info);
+    else hideSelToolbar();
+  }
+
+  function selectMessageText(a) {
+    window.__nativeSelectionMenu = false;
+    let node = a && a.node;
+    // 打开菜单后消息列表可能刷新过，旧节点会脱离文档；按角色和开头文字找回当前节点
+    if (!node || !document.contains(node)) {
+      const role = a && a.role === 'user' ? 'user' : 'assistant';
+      const all = [...document.querySelectorAll('.msg.' + role)];
+      const needle = String((a && a.text) || '').slice(0, 40);
+      node = all.find(el => (el.innerText || '').includes(needle)) || all[all.length - 1] || null;
+    }
+    if (!node) return;
+    const target = node.querySelector('.txt, .utext') || node;
+    if (!document.contains(target)) return;
+    const range = document.createRange();
+    range.selectNodeContents(target);
+    const sel = window.getSelection();
+    if (!sel) return;
+    sel.removeAllRanges();
+    sel.addRange(range);
+    setTimeout(refreshSelToolbar, 30);
+  }
+
+  async function handleSelAction(act) {
+    const info = selBarInfo;
+    if (!info) return;
+    const q = {
+      text: info.text,
+      role: info.role,
+      source: info.source,
+      sourceId: info.sourceId
+    };
+    const sel = window.getSelection();
+    if (sel) sel.removeAllRanges();
+    hideSelToolbar();
+    if (act === 'copy') {
+      const ok = await copyText(info.text);
+      toast(ok ? '已复制选中文字' : '复制失败', ok ? '' : 'err');
+    } else if (act === 'quote') {
+      if (addPendingQuote(q)) toast('已加入引用');
+    } else if (act === 'quoteOther') {
+      openQuoteTarget(q);
+    }
+  }
+
+  function setupSelectionToolbar() {
+    const bar = $('#selToolbar');
+    if (!bar) return;
+    // 点工具条时不要清掉选区，否则 click 还没触发系统就收起了选择
+    bar.addEventListener('mousedown', e => e.preventDefault());
+    bar.addEventListener('touchstart', e => e.preventDefault(), { passive: false });
+    bar.addEventListener('click', e => {
+      const btn = e.target.closest('[data-sel]');
+      if (!btn) return;
+      e.preventDefault();
+      handleSelAction(btn.dataset.sel);
+    });
+    document.addEventListener('selectionchange', () => {
+      clearTimeout(selChangeTimer);
+      selChangeTimer = setTimeout(() => {
+        const info = selectionMessageInfo();
+        if (info) {
+          if (cancelMsgPress) cancelMsgPress();
+          placeSelToolbar(info);
+        } else {
+          window.__nativeSelectionMenu = false;
+          hideSelToolbar();
+        }
+      }, 80);
+    });
+    $('#messages').addEventListener('scroll', () => {
+      if (selBarInfo) hideSelToolbar();
+    }, { passive: true });
+
+    // App 的系统选择菜单点「引用 / 引用到其他对话」后由网页接管
+    window.__nativeSelectionAction = act => {
+      const info = selectionMessageInfo();
+      if (!info) return false;
+      const q = {
+        text: info.text,
+        role: info.msg.classList.contains('user') ? 'user' : 'assistant',
+        source: (S.conv && (S.conv.title || '新对话')) || '当前对话',
+        sourceId: (S.conv && S.conv.id) || ''
+      };
+      const sel = window.getSelection();
+      if (sel) sel.removeAllRanges();
+      hideSelToolbar();
+      if (act === 'quote') {
+        if (addPendingQuote(q)) toast('已加入引用');
+      } else if (act === 'quoteOther') {
+        openQuoteTarget(q);
+      }
+      return true;
+    };
   }
 
   function attachMsgActions(node, m) {
@@ -3518,10 +4212,14 @@
       cancelMsgPress = clear;
       pressTimer = setTimeout(() => {
         longPressed = true;
+        // 长按正文时优先让系统选字；已经出现选区就不再抢长按菜单
         const sel = window.getSelection();
-        if (sel && !sel.isCollapsed) sel.removeAllRanges();
-        showMsgActions(m);
-      }, 520);
+        if (sel && !sel.isCollapsed && selectionMessageInfo()) {
+          refreshSelToolbar();
+          return;
+        }
+        showMsgActions(m, node);
+      }, 650);
     };
     const move = e => {
       if (Math.abs(e.clientX - sx) > 4 || Math.abs(e.clientY - sy) > 4) clear();
@@ -3537,8 +4235,10 @@
     node.addEventListener('mouseleave', end);
     node.addEventListener('contextmenu', e => {
       if (e.target.closest('button, a, img, summary, .code-tools')) return;
+      // 正文交给系统长按选字；空白处仍弹出整条消息菜单
+      if (e.target.closest('.txt, .utext, pre, code, .md-p, .md-list, blockquote')) return;
       e.preventDefault();
-      showMsgActions(m);
+      showMsgActions(m, node);
     });
     node.addEventListener('click', e => {
       if (!longPressed) return;
@@ -3554,9 +4254,7 @@
     $('#quoteTargetSearch').value = '';
     renderQuoteTarget();
     $('#quoteTargetSheet').hidden = false;
-    setTimeout(() => {
-      try { $('#quoteTargetSearch').focus(); } catch { /* ignore */ }
-    }, 60);
+    // 不在打开时自动聚焦搜索框，避免手机输入法直接弹出来挡住列表
   }
 
   function closeQuoteTarget() {
@@ -4032,6 +4730,9 @@
 
   let scrollPending = false;
   let scrollHoldUntil = 0;
+  let lastScrollTop = 0;
+  // 用户主动上滑看历史后，状态更新不要把人拽回底部
+  let readingHistory = false;
 
   /** 用户手指刚碰过消息区，短时间内不要自动回到底部，避免和滑动抢 */
   function holdAutoScroll() {
@@ -4040,8 +4741,11 @@
 
   function maybeScroll(force) {
     if (!force) {
+      if (readingHistory) return;
       if (Date.now() < scrollHoldUntil) return;
       if (!isNearBottom()) return;
+    } else {
+      readingHistory = false;
     }
     if (scrollPending) return;
     scrollPending = true;
@@ -4671,6 +5375,16 @@
     $('#downloadsSheet').addEventListener('click', e => {
       if (e.target === $('#downloadsSheet')) closeDownloadsSheet();
     });
+    const statusBtn = $('#statusBtn');
+    if (statusBtn) statusBtn.onclick = openStatusSheet;
+    const statusClose = $('#statusClose');
+    if (statusClose) statusClose.onclick = closeStatusSheet;
+    const statusRefresh = $('#statusRefresh');
+    if (statusRefresh) statusRefresh.onclick = () => refreshStatus(true);
+    const statusSheet = $('#statusSheet');
+    if (statusSheet) statusSheet.addEventListener('click', e => {
+      if (e.target === statusSheet) closeStatusSheet();
+    });
     $('#fileInput').addEventListener('change', e => {
       addImageFiles(e.target.files);
       e.target.value = '';
@@ -4695,6 +5409,11 @@
     $('#messages').addEventListener('wheel', holdAutoScroll, { passive: true });
     $('#messages').addEventListener('scroll', () => {
       lastMsgScrollAt = Date.now();
+      const m = $('#messages');
+      const top = m.scrollTop;
+      if (top < lastScrollTop - 3 && !isNearBottom()) readingHistory = true;
+      else if (isNearBottom()) readingHistory = false;
+      lastScrollTop = top;
       if (cancelMsgPress) cancelMsgPress();
     }, { passive: true });
     $('#messages').addEventListener('scroll', () => {
@@ -4713,6 +5432,7 @@
     }
     syncViewportHeight();
     setupSheetBackHandling();
+    setupSelectionToolbar();
 
     const imgViewerClose = $('#imgViewerClose');
     if (imgViewerClose) imgViewerClose.onclick = closeImageViewer;
@@ -4737,6 +5457,7 @@
         closeAttachSheet();
         closeRefSheet();
         closeDownloadsSheet();
+        closeStatusSheet();
         closePcFileSheet();
         closeMsgActions();
         closeQuoteTarget();
