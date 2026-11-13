@@ -13,15 +13,14 @@ import org.json.JSONObject;
 import org.json.JSONTokener;
 
 /**
- * 给 WebView 的系统文字选择菜单补上「引用 / 引用至其他对话」。
- * 网页侧通过 window.__nativeSelectionAction 接管选中文字；没有网页处理的页面不受影响。
+ * 文字选择菜单适配：
+ * - 输入框：用 App 自己的「复制 / 剪切 / 粘贴 / 全选」四项并自行执行动作；
+ * - 消息选字：隐藏系统菜单项，操作交给网页工具条（复制 / 引用 / 引用至其他对话）。
  *
- * 输入框等可编辑区域使用 App 自己的四项菜单（复制 → 剪切 → 粘贴 → 全选）并自行执行动作：
- * WebView 的系统菜单项一旦 clear() 后重新 add，点击就不会再触发原生动作，所以不能重建系统项。
+ * WebView 的系统菜单项一旦 clear() 后重新 add，点击就不会再触发原生动作，
+ * 所以输入框才全部由本类实现；消息侧只隐藏、不重建系统项。
  */
 public class SelectionWebView extends WebView {
-    private static final int MENU_QUOTE = 0x5E1101;
-    private static final int MENU_QUOTE_OTHER = 0x5E1102;
     private static final int MENU_PASTE = 0x5E1103;
     private static final int MENU_COPY = 0x5E1104;
     private static final int MENU_CUT = 0x5E1105;
@@ -58,10 +57,9 @@ public class SelectionWebView extends WebView {
                     if (isEditableMenu(menu)) {
                         rebuildEditableMenu(menu);
                     } else {
-                        // 消息选字完全交给网页自己的工具条：隐藏系统菜单，
-                        // 并结束系统 ActionMode，否则它的空白悬浮层会挡住网页按钮的点击
+                        // 消息选字：系统菜单项全部隐藏，操作交给网页工具条。
+                        // 不结束 ActionMode，保留系统选区手柄，才能长按后拖拽调整选区。
                         rebuildMenu(menu);
-                        dismissMessageActionMode(mode);
                     }
                 } catch (Exception ignored) {
                     // 菜单兼容问题不能让 App 闪退
@@ -72,16 +70,6 @@ public class SelectionWebView extends WebView {
             @Override
             public boolean onActionItemClicked(ActionMode mode, MenuItem item) {
                 int id = item.getItemId();
-                if (id == MENU_QUOTE) {
-                    runSelectionAction("quote");
-                    finishLater(mode);
-                    return true;
-                }
-                if (id == MENU_QUOTE_OTHER) {
-                    runSelectionAction("quoteOther");
-                    finishLater(mode);
-                    return true;
-                }
                 if (id == MENU_PASTE) {
                     cancelSelectAllRetries();
                     pasteIntoEditable();
@@ -110,7 +98,6 @@ public class SelectionWebView extends WebView {
             @Override
             public void onDestroyActionMode(ActionMode mode) {
                 cancelSelectAllRetries();
-                closingMessageMode = false;
                 callback.onDestroyActionMode(mode);
                 evaluateJavascript("window.__nativeSelectionMenu=false", null);
             }
@@ -137,8 +124,7 @@ public class SelectionWebView extends WebView {
             int id = item.getItemId();
             // 忽略本类上一轮加进去的项，只根据系统原始菜单判断
             if (id == MENU_PASTE || id == MENU_COPY || id == MENU_CUT
-                    || id == MENU_SELECT_ALL || id == MENU_QUOTE
-                    || id == MENU_QUOTE_OTHER) {
+                    || id == MENU_SELECT_ALL) {
                 continue;
             }
             MenuItemInfo info = new MenuItemInfo(item);
@@ -147,37 +133,6 @@ public class SelectionWebView extends WebView {
             if (info.isSelectAll()) hasSelectAll = true;
         }
         return hasSelectAll && !hasCopy;
-    }
-
-    private boolean closingMessageMode = false;
-
-    /**
-     * 消息选字：结束系统 ActionMode，把操作交给网页工具条。
-     * 先存一份当前 DOM 选区，系统结束时如果清掉了就再恢复。
-     */
-    private void dismissMessageActionMode(ActionMode mode) {
-        if (closingMessageMode) return;
-        closingMessageMode = true;
-        evaluateJavascript(
-                "(function(){var s=window.getSelection();window.__nativeSavedSel="
-                + "(s&&s.rangeCount&&!s.isCollapsed)?s.getRangeAt(0).cloneRange():null;})()",
-                null);
-        postDelayed(() -> {
-            try { mode.finish(); } catch (Exception ignored) { }
-            postDelayed(this::restoreSavedSelection, 120);
-            postDelayed(this::restoreSavedSelection, 400);
-        }, 50);
-    }
-
-    /** 恢复被系统 ActionMode 结束时清掉的网页选区 */
-    private void restoreSavedSelection() {
-        evaluateJavascript(
-                "(function(){var s=window.getSelection();if(!s)return;"
-                + "if(s.rangeCount&&!s.isCollapsed)return;"
-                + "if(window.__nativeSavedSel){try{s.removeAllRanges();"
-                + "s.addRange(window.__nativeSavedSel);}catch(e){}}})()",
-                null);
-        evaluateJavascript("window.__nativeSelectionMenu=false", null);
     }
 
     /** 输入框菜单：复制 → 剪切 → 粘贴 → 全选，点击全部由本类执行。 */
@@ -216,13 +171,11 @@ public class SelectionWebView extends WebView {
 
     private static final class MenuItemInfo {
         final int id;
-        final CharSequence title;
         private final String lower;
 
         MenuItemInfo(MenuItem item) {
             this.id = item.getItemId();
-            this.title = item.getTitle();
-            this.lower = String.valueOf(title).toLowerCase();
+            this.lower = String.valueOf(item.getTitle()).toLowerCase();
         }
 
         boolean isCopy() {
@@ -241,17 +194,6 @@ public class SelectionWebView extends WebView {
             return id == android.R.id.selectAll || lower.contains("全选")
                     || lower.contains("select all") || lower.contains("selectall");
         }
-
-        boolean isWebSearchOrShare() {
-            return lower.contains("网页搜索") || lower.contains("web search")
-                    || lower.contains("分享") || lower.contains("share");
-        }
-    }
-
-    private void runSelectionAction(String action) {
-        evaluateJavascript(
-                "window.__nativeSelectionAction && window.__nativeSelectionAction('" + action + "')",
-                null);
     }
 
     // ---------------------------------------------------------------- 输入框动作

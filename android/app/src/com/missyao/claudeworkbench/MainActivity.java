@@ -203,6 +203,10 @@ public class MainActivity extends Activity {
         s.setJavaScriptCanOpenWindowsAutomatically(false);
         s.setLoadWithOverviewMode(true);
         s.setUseWideViewPort(true);
+        // 页面缩放交给图片查看器的双指手势，避免 WebView 原生缩放抢走触摸
+        s.setSupportZoom(false);
+        s.setBuiltInZoomControls(false);
+        s.setDisplayZoomControls(false);
         webView.addJavascriptInterface(new DownloadsBridge(this), "AndroidDownloads");
         // App 更新后清一次 WebView 缓存，避免旧的 m.js/m.css 被缓存住（新页面也带 ?v=）。
         int assetTag = LocalEngine.assetVersion();

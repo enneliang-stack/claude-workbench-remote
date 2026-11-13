@@ -1944,6 +1944,9 @@
   let imgGesture = null;
   let imgTapTimer = 0;
   let imgLastTapAt = 0;
+  let imgSuppressClickUntil = 0;
+  let imgDragX = 0;          // 跟手横滑的偏移量
+  let imgAnimating = false;  // 松手后的切换/回弹动画中
 
   function applyImgTransform() {
     const img = $('#imgViewerImg');
@@ -1961,13 +1964,52 @@
     $('#imgViewerNext').hidden = n < 2 || imgView.index >= n - 1;
   }
 
+  function imgStageWidth() {
+    const stage = $('#imgViewerStage');
+    return (stage && stage.clientWidth) || window.innerWidth || 0;
+  }
+
+  /** 滑轨三格：上一张 / 当前 / 下一张，基准位置让中间格居中 */
+  function setImgTrack(dx, animate) {
+    const track = $('#imgViewerTrack');
+    if (!track) return;
+    track.classList.toggle('animating', !!animate);
+    track.style.transform = `translate3d(${-imgStageWidth() + dx}px, 0, 0)`;
+  }
+
+  function resetImgTrack() {
+    const track = $('#imgViewerTrack');
+    if (!track) {
+      imgDragX = 0;
+      return;
+    }
+    track.classList.remove('animating');
+    track.style.transform = `translate3d(${-imgStageWidth()}px, 0, 0)`;
+    void track.offsetWidth;
+    imgDragX = 0;
+  }
+
+  function updateViewerImages() {
+    const list = imgView.list;
+    const i = imgView.index;
+    const cur = $('#imgViewerImg');
+    const prev = $('#imgViewerPrevImg');
+    const next = $('#imgViewerNextImg');
+    if (cur) cur.src = list[i] || '';
+    if (prev) prev.src = i > 0 ? list[i - 1] : '';
+    if (next) next.src = i < list.length - 1 ? list[i + 1] : '';
+  }
+
   function openImageViewer(src, list, index) {
     const arr = (Array.isArray(list) && list.length ? list : [src]).filter(Boolean);
     let idx = Number.isFinite(index) ? index : arr.indexOf(src);
     if (idx < 0 || idx >= arr.length) idx = 0;
     imgView = { list: arr, index: idx, scale: 1, tx: 0, ty: 0 };
-    $('#imgViewerImg').src = arr[idx];
+    imgAnimating = false;
+    imgDragX = 0;
     $('#imgViewer').hidden = false;
+    updateViewerImages();
+    resetImgTrack();
     updateViewerChrome();
     applyImgTransform();
   }
@@ -1976,24 +2018,43 @@
     clearTimeout(imgTapTimer);
     imgTapTimer = 0;
     imgLastTapAt = 0;
+    imgAnimating = false;
+    imgDragX = 0;
     imgView = { list: [], index: 0, scale: 1, tx: 0, ty: 0 };
     $('#imgViewer').hidden = true;
-    $('#imgViewerImg').src = '';
+    ['#imgViewerImg', '#imgViewerPrevImg', '#imgViewerNextImg'].forEach(sel => {
+      const img = $(sel);
+      if (img) img.src = '';
+    });
     $('#imgViewerImg').style.transform = '';
     $('#imgViewer').classList.remove('zoomed');
+    resetImgTrack();
   }
 
-  function stepImageViewer(delta) {
-    if (imgView.list.length < 2) return;
-    const next = imgView.index + delta;
-    if (next < 0 || next >= imgView.list.length) return;
-    imgView.index = next;
+  function commitImageViewerStep(delta) {
+    imgView.index += delta;
     imgView.scale = 1;
     imgView.tx = 0;
     imgView.ty = 0;
-    $('#imgViewerImg').src = imgView.list[imgView.index];
+    updateViewerImages();
+    resetImgTrack();
     updateViewerChrome();
     applyImgTransform();
+    imgAnimating = false;
+  }
+
+  /** 切换上/下一张；animate=true 时整条滑轨滑动到位 */
+  function stepImageViewer(delta, animate = false) {
+    if (imgAnimating || imgView.list.length < 2) return;
+    const next = imgView.index + delta;
+    if (next < 0 || next >= imgView.list.length) return;
+    if (!animate) {
+      commitImageViewerStep(delta);
+      return;
+    }
+    imgAnimating = true;
+    setImgTrack(-delta * imgStageWidth(), true);
+    setTimeout(() => commitImageViewerStep(delta), 230);
   }
 
   function viewTouchDistance(a, b) {
@@ -2002,20 +2063,42 @@
     return Math.sqrt(dx * dx + dy * dy);
   }
 
+  /** 图片拖动不能拖出可视区域：按当前缩放计算平移上限 */
+  function clampImgPan() {
+    const img = $('#imgViewerImg');
+    const stage = $('#imgViewerStage');
+    if (!img || !stage || !stage.clientWidth || !stage.clientHeight) return;
+    const maxX = Math.max(0, (img.offsetWidth * imgView.scale - stage.clientWidth) / 2);
+    const maxY = Math.max(0, (img.offsetHeight * imgView.scale - stage.clientHeight) / 2);
+    imgView.tx = Math.max(-maxX, Math.min(maxX, imgView.tx));
+    imgView.ty = Math.max(-maxY, Math.min(maxY, imgView.ty));
+  }
+
   function setupImageViewerGestures() {
     const stage = $('#imgViewerStage');
     if (!stage || stage.dataset.gesture) return;
     stage.dataset.gesture = '1';
 
+    const img = $('#imgViewerImg');
+    if (img) img.addEventListener('load', () => { clampImgPan(); applyImgTransform(); });
+
     stage.addEventListener('touchstart', e => {
+      if (imgAnimating) return;
       if (e.touches.length === 2) {
+        if (imgDragX) resetImgTrack();
         clearTimeout(imgTapTimer);
+        imgTapTimer = 0;
+        imgLastTapAt = 0;
         imgGesture = {
           mode: 'pinch',
           startDist: Math.max(1, viewTouchDistance(e.touches[0], e.touches[1])),
           startScale: imgView.scale,
           startTx: imgView.tx,
-          startTy: imgView.ty
+          startTy: imgView.ty,
+          startMidX: (e.touches[0].clientX + e.touches[1].clientX) / 2,
+          startMidY: (e.touches[0].clientY + e.touches[1].clientY) / 2,
+          cx: stage.clientWidth / 2,
+          cy: stage.clientHeight / 2
         };
         e.preventDefault();
       } else if (e.touches.length === 1) {
@@ -2025,30 +2108,56 @@
           startY: e.touches[0].clientY,
           startTx: imgView.tx,
           startTy: imgView.ty,
-          moved: false
+          moved: false,
+          dragging: false
         };
       }
     }, { passive: false });
 
     stage.addEventListener('touchmove', e => {
-      if (!imgGesture) return;
-      if (imgGesture.mode === 'pinch' && e.touches.length === 2) {
+      const g = imgGesture;
+      if (!g) return;
+      if (g.mode === 'pinch' && e.touches.length === 2) {
         const dist = Math.max(1, viewTouchDistance(e.touches[0], e.touches[1]));
-        imgView.scale = Math.max(1, Math.min(8, imgGesture.startScale * dist / imgGesture.startDist));
-        if (imgView.scale <= 1.01) { imgView.tx = 0; imgView.ty = 0; }
+        const scale = Math.max(1, Math.min(8, g.startScale * dist / g.startDist));
+        const midX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+        const midY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+        // 以双指中心为锚点缩放：手指下的画面保持不动
+        const ratio = scale / g.startScale;
+        imgView.scale = scale;
+        imgView.tx = midX - g.cx - (g.startMidX - g.cx - g.startTx) * ratio;
+        imgView.ty = midY - g.cy - (g.startMidY - g.cy - g.startTy) * ratio;
+        if (scale <= 1.01) { imgView.scale = 1; imgView.tx = 0; imgView.ty = 0; }
+        clampImgPan();
         applyImgTransform();
         e.preventDefault();
         return;
       }
-      if (imgGesture.mode === 'pan' && e.touches.length === 1) {
-        const dx = e.touches[0].clientX - imgGesture.startX;
-        const dy = e.touches[0].clientY - imgGesture.startY;
-        if (Math.abs(dx) > 10 || Math.abs(dy) > 10) imgGesture.moved = true;
+      if (g.mode === 'pan' && e.touches.length === 1) {
+        const dx = e.touches[0].clientX - g.startX;
+        const dy = e.touches[0].clientY - g.startY;
+        if (Math.abs(dx) > 10 || Math.abs(dy) > 10) g.moved = true;
         if (imgView.scale > 1.01) {
-          imgView.tx = imgGesture.startTx + dx;
-          imgView.ty = imgGesture.startTy + dy;
+          // 放大后单指拖动图片
+          imgView.tx = g.startTx + dx;
+          imgView.ty = g.startTy + dy;
+          clampImgPan();
           applyImgTransform();
           e.preventDefault();
+        } else if (!imgAnimating) {
+          // 未放大：横向滑动时整条滑轨跟着手指走
+          if (!g.dragging && Math.abs(dx) > 8 && Math.abs(dx) > Math.abs(dy) * 1.2) {
+            g.dragging = true;
+          }
+          if (g.dragging) {
+            let off = dx;
+            const canPrev = imgView.index > 0;
+            const canNext = imgView.index < imgView.list.length - 1;
+            if ((off > 0 && !canPrev) || (off < 0 && !canNext)) off *= 0.25;
+            imgDragX = off;
+            setImgTrack(off, false);
+            e.preventDefault();
+          }
         }
       }
     }, { passive: false });
@@ -2056,21 +2165,58 @@
     stage.addEventListener('touchend', e => {
       const g = imgGesture;
       imgGesture = null;
-      if (!g) return;
+      if (!g) {
+        if (imgDragX) {
+          imgAnimating = true;
+          setImgTrack(0, true);
+          setTimeout(() => {
+            resetImgTrack();
+            imgAnimating = false;
+          }, 230);
+        }
+        return;
+      }
       if (g.mode === 'pinch') {
         if (imgView.scale <= 1.01) { imgView.scale = 1; imgView.tx = 0; imgView.ty = 0; }
+        clampImgPan();
         applyImgTransform();
+        imgSuppressClickUntil = Date.now() + 350;
         return;
       }
       if (g.mode !== 'pan') return;
       const dx = (e.changedTouches[0] ? e.changedTouches[0].clientX : g.startX) - g.startX;
       const dy = (e.changedTouches[0] ? e.changedTouches[0].clientY : g.startY) - g.startY;
-      if (imgView.scale > 1.01 || g.moved) {
+      if (imgView.scale > 1.01) {
+        clampImgPan();
         applyImgTransform();
+        if (g.moved) imgSuppressClickUntil = Date.now() + 350;
         return;
       }
-      if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) && imgView.list.length > 1) {
-        stepImageViewer(dx < 0 ? 1 : -1);
+      // 跟手横滑松手：过阈值就滑到上/下一张，否则弹回原位
+      if (g.dragging || imgDragX) {
+        imgSuppressClickUntil = Date.now() + 350;
+        const threshold = Math.max(40, Math.min(90, imgStageWidth() * 0.22));
+        const can = imgDragX < 0
+          ? imgView.index < imgView.list.length - 1
+          : imgView.index > 0;
+        if (Math.abs(imgDragX) >= threshold && can) {
+          const delta = imgDragX < 0 ? 1 : -1;
+          imgAnimating = true;
+          setImgTrack(-delta * imgStageWidth(), true);
+          setTimeout(() => commitImageViewerStep(delta), 230);
+        } else {
+          imgAnimating = true;
+          setImgTrack(0, true);
+          setTimeout(() => {
+            resetImgTrack();
+            imgAnimating = false;
+          }, 230);
+        }
+        return;
+      }
+      if (g.moved) {
+        applyImgTransform();
+        imgSuppressClickUntil = Date.now() + 350;
         return;
       }
       if (Math.abs(dx) > 10 || Math.abs(dy) > 10) return;
@@ -2083,6 +2229,7 @@
         imgView.scale = imgView.scale > 1.01 ? 1 : 2.5;
         imgView.tx = 0;
         imgView.ty = 0;
+        clampImgPan();
         applyImgTransform();
       } else {
         imgLastTapAt = now;
@@ -2092,12 +2239,32 @@
       }
     });
 
+    stage.addEventListener('touchcancel', () => {
+      imgGesture = null;
+      if (imgDragX) {
+        imgAnimating = true;
+        setImgTrack(0, true);
+        setTimeout(() => {
+          resetImgTrack();
+          imgAnimating = false;
+        }, 230);
+      }
+      applyImgTransform();
+    });
+
     stage.addEventListener('wheel', e => {
       e.preventDefault();
       imgView.scale = Math.max(1, Math.min(8, imgView.scale * (e.deltaY < 0 ? 1.18 : .85)));
       if (imgView.scale <= 1.01) { imgView.scale = 1; imgView.tx = 0; imgView.ty = 0; }
+      clampImgPan();
       applyImgTransform();
     }, { passive: false });
+
+    // 屏幕旋转/尺寸变化后重新对准滑轨基准位置
+    window.addEventListener('resize', () => {
+      const viewer = $('#imgViewer');
+      if (viewer && !viewer.hidden) resetImgTrack();
+    });
   }
 
   /** 历史消息里的「过程」：思考、工具调用、中间结论文本统一折叠，默认合上 */
@@ -5384,14 +5551,19 @@
     const imgViewerClose = $('#imgViewerClose');
     if (imgViewerClose) imgViewerClose.onclick = closeImageViewer;
     const imgViewerPrev = $('#imgViewerPrev');
-    if (imgViewerPrev) imgViewerPrev.onclick = () => stepImageViewer(-1);
+    if (imgViewerPrev) imgViewerPrev.onclick = () => stepImageViewer(-1, true);
     const imgViewerNext = $('#imgViewerNext');
-    if (imgViewerNext) imgViewerNext.onclick = () => stepImageViewer(1);
+    if (imgViewerNext) imgViewerNext.onclick = () => stepImageViewer(1, true);
     // 点图片外的空白关闭；图片本身用单指点按关闭、双击放大、左右滑切图。
     const imgViewerStage = $('#imgViewerStage');
     if (imgViewerStage) {
       imgViewerStage.addEventListener('click', e => {
-        if (e.target === imgViewerStage) closeImageViewer();
+        if (Date.now() < imgSuppressClickUntil) return;
+        const t = e.target;
+        if (t === imgViewerStage || t.id === 'imgViewerTrack'
+            || (t.classList && t.classList.contains('img-viewer-cell'))) {
+          closeImageViewer();
+        }
       });
       setupImageViewerGestures();
     }

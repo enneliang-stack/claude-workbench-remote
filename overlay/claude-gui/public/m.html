@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="color-scheme" content="dark">
 <meta name="theme-color" content="#0b0d10">
 <meta name="mobile-web-app-capable" content="yes">
@@ -14,7 +14,7 @@
 <link rel="apple-touch-icon" href="/icon-180.png">
 <link rel="icon" href="/icon-192.png" type="image/png">
 <title>Claude Code 工作台</title>
-<link rel="stylesheet" href="/m.css?v=20261113q">
+<link rel="stylesheet" href="/m.css?v=20261113r">
 </head>
 <body>
 <div id="app">
@@ -295,7 +295,11 @@
 
   <div id="imgViewer" class="img-viewer" hidden>
     <div id="imgViewerStage" class="img-viewer-stage">
-      <img id="imgViewerImg" alt="查看图片">
+      <div id="imgViewerTrack" class="img-viewer-track">
+        <div class="img-viewer-cell"><img id="imgViewerPrevImg" alt=""></div>
+        <div class="img-viewer-cell"><img id="imgViewerImg" alt="查看图片"></div>
+        <div class="img-viewer-cell"><img id="imgViewerNextImg" alt=""></div>
+      </div>
     </div>
     <div id="imgViewerCount" class="img-viewer-count" hidden></div>
     <button id="imgViewerPrev" class="img-viewer-nav prev" type="button" aria-label="上一张">‹</button>
@@ -307,6 +311,6 @@
 </div>
 <script>window.__GUI_TOKEN__ = "__TOKEN__";</script>
 <script src="/ref-digest.js?v=20261112n"></script>
-<script src="/m.js?v=20261113u"></script>
+<script src="/m.js?v=20261113w"></script>
 </body>
 </html>
