@@ -1,10 +1,10 @@
 {
-  "versionCode": 117,
-  "versionName": "2.4.76",
+  "versionCode": 118,
+  "versionName": "2.4.77",
   "apk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.51/ClaudeWorkbench-full.apk",
   "sha256": "3bc07db344928c6b7b3def58f6c6bc80feeffb86e9c95faba1cfb524fe76c8eb",
   "slimApk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/latest/download/ClaudeWorkbench-slim.apk",
-  "slimSha256": "a79bc7a0bbf92fa6b1582a954db8fdaa6de26902f72b93ace344e76686f42f08",
+  "slimSha256": "8d36da3e67b2624e350059b75a7272cf8e4ebb1060e143aed6940f7e8b4f6445",
   "important": false,
-  "notes": "2.4.76 更新\n\n- 修复消息里选中文字仍然同时出现系统菜单和网页工具条两个窗口的问题：菜单归类不再被 App 自己补的「粘贴」干扰，消息菜单只保留一套。\n- 修复输入框全选后选区闪一下消失：全选后不再强制结束选择菜单，选区会保持。"
+  "notes": "2.4.77 更新\n\n- 消息选字菜单只保留复制和两个引用项，引用不再被挤到右侧第二页。\n- 输入框全选后选区保持：不再刷新/结束菜单，并自动补两次选区。"
 }

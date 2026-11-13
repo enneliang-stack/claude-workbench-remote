@@ -74,25 +74,25 @@ public class SelectionWebView extends WebView {
                     return true;
                 }
                 if (id == MENU_PASTE) {
+                    cancelSelectAllRetries();
                     pasteIntoEditable();
                     finishLater(mode);
                     return true;
                 }
                 if (id == MENU_COPY) {
+                    cancelSelectAllRetries();
                     copyEditableSelection(mode, false);
                     return true;
                 }
                 if (id == MENU_CUT) {
+                    cancelSelectAllRetries();
                     copyEditableSelection(mode, true);
                     return true;
                 }
                 if (id == MENU_SELECT_ALL) {
+                    // 不能结束 ActionMode，也不刷新菜单：空光标下全选是网页侧
+                    // 建立的选区，系统刷新/结束菜单会把选区清掉（表现为闪一下消失）
                     selectAllEditable();
-                    // 不能结束 ActionMode：空光标下全选是网页侧建立的选区，
-                    // 一结束菜单系统就会把选区清掉（表现为全选闪一下消失）
-                    postDelayed(() -> {
-                        try { mode.invalidate(); } catch (Exception ignored) { }
-                    }, 150);
                     return true;
                 }
                 return callback.onActionItemClicked(mode, item);
@@ -100,6 +100,7 @@ public class SelectionWebView extends WebView {
 
             @Override
             public void onDestroyActionMode(ActionMode mode) {
+                cancelSelectAllRetries();
                 callback.onDestroyActionMode(mode);
                 evaluateJavascript("window.__nativeSelectionMenu=false", null);
             }
@@ -149,31 +150,35 @@ public class SelectionWebView extends WebView {
             if (info.isCut()) hasCut = true;
             if (info.isSelectAll()) hasSelectAll = true;
         }
+        // 输入框里有文字时四项都保留：光标没选中文字时点全选后，
+        // 菜单里已经有「复制/剪切」，不需要再刷新菜单就能继续操作
+        boolean hasText = hasCopy || hasCut || hasSelectAll;
         menu.clear();
-        if (hasCopy) menu.add(Menu.NONE, MENU_COPY, 0, "复制");
-        if (hasCut) menu.add(Menu.NONE, MENU_CUT, 1, "剪切");
+        if (hasText) {
+            menu.add(Menu.NONE, MENU_COPY, 0, "复制");
+            menu.add(Menu.NONE, MENU_CUT, 1, "剪切");
+        }
         menu.add(Menu.NONE, MENU_PASTE, 2, "粘贴");
         if (hasSelectAll) menu.add(Menu.NONE, MENU_SELECT_ALL, 3, "全选");
     }
 
     /**
-     * 消息选字菜单：系统自带的复制/全选保持原样（重建后点击会失效），
-     * 只去掉分享/网页搜索，再追加引用项。
+     * 消息选字菜单：只保留系统自带的「复制」（点它才是原生复制），
+     * 其余系统项（全选/分享/网页搜索等）去掉，再追加引用项。
+     * 这样菜单正好三项，引用不会被挤到右侧第二页。
      */
     private static void rebuildMenu(Menu menu) {
         for (int i = menu.size() - 1; i >= 0; i--) {
             MenuItem item = menu.getItem(i);
             int id = item.getItemId();
+            if (id == MENU_QUOTE || id == MENU_QUOTE_OTHER) continue;
             MenuItemInfo info = new MenuItemInfo(item);
-            // 清掉分享/网页搜索，以及 onCreate 时误按输入框加进来的自有项
-            if (info.isWebSearchOrShare() || id == MENU_PASTE || id == MENU_COPY
-                    || id == MENU_CUT || id == MENU_SELECT_ALL) {
-                menu.removeItem(id);
-            }
+            if (!info.isCopy()) menu.removeItem(id);
         }
         if (menu.findItem(MENU_QUOTE) == null) {
-            menu.add(Menu.NONE, MENU_QUOTE, 100, "引用");
-            menu.add(Menu.NONE, MENU_QUOTE_OTHER, 101, "引用至其他对话");
+            // 放最前面，保证引用项在第一页；标签用短名，避免被挤到右侧更多页
+            menu.add(Menu.NONE, MENU_QUOTE, -2, "引用");
+            menu.add(Menu.NONE, MENU_QUOTE_OTHER, -1, "引用至其他");
         }
     }
 
@@ -237,7 +242,9 @@ public class SelectionWebView extends WebView {
     private static final String JS_SELECT_ALL =
             "(function(){var el=document.activeElement;if(!el)return;"
             + "var t=(el.tagName||'').toLowerCase();"
-            + "if(t==='textarea'||t==='input'){try{el.focus();el.select();}catch(e){}}"
+            + "if(t==='textarea'||t==='input'){try{el.focus();}catch(e){}"
+            + "try{if(document.execCommand&&document.execCommand('selectAll'))return;}catch(e){}"
+            + "try{el.select();}catch(e){}}"
             + "else if(document.execCommand){document.execCommand('selectAll');}})()";
 
     private void copyEditableSelection(ActionMode mode, boolean cut) {
@@ -246,13 +253,29 @@ public class SelectionWebView extends WebView {
             if (!text.isEmpty()) {
                 copyToClipboard(text);
                 Toast.makeText(getContext(), cut ? "已剪切" : "已复制", Toast.LENGTH_SHORT).show();
+            } else {
+                Toast.makeText(getContext(), "没有选中文字", Toast.LENGTH_SHORT).show();
             }
         });
         finishLater(mode);
     }
 
+    private int selectAllGeneration = 0;
+
+    /** 全选后过一会儿再补两次：系统可能在菜单交互后把网页侧选区清掉 */
     private void selectAllEditable() {
+        final int gen = ++selectAllGeneration;
         evaluateJavascript(JS_SELECT_ALL, null);
+        postDelayed(() -> {
+            if (gen == selectAllGeneration) evaluateJavascript(JS_SELECT_ALL, null);
+        }, 200);
+        postDelayed(() -> {
+            if (gen == selectAllGeneration) evaluateJavascript(JS_SELECT_ALL, null);
+        }, 600);
+    }
+
+    private void cancelSelectAllRetries() {
+        selectAllGeneration++;
     }
 
     /** 系统没提供「粘贴」时自己插入剪贴板文字（空输入框长按用）。 */
