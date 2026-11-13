@@ -1905,7 +1905,11 @@ public class MainActivity extends Activity {
                 final String channel = useSlim
                     ? "精简更新（仅 App，约 8 MB，不用重下环境）"
                     : "完整包（含手机环境，约 194 MB）";
+                final JSONObject manifest = o;
                 runOnUiThread(() -> {
+                    // 手动检查也要同步主页的重要更新标记；否则只有重启后的静默检查才会出现。
+                    importantUpdateInfo = newCode > oldCode && important ? manifest : null;
+                    updateImportantBadge();
                     if (newCode <= oldCode) {
                         showInfoDialog("已是最新版本",
                             "当前版本：" + oldName + "（" + oldCode + "）", "知道了");
