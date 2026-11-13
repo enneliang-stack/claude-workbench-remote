@@ -1,10 +1,10 @@
 {
-  "versionCode": 114,
-  "versionName": "2.4.73",
+  "versionCode": 115,
+  "versionName": "2.4.74",
   "apk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.51/ClaudeWorkbench-full.apk",
   "sha256": "3bc07db344928c6b7b3def58f6c6bc80feeffb86e9c95faba1cfb524fe76c8eb",
   "slimApk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/latest/download/ClaudeWorkbench-slim.apk",
-  "slimSha256": "519903b1376b11f2c84f476a9e89f2822607f255837db2affe3d0598c2a59e17",
+  "slimSha256": "f14b6f46f769c038f50b28049d5a6282601b95f46812249151ae72ef0c5de539",
   "important": false,
-  "notes": "2.4.73 更新\n\n- 输入框菜单统一顺序：复制、剪切、粘贴、全选。\n- 空输入框或没有选中文字时，长按也会显示「粘贴」；点「粘贴」直接把剪贴板文字插入光标处。\n- 消息里的长按选字仍显示「引用 / 引用至其他对话」。"
+  "notes": "2.4.74 更新\n\n- 修复对话消息里选中文字时同时出现系统菜单和网页工具条两个窗口的问题：改为按系统菜单项判断输入框，消息选字只保留一套引用菜单。\n- 保留输入框菜单顺序：复制、剪切、粘贴、全选；空输入框长按仍有「粘贴」。"
 }

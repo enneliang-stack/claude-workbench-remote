@@ -25,15 +25,8 @@ public class SelectionWebView extends WebView {
     private static final int MENU_QUOTE_OTHER = 0x5E1102;
     private static final int MENU_PASTE = 0x5E1103;
 
-    /** 网页在 touchstart/focusin 时同步；true 表示当前操作的是输入框 */
-    private volatile boolean editableContext = false;
-
     public SelectionWebView(Context context) {
         super(context);
-    }
-
-    public void setEditableContext(boolean editable) {
-        editableContext = editable;
     }
 
     @Override
@@ -99,20 +92,23 @@ public class SelectionWebView extends WebView {
 
     /**
      * 输入框/可编辑区域用系统菜单（只重排、不删除、不加引用项）。
-     * 优先看网页同步过来的状态；老页面没有 NativeSelection 桥接时，
-     * 用「剪切/粘贴」这些只在输入框出现的系统项兜底；空菜单按输入框处理。
+     * 只根据系统给了哪些菜单项判断，避免网页状态和系统菜单创建时机不同步：
+     * - 空菜单：空输入框长按，按输入框处理；
+     * - 有剪切/粘贴：可编辑区域；
+     * - 只有全选、没有复制：光标停在输入框里、没选文字；
+     * - 有复制：对话消息选字。
      */
     private boolean isEditableMenu(Menu menu) {
-        if (editableContext) return true;
-        boolean empty = menu.size() == 0;
+        if (menu.size() == 0) return true;
+        boolean hasCopy = false;
+        boolean hasSelectAll = false;
         for (int i = 0; i < menu.size(); i++) {
-            String title = String.valueOf(menu.getItem(i).getTitle()).toLowerCase();
-            if (title.contains("剪切") || title.contains("cut")
-                    || title.contains("粘贴") || title.contains("paste")) {
-                return true;
-            }
+            MenuItemInfo info = new MenuItemInfo(menu.getItem(i));
+            if (info.isCut() || info.isPaste()) return true;
+            if (info.isCopy()) hasCopy = true;
+            if (info.isSelectAll()) hasSelectAll = true;
         }
-        return empty;
+        return hasSelectAll && !hasCopy;
     }
 
     /** 输入框菜单：复制 → 剪切 → 粘贴 → 全选 → 其余；系统没给「粘贴」时补一个。 */
@@ -184,20 +180,20 @@ public class SelectionWebView extends WebView {
         }
 
         boolean isCopy() {
-            return lower.contains("复制") || lower.contains("copy");
+            return id == android.R.id.copy || lower.contains("复制") || lower.contains("copy");
         }
 
         boolean isCut() {
-            return lower.contains("剪切") || lower.contains("cut");
+            return id == android.R.id.cut || lower.contains("剪切") || lower.contains("cut");
         }
 
         boolean isPaste() {
-            return lower.contains("粘贴") || lower.contains("paste");
+            return id == android.R.id.paste || lower.contains("粘贴") || lower.contains("paste");
         }
 
         boolean isSelectAll() {
-            return lower.contains("全选") || lower.contains("select all")
-                    || lower.contains("selectall");
+            return id == android.R.id.selectAll || lower.contains("全选")
+                    || lower.contains("select all") || lower.contains("selectall");
         }
 
         boolean isWebSearchOrShare() {

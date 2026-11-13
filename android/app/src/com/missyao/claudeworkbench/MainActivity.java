@@ -204,7 +204,6 @@ public class MainActivity extends Activity {
         s.setLoadWithOverviewMode(true);
         s.setUseWideViewPort(true);
         webView.addJavascriptInterface(new DownloadsBridge(this), "AndroidDownloads");
-        webView.addJavascriptInterface(new SelectionBridge((SelectionWebView) webView), "NativeSelection");
         // App 更新后清一次 WebView 缓存，避免旧的 m.js/m.css 被缓存住（新页面也带 ?v=）。
         int assetTag = LocalEngine.assetVersion();
         SharedPreferences webPrefs = getSharedPreferences("web", MODE_PRIVATE);
