@@ -1,10 +1,10 @@
 {
-  "versionCode": 127,
-  "versionName": "2.4.86",
+  "versionCode": 136,
+  "versionName": "2.4.95",
   "apk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.51/ClaudeWorkbench-full.apk",
   "sha256": "3bc07db344928c6b7b3def58f6c6bc80feeffb86e9c95faba1cfb524fe76c8eb",
   "slimApk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/latest/download/ClaudeWorkbench-slim.apk",
-  "slimSha256": "a92974ca0fa1cc73c1b0f8c7016e57f598cdc66ed0fcdc0cfaf3826ef56ed133",
+  "slimSha256": "57f32b1f6dd6b92c217986e2c5e6345bf36196cd86199870b9a183ffe97628a3",
   "important": true,
-  "notes": "2.4.86 重要更新\n\n- 修复「引用电脑上的文件」等弹层之间切换后返回键多按一次的问题：历史栈不再多出一层。\n- 包含 2.4.85 的全部更新：消息选字网页工具条、输入框复制/剪切/粘贴/全选、图片跟手滑动/双指缩放/拖动。"
+  "notes": "2.4.95 重要更新\n\n- 去掉长按消息弹出的操作面板，长按直接进入文字选择，用网页工具条复制/引用。\n- 关闭 WebView 长按空白处的系统振动。\n- 修复流式过程块出现或任务结束时页面突然跳到前面几条消息的问题：跟随状态始终贴底，看历史时暂缓重建消息列表，回到底部再刷新。\n- 发送消息后强制贴底，过程块弹出也不会停止跟随。\n- 包含 2.4.86 的弹层返回修复，以及 2.4.85 的选字、输入框菜单和图片查看手势更新。"
 }

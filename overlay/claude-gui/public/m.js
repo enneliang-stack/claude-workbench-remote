@@ -998,7 +998,7 @@
     const box = $('#liveTurn');
     if (box) {
       box.appendChild(userNode(msg));
-      maybeScroll();
+      maybeScroll(true);
     } else {
       renderMessages();
     }
@@ -4676,7 +4676,7 @@
       renderPendingQuotes();
       renderPendingFiles();
       autoGrow();
-      maybeScroll(true);
+      forceScrollBottom();
       startLivePolling();
       // SSE 可能正在重连；发送成功后先在本地画出这条消息，回显到了会去重
       appendSentUser({
@@ -4687,6 +4687,10 @@
         steer: sentSteer,
         ts: new Date().toISOString()
       });
+      forceScrollBottom();
+      // 输入框高度、键盘和运行状态栏可能稍后才变，补两次贴底
+      setTimeout(forceScrollBottom, 120);
+      setTimeout(forceScrollBottom, 400);
       // 悬浮窗插话时 App 会先暂停手机操作；消息发出后通知 App 继续。
       try {
         if (window.AndroidDownloads && AndroidDownloads.phoneSent) AndroidDownloads.phoneSent();
@@ -4763,7 +4767,8 @@
     if (!force) {
       if (readingHistory) return;
       if (Date.now() < scrollHoldUntil) return;
-      if (!isNearBottom()) return;
+      // 不再检查“是否接近底部”：过程块可能一次撑高很多，
+      // 只要用户没在翻历史，就应该继续跟随到底
     } else {
       readingHistory = false;
     }
@@ -4774,6 +4779,13 @@
       const m = $('#messages');
       m.scrollTop = m.scrollHeight;
     });
+  }
+
+  /** 发送后强制贴底：清掉“看历史”状态，并等输入框/键盘布局稳定 */
+  function forceScrollBottom() {
+    readingHistory = false;
+    scrollHoldUntil = 0;
+    maybeScroll(true);
   }
 
   // ---------------------------------------------------------------- 新对话
