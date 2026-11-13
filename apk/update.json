@@ -1,10 +1,10 @@
 {
-  "versionCode": 119,
-  "versionName": "2.4.78",
+  "versionCode": 120,
+  "versionName": "2.4.79",
   "apk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.51/ClaudeWorkbench-full.apk",
   "sha256": "3bc07db344928c6b7b3def58f6c6bc80feeffb86e9c95faba1cfb524fe76c8eb",
   "slimApk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/latest/download/ClaudeWorkbench-slim.apk",
-  "slimSha256": "369976aa45f3db21663c7820eea3943d3622b95597c69cd73544512b198db794",
+  "slimSha256": "427f2bfbf88777ce6bb351250b0993953e68a1c235e9255a7a01275bcd1090ac",
   "important": false,
-  "notes": "2.4.78 更新\n\n- 修复消息里选中文字就闪退：不再按 id 删除系统菜单项（系统项可能共用 id），改为隐藏不需要的项，并加异常保护。\n- 消息菜单仍只显示引用、引用至其他、复制三项；输入框菜单和全选保持不变。"
+  "notes": "2.4.79 更新\n\n- 消息选字不再使用系统菜单：系统菜单项全部隐藏，只保留网页自己的黑色工具条（复制 / 引用 / 引用至其他对话），彻底避免两个窗口。\n- 输入框菜单保持：复制、剪切、粘贴、全选，空输入框可粘贴。"
 }

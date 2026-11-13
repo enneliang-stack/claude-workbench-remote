@@ -36,17 +36,17 @@ public class SelectionWebView extends WebView {
         final ActionMode.Callback wrapped = new ActionMode.Callback() {
             @Override
             public boolean onCreateActionMode(ActionMode mode, Menu menu) {
+                // 菜单等 onPrepare 里系统项填好后再处理，避免把消息选字误判成输入框
                 boolean ok = callback.onCreateActionMode(mode, menu);
                 if (!ok) return false;
                 try {
-                    if (isEditableMenu(menu)) {
-                        rebuildEditableMenu(menu);
-                        return true;
+                    // 空输入框长按时系统菜单可能是空的：先补一个「粘贴」兜底；
+                    // 如果其实是消息选字，onPrepare 会把系统菜单全部隐藏。
+                    if (menu.size() == 0) {
+                        menu.add(Menu.NONE, MENU_PASTE, 2, "粘贴");
                     }
-                    rebuildMenu(menu);
-                    evaluateJavascript("window.__nativeSelectionMenu=true", null);
                 } catch (Exception ignored) {
-                    // 菜单兼容问题不能让 App 闪退
+                    // 忽略菜单兼容异常
                 }
                 return true;
             }
@@ -57,13 +57,12 @@ public class SelectionWebView extends WebView {
                 try {
                     if (isEditableMenu(menu)) {
                         rebuildEditableMenu(menu);
-                        return true;
+                    } else {
+                        // 消息选字完全交给网页自己的工具条：隐藏系统菜单所有项
+                        rebuildMenu(menu);
                     }
-                    // WebView 的 onPrepare 会重新补系统项，必须在这里再补一次引用项
-                    rebuildMenu(menu);
-                    evaluateJavascript("window.__nativeSelectionMenu=true", null);
                 } catch (Exception ignored) {
-                    // 同上，任何菜单兼容异常都吞掉
+                    // 菜单兼容问题不能让 App 闪退
                 }
                 return true;
             }
@@ -171,24 +170,13 @@ public class SelectionWebView extends WebView {
     }
 
     /**
-     * 消息选字菜单：只保留系统自带的「复制」（点它才是原生复制），
-     * 其余系统项（全选/分享/网页搜索等）去掉，再追加引用项。
-     * 这样菜单正好三项，引用不会被挤到右侧第二页。
+     * 消息选字不使用系统菜单：全部隐藏，交给网页自带的工具条
+     * （复制 / 引用 / 引用至其他对话），避免系统菜单和网页工具条同时出现。
+     * 只隐藏不删除，避免系统菜单项共用 id 时 removeItem 误删导致闪退。
      */
     private static void rebuildMenu(Menu menu) {
         for (int i = 0; i < menu.size(); i++) {
-            MenuItem item = menu.getItem(i);
-            int id = item.getItemId();
-            if (id == MENU_QUOTE || id == MENU_QUOTE_OTHER) continue;
-            MenuItemInfo info = new MenuItemInfo(item);
-            // 用隐藏而不是 removeItem：系统菜单项可能共用 id，删除会误删并导致越界闪退；
-            // 重新 add 的系统项点击也会失效。
-            if (!info.isCopy()) item.setVisible(false);
-        }
-        if (menu.findItem(MENU_QUOTE) == null) {
-            // 放最前面，保证引用项在第一页；标签用短名，避免被挤到右侧更多页
-            menu.add(Menu.NONE, MENU_QUOTE, -2, "引用");
-            menu.add(Menu.NONE, MENU_QUOTE_OTHER, -1, "引用至其他");
+            menu.getItem(i).setVisible(false);
         }
     }
 
