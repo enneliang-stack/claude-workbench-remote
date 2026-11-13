@@ -1,10 +1,10 @@
 {
-  "versionCode": 126,
-  "versionName": "2.4.85",
+  "versionCode": 127,
+  "versionName": "2.4.86",
   "apk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.51/ClaudeWorkbench-full.apk",
   "sha256": "3bc07db344928c6b7b3def58f6c6bc80feeffb86e9c95faba1cfb524fe76c8eb",
   "slimApk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/latest/download/ClaudeWorkbench-slim.apk",
-  "slimSha256": "cc2e2f5443bd647b5eca2a9b4453b53a85ec55d4cc0da1ffa54a5fe02ba3f7eb",
+  "slimSha256": "a92974ca0fa1cc73c1b0f8c7016e57f598cdc66ed0fcdc0cfaf3826ef56ed133",
   "important": true,
-  "notes": "2.4.85 重要更新\n\n- 消息选字只保留网页工具条（复制 / 引用 / 引用至其他对话），系统菜单不再同时出现；保留选区手柄，可长按拖拽调范围。\n- 修复消息选字工具条按钮点不动、消息选字闪退。\n- 输入框菜单由 App 自己实现：复制、剪切、粘贴、全选，空输入框可粘贴，全选后选区保持。\n- 图片查看器支持左右跟手滑动切图、双指中心缩放、放大后拖动、双击放大，并加了拖动边界。\n- 合并并清理了选字/图片查看相关的冗余代码。"
+  "notes": "2.4.86 重要更新\n\n- 修复「引用电脑上的文件」等弹层之间切换后返回键多按一次的问题：历史栈不再多出一层。\n- 包含 2.4.85 的全部更新：消息选字网页工具条、输入框复制/剪切/粘贴/全选、图片跟手滑动/双指缩放/拖动。"
 }

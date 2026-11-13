@@ -220,6 +220,7 @@
   const sheetStack = [];
   let sheetObserver = null;
   let sheetHistoryCleanup = false;
+  let pendingSheetPush = null;
 
   function setupSheetBackHandling() {
     if (sheetObserver) return;
@@ -241,9 +242,15 @@
           }
         } else if (!sheetStack.includes(el)) {
           sheetStack.push(el);
-          try {
-            history.pushState({ ...(history.state || {}), sheet: el.id }, '');
-          } catch { /* ignore */ }
+          if (sheetHistoryCleanup) {
+            // 上一个弹层关闭时的 history.back() 还没完成，等 popstate 后再入栈，
+            // 否则新弹层会把回退项顶掉，历史栈多一层、返回要按两次
+            pendingSheetPush = el.id;
+          } else {
+            try {
+              history.pushState({ ...(history.state || {}), sheet: el.id }, '');
+            } catch { /* ignore */ }
+          }
         }
       }
     });
@@ -5588,6 +5595,15 @@
     window.addEventListener('popstate', e => {
       if (sheetHistoryCleanup) {
         sheetHistoryCleanup = false;
+        if (pendingSheetPush) {
+          const id = pendingSheetPush;
+          pendingSheetPush = null;
+          if (sheetStack.some(el => el.id === id)) {
+            try {
+              history.pushState({ ...(history.state || {}), sheet: id }, '');
+            } catch { /* ignore */ }
+          }
+        }
         return;
       }
       if (closeTopSheetFromHistory()) return;
