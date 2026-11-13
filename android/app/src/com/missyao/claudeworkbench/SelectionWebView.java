@@ -1,5 +1,7 @@
 package com.missyao.claudeworkbench;
 
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Context;
 import android.graphics.drawable.Drawable;
 import android.view.ActionMode;
@@ -7,17 +9,21 @@ import android.view.Menu;
 import android.view.MenuItem;
 import android.webkit.WebView;
 
+import org.json.JSONObject;
+
 import java.util.ArrayList;
 import java.util.List;
 
 /**
  * 给 WebView 的系统文字选择菜单补上「引用 / 引用至其他对话」。
  * 网页侧通过 window.__nativeSelectionAction 接管选中文字；没有网页处理的页面不受影响。
- * 输入框等可编辑区域保持系统默认菜单（复制/剪切/粘贴/全选），不添加引用项。
+ * 输入框等可编辑区域保留系统菜单并统一顺序：复制 → 剪切 → 粘贴 → 全选；
+ * 没有选中文字（空输入框）时也补一个「粘贴」，避免长按没有任何反应。
  */
 public class SelectionWebView extends WebView {
     private static final int MENU_QUOTE = 0x5E1101;
     private static final int MENU_QUOTE_OTHER = 0x5E1102;
+    private static final int MENU_PASTE = 0x5E1103;
 
     /** 网页在 touchstart/focusin 时同步；true 表示当前操作的是输入框 */
     private volatile boolean editableContext = false;
@@ -37,7 +43,10 @@ public class SelectionWebView extends WebView {
             public boolean onCreateActionMode(ActionMode mode, Menu menu) {
                 boolean ok = callback.onCreateActionMode(mode, menu);
                 if (!ok) return false;
-                if (useSystemMenu(menu)) return true;
+                if (isEditableMenu(menu)) {
+                    rebuildEditableMenu(menu);
+                    return true;
+                }
                 rebuildMenu(menu);
                 evaluateJavascript("window.__nativeSelectionMenu=true", null);
                 return true;
@@ -46,8 +55,11 @@ public class SelectionWebView extends WebView {
             @Override
             public boolean onPrepareActionMode(ActionMode mode, Menu menu) {
                 callback.onPrepareActionMode(mode, menu);
+                if (isEditableMenu(menu)) {
+                    rebuildEditableMenu(menu);
+                    return true;
+                }
                 // WebView 的 onPrepare 会重新补系统项，必须在这里再排一次序
-                if (useSystemMenu(menu)) return true;
                 rebuildMenu(menu);
                 return true;
             }
@@ -62,6 +74,11 @@ public class SelectionWebView extends WebView {
                 }
                 if (id == MENU_QUOTE_OTHER) {
                     runSelectionAction("quoteOther");
+                    finishLater(mode);
+                    return true;
+                }
+                if (id == MENU_PASTE) {
+                    pasteIntoEditable();
                     finishLater(mode);
                     return true;
                 }
@@ -81,11 +98,13 @@ public class SelectionWebView extends WebView {
     }
 
     /**
-     * 输入框/可编辑区域用系统原始菜单。优先看网页同步过来的状态；
-     * 老页面没有 NativeSelection 桥接时，用「剪切/粘贴」这些只在输入框出现的系统项兜底。
+     * 输入框/可编辑区域用系统菜单（只重排、不删除、不加引用项）。
+     * 优先看网页同步过来的状态；老页面没有 NativeSelection 桥接时，
+     * 用「剪切/粘贴」这些只在输入框出现的系统项兜底；空菜单按输入框处理。
      */
-    private boolean useSystemMenu(Menu menu) {
+    private boolean isEditableMenu(Menu menu) {
         if (editableContext) return true;
+        boolean empty = menu.size() == 0;
         for (int i = 0; i < menu.size(); i++) {
             String title = String.valueOf(menu.getItem(i).getTitle()).toLowerCase();
             if (title.contains("剪切") || title.contains("cut")
@@ -93,7 +112,34 @@ public class SelectionWebView extends WebView {
                 return true;
             }
         }
-        return false;
+        return empty;
+    }
+
+    /** 输入框菜单：复制 → 剪切 → 粘贴 → 全选 → 其余；系统没给「粘贴」时补一个。 */
+    private static void rebuildEditableMenu(Menu menu) {
+        List<MenuItemInfo> keep = new ArrayList<>();
+        boolean hasPaste = false;
+        for (int i = 0; i < menu.size(); i++) {
+            MenuItem item = menu.getItem(i);
+            int id = item.getItemId();
+            if (id == MENU_PASTE || id == MENU_QUOTE || id == MENU_QUOTE_OTHER) continue;
+            MenuItemInfo info = new MenuItemInfo(item);
+            keep.add(info);
+            if (info.isPaste()) hasPaste = true;
+        }
+        menu.clear();
+        for (int rank = 0; rank <= 3; rank++) {
+            for (MenuItemInfo info : keep) {
+                if (info.rank() == rank) addItem(menu, info, rank);
+            }
+            if (rank == 2 && !hasPaste) {
+                menu.add(Menu.NONE, MENU_PASTE, 2, "粘贴");
+            }
+        }
+        int order = 100;
+        for (MenuItemInfo info : keep) {
+            if (info.rank() < 0) addItem(menu, info, order++);
+        }
     }
 
     /** 系统项 + 引用项重新排：复制 → 引用 → 引用至其他对话 → 其余。 */
@@ -102,13 +148,10 @@ public class SelectionWebView extends WebView {
         for (int i = 0; i < menu.size(); i++) {
             MenuItem item = menu.getItem(i);
             int id = item.getItemId();
-            if (id == MENU_QUOTE || id == MENU_QUOTE_OTHER) continue;
-            String title = String.valueOf(item.getTitle()).toLowerCase();
-            if (title.contains("网页搜索") || title.contains("web search")
-                    || title.contains("分享") || title.contains("share")) {
-                continue;
-            }
-            keep.add(new MenuItemInfo(item, title));
+            if (id == MENU_QUOTE || id == MENU_QUOTE_OTHER || id == MENU_PASTE) continue;
+            MenuItemInfo info = new MenuItemInfo(item);
+            if (info.isWebSearchOrShare()) continue;
+            keep.add(info);
         }
         menu.clear();
         for (MenuItemInfo info : keep) {
@@ -131,17 +174,44 @@ public class SelectionWebView extends WebView {
         final Drawable icon;
         private final String lower;
 
-        MenuItemInfo(MenuItem item, String lower) {
+        MenuItemInfo(MenuItem item) {
             this.id = item.getItemId();
             this.title = item.getTitle();
             this.enabled = item.isEnabled();
             this.visible = item.isVisible();
             this.icon = item.getIcon();
-            this.lower = lower;
+            this.lower = String.valueOf(title).toLowerCase();
         }
 
         boolean isCopy() {
             return lower.contains("复制") || lower.contains("copy");
+        }
+
+        boolean isCut() {
+            return lower.contains("剪切") || lower.contains("cut");
+        }
+
+        boolean isPaste() {
+            return lower.contains("粘贴") || lower.contains("paste");
+        }
+
+        boolean isSelectAll() {
+            return lower.contains("全选") || lower.contains("select all")
+                    || lower.contains("selectall");
+        }
+
+        boolean isWebSearchOrShare() {
+            return lower.contains("网页搜索") || lower.contains("web search")
+                    || lower.contains("分享") || lower.contains("share");
+        }
+
+        /** 0 复制，1 剪切，2 粘贴，3 全选，-1 其他 */
+        int rank() {
+            if (isCopy()) return 0;
+            if (isCut()) return 1;
+            if (isPaste()) return 2;
+            if (isSelectAll()) return 3;
+            return -1;
         }
     }
 
@@ -156,6 +226,39 @@ public class SelectionWebView extends WebView {
         evaluateJavascript(
                 "window.__nativeSelectionAction && window.__nativeSelectionAction('" + action + "')",
                 null);
+    }
+
+    /** 系统没提供「粘贴」时自己插入剪贴板文字（空输入框长按用）。 */
+    private void pasteIntoEditable() {
+        String text = readClipboardText();
+        if (text == null || text.isEmpty()) {
+            evaluateJavascript("window.__nativeToast && window.__nativeToast('剪贴板没有文字')", null);
+            return;
+        }
+        evaluateJavascript(
+                "window.__nativePasteText && window.__nativePasteText(" + JSONObject.quote(text) + ")",
+                null);
+    }
+
+    private String readClipboardText() {
+        try {
+            ClipboardManager cm = (ClipboardManager) getContext()
+                    .getSystemService(Context.CLIPBOARD_SERVICE);
+            if (cm == null || !cm.hasPrimaryClip()) return null;
+            ClipData clip = cm.getPrimaryClip();
+            if (clip == null || clip.getItemCount() == 0) return null;
+            ClipData.Item item = clip.getItemAt(0);
+            CharSequence text = item.getText();
+            if (text == null && clip.getDescription() != null) {
+                String mime = clip.getDescription().getMimeType(0);
+                if (mime != null && mime.startsWith("text/")) {
+                    text = item.coerceToText(getContext());
+                }
+            }
+            return text == null ? null : text.toString();
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     /** 等网页拿到选中文字后再结束 ActionMode，否则系统可能先把选区清掉。 */

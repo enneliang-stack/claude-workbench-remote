@@ -4096,6 +4096,31 @@
       return true;
     };
 
+    // App 输入框菜单里的「粘贴」：把剪贴板文字插到当前光标处
+    window.__nativePasteText = text => {
+      const el = document.activeElement;
+      if (!el) return false;
+      const tag = (el.tagName || '').toLowerCase();
+      if (tag === 'textarea' || tag === 'input') {
+        const start = el.selectionStart == null ? el.value.length : el.selectionStart;
+        const end = el.selectionEnd == null ? start : el.selectionEnd;
+        try {
+          el.setRangeText(text, start, end, 'end');
+        } catch (e) {
+          el.value = el.value.slice(0, start) + text + el.value.slice(end);
+          try { el.selectionStart = el.selectionEnd = start + text.length; } catch (e2) { /* ignore */ }
+        }
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        return true;
+      }
+      try {
+        return document.execCommand('insertText', false, text);
+      } catch (e) {
+        return false;
+      }
+    };
+    window.__nativeToast = msg => toast(msg, 'err');
+
     // 输入框长按要用系统默认菜单（复制/剪切/粘贴/全选）：把当前是否点在可编辑区域同步给 App
     const nativeSel = window.NativeSelection;
     if (nativeSel && typeof nativeSel.setEditable === 'function') {

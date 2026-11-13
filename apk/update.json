@@ -1,10 +1,10 @@
 {
-  "versionCode": 113,
-  "versionName": "2.4.72",
+  "versionCode": 114,
+  "versionName": "2.4.73",
   "apk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.51/ClaudeWorkbench-full.apk",
   "sha256": "3bc07db344928c6b7b3def58f6c6bc80feeffb86e9c95faba1cfb524fe76c8eb",
   "slimApk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/latest/download/ClaudeWorkbench-slim.apk",
-  "slimSha256": "1cf4ae56133d7a879a900295a79d3f1aaa8fa302764b2704d948b40e60d997e1",
+  "slimSha256": "519903b1376b11f2c84f476a9e89f2822607f255837db2affe3d0598c2a59e17",
   "important": false,
-  "notes": "2.4.72 更新\n\n- 修复手机 App 输入框长按也出现「引用 / 引用至其他对话」的问题：输入框恢复系统默认的复制、剪切、粘贴、全选；只有对话消息里的长按选字才显示引用项。\n- 功能与 2.4.71 相同，已装手机环境的设备直接装精简包。"
+  "notes": "2.4.73 更新\n\n- 输入框菜单统一顺序：复制、剪切、粘贴、全选。\n- 空输入框或没有选中文字时，长按也会显示「粘贴」；点「粘贴」直接把剪贴板文字插入光标处。\n- 消息里的长按选字仍显示「引用 / 引用至其他对话」。"
 }
