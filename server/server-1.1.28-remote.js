@@ -124,7 +124,9 @@ const ASK_GUIDE = [
   '否则不要向用户提问，自行选择合理默认值并在结果里说明。',
   '必须使用 AskUserQuestion 时：把推荐选项放在第一个；在 header 开头标注【重要】',
   '（方向性/不可逆决策，必须等用户回答）或【次要】（小问题，用户未及时回答就按第一个选项继续）。',
-  '过程提示用中文，一句话不超过 20 字；只在开始和关键阶段说，也不要把进度只写进思考。'
+  '只要本轮需要调用工具，就在第一次调用工具前用正文（用户可见）写一句不超过 20 字的中文说明要做什么；',
+  '之后每完成一个关键阶段或准备收尾时再说一句，不要每个工具调用都说，也不要把进度只写进思考；',
+  '不需要工具的纯问答不用写。子代理直接返回结果，不用写这类短话。'
 ].join('');
 
 // 聊天图片（粘贴的截图）限制。Claude API 的 5MB 限制算的是 base64 之后的大小。
@@ -714,9 +716,6 @@ function spawnClaude(args, cwd) {
       // 压缩会用满 32k 输出预算，DeepSeek 会返回 400；降到 900K 后留出约 148K 余量。
       // 真正的轮内兜底在客户端：930K 停止本轮并手动压缩。
       CLAUDE_CODE_AUTO_COMPACT_WINDOW: '900000'
-      // SendUserFile 工具默认不开启：它的工具定义会让每次请求多约 768 个 input token。
-      // 需要文件交付卡片时，用户可在系统环境变量里设 CLAUDE_CODE_ATTACHMENTS_BY_PATH=1，
-      // 这里会原样继承；客户端已有对应的卡片渲染。
     },
     stdio: ['pipe', 'pipe', 'pipe']
   });
@@ -2190,12 +2189,6 @@ function compactToolInput(input) {
           new_string: compactValue('new_string', typeof e.new_string === 'string' ? e.new_string : '')
         }
       : e);
-  }
-  if (Array.isArray(input.files)) {
-    out.files = input.files.slice(0, 20).map(p => compactValue('file_path', String(p || '')));
-  }
-  for (const k of ['caption', 'display', 'status']) {
-    if (input[k] != null) out[k] = compactValue(k, String(input[k]));
   }
   if (!Object.keys(out).length) {
     try {

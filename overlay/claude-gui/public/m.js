@@ -1030,15 +1030,6 @@
     if (proc.length || processTexts.length) {
       wrap.appendChild(processNode(proc, processTexts));
     }
-    // SendUserFile 的交付物展示在过程区外面
-    for (const b of blocks) {
-      if (b.type === 'tool_use' && b.name === 'SendUserFile' && !b.isError &&
-          b.input && Array.isArray(b.input.files) && b.input.files.length) {
-        const card = sendFileCardNode(b.input);
-        card.dataset.sendFileId = b.id || '';
-        wrap.appendChild(card);
-      }
-    }
     for (const c of conclusions) {
       const node = blockNode(c.block);
       if (!node) continue;
@@ -2850,80 +2841,6 @@
     maybeScroll();
   }
 
-  const SEND_FILE_IMAGE_RE = /\.(png|jpe?g|webp|gif)$/i;
-  function isSendFileImage(p) {
-    return SEND_FILE_IMAGE_RE.test(String(p || '').replace(/^file:\/\//i, '').split(/[?#]/)[0]);
-  }
-
-  /** Claude Code 内置 SendUserFile 的图片/文件卡片 */
-  function sendFileCardNode(block) {
-    const files = (Array.isArray(block && block.files) ? block.files : [])
-      .map(String).filter(Boolean);
-    const images = block && block.display === 'attach' ? [] : files.filter(isSendFileImage);
-    const otherFiles = files.filter(p => !images.includes(p));
-
-    const wrap = el('div', 'send-file');
-    const head = el('div', 'send-file-head');
-    const ico = el('span', 'send-file-ico');
-    ico.innerHTML = images.length ? IMAGE_VIEW_ICON : toolIcon('read');
-    head.append(ico, el('span', 'send-file-title', images.length ? '发送的图片' : '发送的文件'));
-    if (block && block.status === 'proactive') {
-      head.appendChild(el('span', 'send-file-badge', '主动发送'));
-    }
-    wrap.appendChild(head);
-
-    if (images.length) {
-      const box = el('div', 'send-file-images' +
-        (images.length >= 5 ? ' n3' : images.length >= 2 ? ' n2' : ''));
-      const els = [];
-      for (const p of images) {
-        const img = el('img', 'send-file-image');
-        img.src = localImageUrl(p);
-        img.alt = p.split(/[\\/]/).pop() || '';
-        img.loading = 'lazy';
-        img.onclick = () => {
-          openImageViewer(img.src, els.map(x => x.src), els.indexOf(img));
-        };
-        els.push(img);
-        box.appendChild(img);
-      }
-      wrap.appendChild(box);
-    }
-
-    if (otherFiles.length) {
-      const list = el('div', 'send-file-list');
-      for (const p of otherFiles) {
-        const row = el('div', 'send-file-row');
-        const icon = el('span', 'send-file-ico');
-        icon.innerHTML = toolIcon('read');
-        row.append(
-          icon,
-          el('span', 'send-file-name', p.split(/[\\/]/).pop() || p),
-          el('span', 'send-file-path', p)
-        );
-        list.appendChild(row);
-      }
-      wrap.appendChild(list);
-    }
-
-    if (block && block.caption) {
-      wrap.appendChild(el('div', 'send-file-caption', String(block.caption)));
-    }
-    return wrap;
-  }
-
-  function upsertLiveSendFile(toolUseId, input) {
-    if (!input || !Array.isArray(input.files) || !input.files.length) return;
-    const box = $('#liveTurn');
-    if (!box) return;
-    const id = String(toolUseId || '');
-    if (id && [...box.querySelectorAll('.send-file')].some(c => c.dataset.sendFileId === id)) return;
-    const card = sendFileCardNode(input);
-    if (id) card.dataset.sendFileId = id;
-    box.appendChild(card);
-    maybeScroll();
-  }
-
   // ---------------------------------------------------------------- 实时一轮
 
   function ensureLive() {
@@ -3022,9 +2939,6 @@
         const card = imageCardNode(b.images);
         box.appendChild(card);
         if (toolId) S.liveEls.set('imgview:' + toolId, { imageCard: card });
-      }
-      if (!b.isError && b.type === 'tool_use' && b.name === 'SendUserFile' && b.input && Array.isArray(b.input.files)) {
-        upsertLiveSendFile(toolId, b.input);
       }
     }
 
@@ -3140,9 +3054,6 @@
       const liveBlock = (S.live && S.live.blocks || []).find(b => b.key === 'tool:' + ev.toolUseId);
       if (liveBlock) liveBlock.images = ev.images;
       upsertLiveImageCard(ev.toolUseId, ev.images);
-    }
-    if (!ev.isError && ref.tool._block && ref.tool._block.name === 'SendUserFile') {
-      upsertLiveSendFile(ev.toolUseId, ref.tool._block.input);
     }
     setLiveProcessState(ev.isError ? '失败' : '完成');
   }
