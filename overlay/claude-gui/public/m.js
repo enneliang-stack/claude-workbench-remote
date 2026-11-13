@@ -455,6 +455,7 @@
 
   async function openConv(id, push = true) {
     if (S.convId) saveDraft(S.convId);
+    stopConvSync();
     if (push) {
       try { history.pushState({ conv: id }, '', '#c=' + encodeURIComponent(id)); } catch { /* ignore */ }
     }
@@ -511,6 +512,7 @@
       history.back();
       return;
     }
+    stopConvSync();
     if (S.convId) saveDraft(S.convId);
     S.convId = null;
     S.conv = null;
@@ -573,6 +575,7 @@
     renderPanels();
     if (S.running) { syncProgressFromLive(); startLivePolling(); }
     else { setRunProgress('', ''); stopLivePolling(); }
+    startConvSync();
   }
 
   /** readTranscript 只会在压缩后填 contextTokens；没压缩过的会话用最后一条 usage 估算 */
@@ -695,17 +698,24 @@
     };
   }
 
-  /** 一轮任务里连续的 assistant 消息合并，过程只留一行「过程 · N 步」 */
+  /** 一轮任务里连续的 assistant 消息合并成一张卡片，过程只留一行；
+      最后一次工具调用之后的最终结论全部保留，避免被最后一条覆盖。 */
   function groupedHistory() {
     const out = [];
     let cur = null;
     for (const m of historyForRender()) {
       if (m.role === 'assistant') {
         if (!cur) {
-          cur = { id: m.id, role: 'assistant', blocks: [], ts: m.ts, meta: m.meta || null };
+          cur = { id: m.id, role: 'assistant', blocks: [], conclusions: [], segments: [],
+            ts: m.ts, meta: m.meta || null };
           out.push(cur);
         }
-        if (Array.isArray(m.blocks)) cur.blocks.push(...m.blocks);
+        const blocks = Array.isArray(m.blocks) ? m.blocks.filter(Boolean) : [];
+        const texts = blocks.filter(b => b.type === 'text');
+        const hasProc = blocks.some(b => b.type === 'thinking' || b.type === 'tool_use');
+        const hasTool = blocks.some(b => b.type === 'tool_use');
+        cur.blocks.push(...blocks);
+        cur.segments.push({ texts, hasProc, hasTool, meta: m.meta || null });
         if (m.ts) cur.ts = m.ts;
         if (m.meta) cur.meta = mergeMeta(cur.meta, m.meta);
       } else {
@@ -713,7 +723,62 @@
         out.push(m);
       }
     }
+
+    // 最后一次工具调用之后的文字是这一轮的最终结论；更早的过渡文字仍收进过程。
+    for (const item of out) {
+      if (item.role !== 'assistant' || !item.segments) continue;
+      let lastTool = -1;
+      let hasProc = false;
+      for (let i = 0; i < item.segments.length; i++) {
+        if (item.segments[i].hasTool) lastTool = i;
+        if (item.segments[i].hasProc) hasProc = true;
+      }
+      const tail = [];
+      const pushSeg = (seg) => {
+        seg.texts.forEach((b, i) => {
+          // 同一段消息里只有最后一块带统计，避免一条统计重复贴在多段文字后。
+          tail.push({ block: b, meta: i === seg.texts.length - 1 ? seg.meta : null });
+        });
+      };
+      if (lastTool >= 0) {
+        for (let i = lastTool + 1; i < item.segments.length; i++) {
+          pushSeg(item.segments[i]);
+        }
+      } else if (!hasProc) {
+        for (const seg of item.segments) pushSeg(seg);
+      }
+      // 没有工具后的文字时退回原来的规则：只保留最后一段结论。
+      if (!tail.length) {
+        for (let i = item.segments.length - 1; i >= 0; i--) {
+          const seg = item.segments[i];
+          if (seg.texts.length) {
+            tail.push({ block: seg.texts[seg.texts.length - 1], meta: seg.meta });
+            break;
+          }
+        }
+      }
+      item.conclusions = tail;
+      delete item.segments;
+    }
     return out;
+  }
+
+  let olderObserver = null;
+
+  /** 顶部的「加载更早消息」进入视口就自动补一页；保留按钮给不支持观察器的环境。 */
+  function watchOlderButton() {
+    const box = $('#messages');
+    const btn = box && box.querySelector('.load-older');
+    if (olderObserver) {
+      olderObserver.disconnect();
+      olderObserver = null;
+    }
+    if (!btn || !('IntersectionObserver' in window)) return;
+    olderObserver = new IntersectionObserver(entries => {
+      if (document.hidden) return;
+      if (entries.some(e => e.isIntersecting)) loadOlderMessages();
+    }, { root: box, rootMargin: '40px 0px 0px 0px', threshold: 0 });
+    olderObserver.observe(btn);
   }
 
   function renderMessages(forceBottom = false, anchor = null) {
@@ -764,6 +829,7 @@
     } else {
       box.scrollTop = oldTop;
     }
+    watchOlderButton();
     scheduleProcessCollapseUpdate();
   }
 
@@ -943,28 +1009,30 @@
     const blocks = (m.blocks || []).filter(Boolean);
     const proc = blocks.filter(b => b.type === 'thinking' || b.type === 'tool_use');
     const texts = blocks.filter(b => b.type === 'text');
-    const finalText = texts.length ? texts[texts.length - 1].text : '';
+    const conclusions = Array.isArray(m.conclusions)
+      ? m.conclusions.filter(c => c && c.block)
+      : (proc.length ? texts.slice(-1) : texts).map(block => ({ block, meta: null }));
+    const conclusionBlocks = conclusions.map(c => c.block);
+    const processTexts = texts.filter(b => !conclusionBlocks.includes(b));
+    const finalText = conclusions.length
+      ? conclusions[conclusions.length - 1].block.text : '';
 
-    // 和电脑端一样：思考、工具和中间结论文本收进「过程」，默认合上，只留最后一段结论
-    if (proc.length) {
-      const lastText = texts.length ? texts[texts.length - 1] : null;
-      const earlierTexts = texts.slice(0, -1);
-      wrap.appendChild(processNode(proc, earlierTexts));
-      if (lastText) {
-        const node = blockNode(lastText);
-        if (node) wrap.appendChild(node);
-      }
-    } else {
-      for (const b of texts) {
-        const node = blockNode(b);
-        if (node) wrap.appendChild(node);
-      }
+    // 思考、工具和中间过程文本收进「过程」；最后一次工具后的最终结论全部保留
+    if (proc.length || processTexts.length) {
+      wrap.appendChild(processNode(proc, processTexts));
+    }
+    for (const c of conclusions) {
+      const node = blockNode(c.block);
+      if (!node) continue;
+      wrap.appendChild(node);
+      if (c.meta) wrap.appendChild(turnMetaNode(c.meta));
     }
     const artifacts = extractArtifactPaths(finalText);
     if (artifacts.length) wrap.appendChild(artifactNode(artifacts));
     const edits = aggregateEdits(blocks);
     if (edits.length) wrap.appendChild(editCardNode(edits));
-    if (m.meta) wrap.appendChild(turnMetaNode(m.meta));
+    // 没有分条统计时（例如旧消息没有 meta）才显示整轮合并统计。
+    if (!conclusions.some(c => c.meta) && m.meta) wrap.appendChild(turnMetaNode(m.meta));
     attachMsgActions(wrap, m);
     return wrap;
   }
@@ -1665,7 +1733,10 @@
   function turnMetaNode(meta) {
     const u = meta.usage || {};
     const parts = [];
-    if (meta.duration) parts.push(`用时 ${Math.round(meta.duration / 1000)}s`);
+    if (meta.duration) {
+      const sec = meta.duration / 1000;
+      parts.push(`用时 ${sec < 10 ? sec.toFixed(1) : Math.round(sec)}s`);
+    }
     const inTok = (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0);
     const outTok = u.output_tokens || 0;
     if (inTok || outTok) parts.push(`输入 ${fmtTok(inTok)} / 输出 ${fmtTok(outTok)}`);
@@ -2863,6 +2934,46 @@
       renderConversation(data);
     } catch { /* 下次事件再试 */ }
     finally { refreshing = false; }
+  }
+
+  // 电脑端和手机端同时打开同一对话时，SSE 偶尔会静默丢事件。
+  // 对话打开期间用很轻的 limit=1 轮询兜底：发现远端开始/结束或历史条数变化就整页对齐。
+  let convSyncTimer = null;
+  let convSyncBusy = false;
+
+  function startConvSync() {
+    if (convSyncTimer) return;
+    convSyncTimer = setInterval(pollConversationState, 2000);
+  }
+
+  function stopConvSync() {
+    if (convSyncTimer) clearInterval(convSyncTimer);
+    convSyncTimer = null;
+    convSyncBusy = false;
+  }
+
+  async function pollConversationState() {
+    if (convSyncBusy || !S.convId || !S.conv || document.hidden) return;
+    if (S.loadingOlder || S.sending) return;
+    // 本地正在跑且 SSE 有事件时，实时区已经够用，不额外拉历史。
+    if (S.running && Date.now() - lastSseAt < 4000) return;
+    const id = S.convId;
+    convSyncBusy = true;
+    try {
+      const data = await api('/api/conversation?id=' + encodeURIComponent(id) +
+        '&limit=1&light=1&compact=1', { timeout: 8000 });
+      if (!S.convId || S.convId !== id) return;
+      const remoteRunning = !!data.running;
+      const localRunning = !!S.running;
+      const localTotal = Number(S.conv && S.conv.total) || 0;
+      const remoteTotal = Number(data.total) || 0;
+      const changed = remoteRunning !== localRunning ||
+        (!remoteRunning && !localRunning && remoteTotal !== localTotal) ||
+        (remoteRunning && localRunning && remoteTotal > localTotal &&
+          Date.now() - lastSseAt > 4000);
+      if (changed) await refreshConversation();
+    } catch { /* 下次再试 */ }
+    finally { convSyncBusy = false; }
   }
 
   // 回到前台/重新聚焦时强制对齐一次服务器状态。

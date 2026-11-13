@@ -1,6 +1,6 @@
 package com.missyao.claudeworkbench;
 
-import android.app.AlertDialog;
+import android.app.Dialog;
 import android.content.ActivityNotFoundException;
 import android.content.ClipData;
 import android.content.ComponentName;
@@ -8,14 +8,20 @@ import android.content.ContentValues;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
+import android.graphics.Color;
+import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.StateListDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Environment;
 import android.provider.DocumentsContract;
 import android.provider.MediaStore;
 import android.provider.Settings;
+import android.view.View;
 import android.webkit.JavascriptInterface;
 import android.webkit.MimeTypeMap;
+import android.widget.LinearLayout;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import org.json.JSONArray;
@@ -197,9 +203,39 @@ public class DownloadsBridge {
             labels.add((f.isDirectory() ? "📁  " : "📄  ") + f.getName()
                 + (f.isDirectory() ? "  ·  文件夹" : "  ·  " + fmtSize(f.length())));
         }
-        new AlertDialog.Builder(activity)
-            .setTitle("位置  " + guestDir)
-            .setItems(labels.toArray(new String[0]), (d, which) -> {
+        final Dialog[] holder = new Dialog[1];
+        LinearLayout list = new LinearLayout(activity);
+        list.setOrientation(LinearLayout.VERTICAL);
+        list.setPadding(0, dp(2), 0, dp(2));
+        if (entries.isEmpty()) {
+            TextView empty = new TextView(activity);
+            empty.setText("（空文件夹）");
+            empty.setTextSize(13);
+            empty.setTextColor(Color.rgb(154, 163, 173));
+            empty.setPadding(dp(10), dp(12), dp(10), dp(12));
+            list.addView(empty);
+        }
+
+        for (int i = 0; i < entries.size(); i++) {
+            if (i > 0) {
+                View line = new View(activity);
+                line.setBackgroundColor(Color.rgb(38, 46, 56));
+                LinearLayout.LayoutParams llp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, dp(1));
+                llp.leftMargin = dp(10);
+                llp.rightMargin = dp(10);
+                list.addView(line, llp);
+            }
+            final int which = i;
+            TextView row = new TextView(activity);
+            row.setText(labels.get(i));
+            row.setTextSize(13);
+            row.setTextColor(Color.rgb(222, 225, 230));
+            row.setPadding(dp(10), dp(12), dp(10), dp(12));
+            row.setBackground(rowBackground());
+            row.setClickable(true);
+            row.setOnClickListener(v -> {
+                if (holder[0] != null) holder[0].dismiss();
                 File f = entries.get(which);
                 if (f == null) {
                     showLocalFolderDialog(parent);
@@ -209,9 +245,31 @@ public class DownloadsBridge {
                     ? guestDir + f.getName() : guestDir + "/" + f.getName();
                 if (f.isDirectory()) showLocalFolderDialog(child);
                 else openLocal(child, f.getName());
-            })
-            .setPositiveButton("关闭", null)
-            .show();
+            });
+            list.addView(row);
+        }
+
+        holder[0] = activity.showDarkDialog("位置", guestDir, list,
+            null, null,
+            "关闭", d -> true,
+            null, null, Color.rgb(154, 163, 173), false, 0);
+    }
+
+    private StateListDrawable rowBackground() {
+        GradientDrawable normal = new GradientDrawable();
+        normal.setColor(Color.TRANSPARENT);
+        normal.setCornerRadius(dp(8));
+        GradientDrawable pressed = new GradientDrawable();
+        pressed.setColor(Color.rgb(31, 38, 47));
+        pressed.setCornerRadius(dp(8));
+        StateListDrawable bg = new StateListDrawable();
+        bg.addState(new int[]{android.R.attr.state_pressed}, pressed);
+        bg.addState(new int[]{}, normal);
+        return bg;
+    }
+
+    private int dp(int v) {
+        return Math.round(v * activity.getResources().getDisplayMetrics().density);
     }
 
     private String parentGuest(String p) {

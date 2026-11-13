@@ -9,4 +9,9 @@
         <item name="android:windowNoTitle">true</item>
         <item name="android:windowLightStatusBar">false</item>
     </style>
+
+    <style name="WorkbenchDialogAnimation">
+        <item name="android:windowEnterAnimation">@anim/dialog_in</item>
+        <item name="android:windowExitAnimation">@anim/dialog_out</item>
+    </style>
 </resources>

@@ -1,10 +1,10 @@
 {
-  "versionCode": 92,
-  "versionName": "2.4.51",
+  "versionCode": 97,
+  "versionName": "2.4.56",
   "apk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.51/ClaudeWorkbench-full.apk",
   "sha256": "3bc07db344928c6b7b3def58f6c6bc80feeffb86e9c95faba1cfb524fe76c8eb",
   "slimApk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/latest/download/ClaudeWorkbench-slim.apk",
-  "slimSha256": "e5b477353a0ee41894170d6e589ee9bc0d70a13ed54bc95b3edd5c284ab49180",
+  "slimSha256": "939a4d198ce539d01f1694fe76c90f17539e29d8d71b34f399c39d0cafc28bc9",
   "important": true,
-  "notes": "2.4.51：重要更新。更新弹窗改为深色卡片；并包含 2.4.50 的全部改进：手机页过程只保留思考/运行/编辑等一行摘要，不再下发工具输出和详情；头部去掉 token 数；推理档位默认最高；应用内选择弹层；返回键先关弹层、缓慢滑动不误触长按；主页设置卡片和状态颜色。PC 远程页需重启一次工作台；手机本机页安装本包。"
+  "notes": "2.4.56：重要更新。手机端每条最终结论分别显示用时、token 和费用；上滑自动加载更早消息；电脑端发消息时手机端约 2 秒内自动同步；设置二级窗口返回一级、弹窗居中淡入；最后一次工具后的多条结论全部保留。手机本机页安装本包；PC 远程页需重启一次工作台。"
 }

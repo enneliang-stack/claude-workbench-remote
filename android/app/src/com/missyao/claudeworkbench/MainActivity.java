@@ -2,9 +2,7 @@ package com.missyao.claudeworkbench;
 
 import android.Manifest;
 import android.app.Activity;
-import android.app.AlertDialog;
 import android.app.Dialog;
-import android.app.ProgressDialog;
 import android.content.ActivityNotFoundException;
 import android.content.ClipData;
 import android.content.ClipboardManager;
@@ -12,6 +10,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
@@ -34,6 +33,7 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
+import android.view.WindowManager;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
@@ -142,7 +142,9 @@ public class MainActivity extends Activity {
     private boolean phoneStarting = false;
     private String pendingPhoneConvId = "";
     private boolean setupShowing = false;
-    private AlertDialog installDialog;
+    private Dialog installDialog;
+    private Dialog settingsDialog;
+    private Runnable settingsRefresh;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private Runnable loadTimeout;
     private Runnable installPoll;
@@ -277,23 +279,41 @@ public class MainActivity extends Activity {
             @Override
             public boolean onJsConfirm(WebView view, String url, String message,
                                        final android.webkit.JsResult result) {
-                new AlertDialog.Builder(MainActivity.this)
-                    .setMessage(message)
-                    .setPositiveButton("确定", (d, w) -> result.confirm())
-                    .setNegativeButton("取消", (d, w) -> result.cancel())
-                    .setCancelable(false)
-                    .show();
+                final boolean[] settled = {false};
+                Dialog d = MainActivity.this.showDarkMessage("请确认", null, message,
+                    "确定", dlg -> {
+                        settled[0] = true;
+                        result.confirm();
+                        return true;
+                    },
+                    "取消", dlg -> {
+                        settled[0] = true;
+                        result.cancel();
+                        return true;
+                    },
+                    null, null, MUTED, false);
+                d.setCancelable(false);
+                d.setOnDismissListener(dlg -> {
+                    if (!settled[0]) result.cancel();
+                });
                 return true;
             }
 
             @Override
             public boolean onJsAlert(WebView view, String url, String message,
                                      final android.webkit.JsResult result) {
-                new AlertDialog.Builder(MainActivity.this)
-                    .setMessage(message)
-                    .setPositiveButton("知道了", (d, w) -> result.confirm())
-                    .setCancelable(false)
-                    .show();
+                final boolean[] settled = {false};
+                Dialog d = MainActivity.this.showDarkMessage("提示", null, message,
+                    "知道了", dlg -> {
+                        settled[0] = true;
+                        result.confirm();
+                        return true;
+                    },
+                    null, null, null, null, MUTED, false);
+                d.setCancelable(false);
+                d.setOnDismissListener(dlg -> {
+                    if (!settled[0]) result.confirm();
+                });
                 return true;
             }
         });
@@ -506,6 +526,7 @@ public class MainActivity extends Activity {
     }
 
     public void showHome() {
+        dismissSettingsDialog();
         mode = "home";
         PhoneControlServer.setPhoneModeVisible(false);
         PhoneControlServer.onPhoneChatHidden();
@@ -623,6 +644,7 @@ public class MainActivity extends Activity {
     // ---------------------------------------------------------------- 电脑端
 
     private void openPcMode() {
+        dismissSettingsDialog();
         if (pcUrls.isEmpty()) {
             String tsPc = LocalConfig.tsPcUrl(this);
             String normalized = normalizePcUrl(tsPc);
@@ -919,38 +941,40 @@ public class MainActivity extends Activity {
             + "http://192.168.x.x:4711/m/index.html?token=...\n"
             + "http://100.x.x.x:4711/m/index.html?token=...");
         if (!pcUrls.isEmpty()) input.setText(joinPcUrls());
-        int pad = dp(20);
         FrameLayout wrap = new FrameLayout(this);
-        wrap.setPadding(pad, 0, pad, 0);
         wrap.addView(input, new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        final AlertDialog dialog = new AlertDialog.Builder(this)
-            .setTitle("连接电脑端")
-            .setMessage("把电脑「远程访问.cmd」窗口里的地址整段粘贴进来，可以带多行和说明文字；"
-                + "App 会提取所有 http/https 地址并自动尝试。\n\n"
-                + "建议家里 Wi-Fi 和 Tailscale 各放一条，换网络时不用重新填。")
-            .setView(wrap)
-            .setPositiveButton("连接", null)
-            .setNegativeButton("取消", (d, w) -> {
-            })
-            .setCancelable(false)
-            .create();
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        TextView intro = text("把电脑「远程访问.cmd」窗口里的地址整段粘贴进来，可以带多行和说明文字；"
+            + "App 会提取所有 http/https 地址并自动尝试。\n\n"
+            + "建议家里 Wi-Fi 和 Tailscale 各放一条，换网络时不用重新填。", 11.5f, MUTED);
+        intro.setLineSpacing(dp(3), 1f);
+        box.addView(intro);
+        LinearLayout.LayoutParams ilp = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        ilp.topMargin = dp(10);
+        box.addView(wrap, ilp);
+
+        Dialog dialog = showDarkDialog("连接电脑端", "可填多条地址，自动尝试", box,
+            "连接", d -> {
+                List<String> urls = extractPcUrls(input.getText().toString());
+                if (urls.isEmpty()) {
+                    input.setError("没有识别到 http/https 地址");
+                    return false;
+                }
+                pcUrls.clear();
+                pcUrls.addAll(urls);
+                savePcUrls();
+                refreshHomeStatus();
+                handler.post(this::openPcMode);
+                return true;
+            },
+            "取消", d -> true,
+            null, null, MUTED, false, 0);
+        dialog.setCancelable(false);
         dialog.setOnDismissListener(d -> setupShowing = false);
-        dialog.show();
-        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
-            List<String> urls = extractPcUrls(input.getText().toString());
-            if (urls.isEmpty()) {
-                input.setError("没有识别到 http/https 地址");
-                return;
-            }
-            pcUrls.clear();
-            pcUrls.addAll(urls);
-            savePcUrls();
-            dialog.dismiss();
-            refreshHomeStatus();
-            openPcMode();
-        });
         input.requestFocus();
     }
 
@@ -1035,6 +1059,7 @@ public class MainActivity extends Activity {
     // ---------------------------------------------------------------- 手机端
 
     private void openPhoneMode() {
+        dismissSettingsDialog();
         if (!LocalConfig.isConfigured(this)) {
             showPhoneConfigDialog(true);
             return;
@@ -1129,8 +1154,7 @@ public class MainActivity extends Activity {
     private void showPhoneConfigDialog(boolean thenInstall) {
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
-        int pad = dp(20);
-        box.setPadding(pad, dp(8), pad, 0);
+        box.setPadding(dp(2), 0, dp(2), 0);
 
         EditText key = edit("DeepSeek API Key（sk-…）", LocalConfig.apiKey(this), true);
         box.addView(label("API Key"));
@@ -1153,29 +1177,25 @@ public class MainActivity extends Activity {
         box.addView(text("默认接 DeepSeek 的 Anthropic 兼容接口；模型名可填 deepseek-flash[1m]。",
             11, MUTED), marginTop(dp(8)));
 
-        ScrollView scroll = new ScrollView(this);
-        scroll.addView(box);
-
-        AlertDialog dlg = new AlertDialog.Builder(this)
-            .setTitle("手机端配置")
-            .setView(scroll)
-            .setPositiveButton("保存", null)
-            .setNegativeButton("取消", null)
-            .create();
-        dlg.setOnShowListener(d -> dlg.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
-            String k = key.getText().toString().trim();
-            if (k.isEmpty()) {
-                key.setError("请填写 API Key");
-                return;
-            }
-            LocalConfig.save(this, k, base.getText().toString(), model.getText().toString(),
-                effort.getText().toString());
-            dlg.dismiss();
-            refreshHomeStatus();
-            if (thenInstall) showInstallDialog();
-            else Toast.makeText(this, "已保存，重新进入手机端后生效", Toast.LENGTH_LONG).show();
-        }));
-        dlg.show();
+        showDarkDialog("手机端配置", "DeepSeek 地址、Key 和默认模型", box,
+            "保存", d -> {
+                String k = key.getText().toString().trim();
+                if (k.isEmpty()) {
+                    key.setError("请填写 API Key");
+                    return false;
+                }
+                LocalConfig.save(this, k, base.getText().toString(), model.getText().toString(),
+                    effort.getText().toString());
+                refreshHomeStatus();
+                if (thenInstall) {
+                    handler.post(this::showInstallDialog);
+                } else {
+                    Toast.makeText(this, "已保存，重新进入手机端后生效", Toast.LENGTH_LONG).show();
+                }
+                return true;
+            },
+            "取消", d -> true,
+            null, null, MUTED, false, 0);
     }
 
     private void showInstallDialog() {
@@ -1190,27 +1210,35 @@ public class MainActivity extends Activity {
         logView.setTypeface(Typeface.MONOSPACE);
         logView.setTextIsSelectable(true);
         ScrollView scroll = new ScrollView(this);
-        scroll.setPadding(dp(16), dp(8), dp(16), dp(8));
+        scroll.setPadding(dp(10), dp(6), dp(10), dp(6));
+        scroll.setBackground(rounded(0xFF161A20, STROKE, 10));
         scroll.addView(logView);
         int h = dp(220);
         scroll.setLayoutParams(new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, h));
 
-        installDialog = new AlertDialog.Builder(this)
-            .setTitle("安装手机端环境")
-            .setMessage("首次安装会下载 Alpine、Node 和 Claude Code，约 500 MB，需要 1.8 GB 以上空间。"
-                + "安装期间请保持网络；关闭窗口后仍在后台安装。")
-            .setView(scroll)
-            .setPositiveButton("后台安装", (d, w) -> {
-            })
-            .setNegativeButton("关闭", (d, w) -> {
-            })
-            .create();
-        installDialog.show();
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        TextView intro = text("首次安装会下载 Alpine、Node 和 Claude Code，约 500 MB，"
+            + "需要 1.8 GB 以上空间。安装期间请保持网络；关闭窗口后仍在后台安装。",
+            11.5f, MUTED);
+        intro.setLineSpacing(dp(3), 1f);
+        box.addView(intro);
+        LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, h);
+        slp.topMargin = dp(10);
+        box.addView(scroll, slp);
+
+        installDialog = showDarkDialog("安装手机端环境", "约 500 MB · 需要 1.8 GB 空间", box,
+            "后台安装", d -> true,
+            "关闭", d -> true,
+            null, null, MUTED, false, 0);
         try {
             EngineService.install(this);
         } catch (Exception e) {
             LocalEngine.log(this, "启动安装服务失败：" + e);
+            if (installDialog != null && installDialog.isShowing()) installDialog.dismiss();
+            installDialog = null;
             Toast.makeText(this, "无法启动安装服务：" + e.getMessage(), Toast.LENGTH_LONG).show();
             return;
         }
@@ -1290,9 +1318,35 @@ public class MainActivity extends Activity {
         return d;
     }
 
-    private LinearLayout settingsRow(String title, String subtitle, String status,
-                                     int statusColor, boolean danger, Runnable action) {
-        LinearLayout row = new LinearLayout(this);
+    private class SettingsRow extends LinearLayout {
+        TextView titleView;
+        TextView subtitleView;
+        TextView chip;
+
+        SettingsRow() {
+            super(MainActivity.this);
+        }
+
+        void setTitle(String s) {
+            if (titleView != null) titleView.setText(s);
+        }
+
+        void setSubtitle(String s) {
+            if (subtitleView != null) subtitleView.setText(s);
+        }
+
+        void setStatus(String s, int color) {
+            if (chip == null) return;
+            chip.setText(s);
+            chip.setTextColor(color);
+            chip.setBackground(rounded(Color.TRANSPARENT,
+                Color.argb(90, Color.red(color), Color.green(color), Color.blue(color)), 999));
+        }
+    }
+
+    private SettingsRow settingsRow(String title, String subtitle, String status,
+                                    int statusColor, boolean danger, Runnable action) {
+        SettingsRow row = new SettingsRow();
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(dp(14), dp(12), dp(12), dp(12));
@@ -1303,10 +1357,12 @@ public class MainActivity extends Activity {
         LinearLayout main = new LinearLayout(this);
         main.setOrientation(LinearLayout.VERTICAL);
         TextView t = text(title, 14, danger ? RED : FG);
+        row.titleView = t;
         main.addView(t);
         if (subtitle != null && !subtitle.isEmpty()) {
             TextView sub = text(subtitle, 11, MUTED);
             sub.setPadding(0, dp(2), 0, 0);
+            row.subtitleView = sub;
             main.addView(sub);
         }
         row.addView(main, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
@@ -1317,6 +1373,7 @@ public class MainActivity extends Activity {
             chip.setBackground(rounded(Color.TRANSPARENT,
                 Color.argb(90, Color.red(statusColor), Color.green(statusColor), Color.blue(statusColor)),
                 999));
+            row.chip = chip;
             row.addView(chip);
         }
         TextView chev = text("›", 18, FAINT);
@@ -1326,12 +1383,43 @@ public class MainActivity extends Activity {
         return row;
     }
 
-    private LinearLayout settingsRow(String title, String subtitle, String status,
-                                     int statusColor, Runnable action) {
+    private SettingsRow settingsRow(String title, String subtitle, String status,
+                                    int statusColor, Runnable action) {
         return settingsRow(title, subtitle, status, statusColor, false, action);
     }
 
+    private int dialogWidth(float ratio, int maxDp) {
+        int width = (int) (getResources().getDisplayMetrics().widthPixels * ratio);
+        return Math.min(width, dp(maxDp));
+    }
+
+    /** 在 show() 之前固定窗口尺寸/位置/动画，避免弹出后再改布局造成闪动。 */
+    private void configureDialogWindow(Dialog dialog, int width, int height) {
+        Window w = dialog.getWindow();
+        if (w == null) return;
+        w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+        w.setGravity(Gravity.CENTER);
+        w.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+        w.setDimAmount(0.62f);
+        w.setWindowAnimations(R.style.WorkbenchDialogAnimation);
+        w.setLayout(width, height);
+    }
+
+    private void dismissSettingsDialog() {
+        Dialog d = settingsDialog;
+        settingsDialog = null;
+        settingsRefresh = null;
+        if (d != null && d.isShowing()) d.dismiss();
+    }
+
+    private void refreshSettingsDialogStatus() {
+        if (settingsDialog != null && settingsDialog.isShowing() && settingsRefresh != null) {
+            settingsRefresh.run();
+        }
+    }
+
     private void showPhoneSettings() {
+        dismissSettingsDialog();
         final boolean controlOn = PhoneControlServer.isRunning();
         final boolean controlWaiting = !controlOn && PhoneControlServer.isEnabled(this);
         final String controlStatus = controlOn ? "已开启" : controlWaiting ? "等待授权" : "未开启";
@@ -1387,32 +1475,37 @@ public class MainActivity extends Activity {
         content.addView(settingsGroupLabel("连接与模型"));
         LinearLayout g1 = settingsGroup();
         g1.addView(settingsRow("API Key 与模型", "DeepSeek 地址、Key、默认模型", null, 0,
-            () -> { dialog.dismiss(); showPhoneConfigDialog(false); }));
+            () -> showPhoneConfigDialog(false)));
         g1.addView(settingsDivider());
-        g1.addView(settingsRow("手机控制", "无障碍点按与读屏", controlStatus, controlColor,
-            () -> { dialog.dismiss(); showPhoneControlDialog(); }));
+        SettingsRow controlRow = settingsRow("手机控制", "无障碍点按与读屏", controlStatus, controlColor,
+            this::showPhoneControlDialog);
+        g1.addView(controlRow);
         g1.addView(settingsDivider());
-        g1.addView(settingsRow("内置 Tailscale", "免装 Tailscale App", tsStatus, tsColor,
-            () -> { dialog.dismiss(); showTailscaleDialog(); }));
+        SettingsRow tsRow = settingsRow("内置 Tailscale", "免装 Tailscale App", tsStatus, tsColor,
+            this::showTailscaleDialog);
+        g1.addView(tsRow);
         content.addView(g1);
 
         content.addView(settingsGroupLabel("设备权限"));
         LinearLayout g2 = settingsGroup();
-        g2.addView(settingsRow("手机存储", "读取和保存手机文件", storageOk ? "全盘" : "未授权",
-            storageOk ? GREEN : ORANGE,
-            () -> { dialog.dismiss(); openStorageSettings(); }));
+        SettingsRow storageRow = settingsRow("手机存储", "读取和保存手机文件",
+            storageOk ? "全盘" : "未授权", storageOk ? GREEN : ORANGE,
+            this::openStorageSettings);
+        g2.addView(storageRow);
         g2.addView(settingsDivider());
-        g2.addView(settingsRow("悬浮窗权限", "插话与完成提示", overlayOk ? "已授权" : "未授权",
-            overlayOk ? GREEN : ORANGE,
-            () -> { dialog.dismiss(); openOverlaySettings(); }));
+        SettingsRow overlayRow = settingsRow("悬浮窗权限", "插话与完成提示",
+            overlayOk ? "已授权" : "未授权", overlayOk ? GREEN : ORANGE,
+            this::openOverlaySettings);
+        g2.addView(overlayRow);
         content.addView(g2);
 
         content.addView(settingsGroupLabel("运行与维护"));
         LinearLayout g3 = settingsGroup();
         g3.addView(settingsRow("查看运行日志", "手机端引擎实时输出", null, 0,
-            () -> { dialog.dismiss(); showLogDialog(); }));
+            this::showLogDialog));
         g3.addView(settingsDivider());
-        g3.addView(settingsRow(LocalEngine.isRunning() ? "停止手机端" : "启动手机端",
+        SettingsRow engineRow = settingsRow(
+            LocalEngine.isRunning() ? "停止手机端" : "启动手机端",
             LocalEngine.isRunning() ? "正在运行" : "127.0.0.1 本机服务",
             LocalEngine.isRunning() ? "运行中" : "已停止",
             LocalEngine.isRunning() ? GREEN : FAINT, () -> {
@@ -1425,17 +1518,17 @@ public class MainActivity extends Activity {
                 } else {
                     openPhoneMode();
                 }
-            }));
+            });
+        g3.addView(engineRow);
         g3.addView(settingsDivider());
         g3.addView(settingsRow("检查更新", versionText.isEmpty() ? "" : "当前 " + versionText, null, 0,
-            () -> { dialog.dismiss(); checkForUpdates(); }));
+            this::checkForUpdates));
         g3.addView(settingsDivider());
-        g3.addView(settingsRow("重新安装手机端环境", "重装 Node / Claude Code，保留对话", null, 0, () -> {
-            dialog.dismiss();
-            new AlertDialog.Builder(this)
-                .setTitle("重新安装？")
-                .setMessage("会重新下载 Alpine 并重装 Node / Claude Code，已安装的对话记录会先备份再恢复。")
-                .setPositiveButton("重新安装", (dd, ww) -> {
+        g3.addView(settingsRow("重新安装手机端环境", "重装 Node / Claude Code，保留对话", null, 0, () ->
+            showDarkMessage("重新安装？", "保留对话记录",
+                "会重新下载 Alpine 并重装 Node / Claude Code，已安装的对话记录会先备份再恢复。",
+                "重新安装", d -> {
+                    dialog.dismiss();
                     Toast.makeText(this, "正在重置环境…", Toast.LENGTH_SHORT).show();
                     new Thread(() -> {
                         try {
@@ -1446,16 +1539,16 @@ public class MainActivity extends Activity {
                                 "重置失败：" + e.getMessage(), Toast.LENGTH_LONG).show());
                         }
                     }, "phone-reset").start();
-                })
-                .setNegativeButton("取消", null)
-                .show();
-        }));
+                    return true;
+                },
+                "取消", d -> true,
+                null, null, MUTED, false)));
         g3.addView(settingsDivider());
         g3.addView(settingsRow("清空所有手机端数据与环境", "对话、配置、运行环境都会删除", null, 0, true,
-            () -> { dialog.dismiss(); confirmClearAllData(); }));
+            this::confirmClearAllData));
         g3.addView(settingsDivider());
         g3.addView(settingsRow("卸载 App", "保留还是删除手机端数据？", null, 0, true,
-            () -> { dialog.dismiss(); confirmUninstall(); }));
+            this::confirmUninstall));
         content.addView(g3);
 
         TextView close = text("关闭", 14, FG);
@@ -1469,15 +1562,35 @@ public class MainActivity extends Activity {
         close.setOnClickListener(v -> dialog.dismiss());
         root.addView(close);
 
+        settingsRefresh = () -> {
+            boolean cOn = PhoneControlServer.isRunning();
+            boolean cWaiting = !cOn && PhoneControlServer.isEnabled(this);
+            controlRow.setStatus(cOn ? "已开启" : cWaiting ? "等待授权" : "未开启",
+                cOn ? GREEN : ORANGE);
+            boolean tOn = LocalEngine.isTailscaleProxyRunning();
+            boolean tCfg = LocalConfig.tsEnabled(this);
+            tsRow.setStatus(tOn ? "运行中" : tCfg ? "已配置" : "未配置",
+                (tOn || tCfg) ? GREEN : ORANGE);
+            boolean sOk = LocalConfig.hasAllFilesAccess(this);
+            storageRow.setStatus(sOk ? "全盘" : "未授权", sOk ? GREEN : ORANGE);
+            boolean oOk = Settings.canDrawOverlays(this);
+            overlayRow.setStatus(oOk ? "已授权" : "未授权", oOk ? GREEN : ORANGE);
+            boolean running = LocalEngine.isRunning();
+            engineRow.setTitle(running ? "停止手机端" : "启动手机端");
+            engineRow.setSubtitle(running ? "正在运行" : "127.0.0.1 本机服务");
+            engineRow.setStatus(running ? "运行中" : "已停止", running ? GREEN : FAINT);
+        };
+
         dialog.setContentView(root, new ViewGroup.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-        dialog.setOnShowListener(d -> {
-            Window w = dialog.getWindow();
-            if (w == null) return;
-            w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
-            int width = (int) (getResources().getDisplayMetrics().widthPixels * 0.92f);
-            int height = (int) (getResources().getDisplayMetrics().heightPixels * 0.86f);
-            w.setLayout(Math.min(width, dp(480)), height);
+        configureDialogWindow(dialog, dialogWidth(0.92f, 480),
+            (int) (getResources().getDisplayMetrics().heightPixels * 0.86f));
+        settingsDialog = dialog;
+        dialog.setOnDismissListener(d -> {
+            if (settingsDialog == dialog) {
+                settingsDialog = null;
+                settingsRefresh = null;
+            }
         });
         dialog.show();
     }
@@ -1495,6 +1608,140 @@ public class MainActivity extends Activity {
         v.setGravity(Gravity.RIGHT);
         row.addView(v);
         return row;
+    }
+
+    interface DarkAction {
+        boolean run(Dialog dialog);
+    }
+
+    /** 内容少时自适应高度，内容多时限制最大高度并在内部滚动，避免按钮被挤出屏幕。 */
+    private static class MaxHeightScrollView extends ScrollView {
+        private int maxHeight;
+
+        MaxHeightScrollView(Context context) {
+            super(context);
+        }
+
+        void setMaxHeight(int height) {
+            maxHeight = height;
+        }
+
+        @Override
+        protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+            if (maxHeight > 0) {
+                heightMeasureSpec = View.MeasureSpec.makeMeasureSpec(
+                    maxHeight, View.MeasureSpec.AT_MOST);
+            }
+            super.onMeasure(widthMeasureSpec, heightMeasureSpec);
+        }
+    }
+
+    Dialog showDarkDialog(String title, String subtitle, View content,
+                                  String primaryLabel, DarkAction primary,
+                                  String secondaryLabel, DarkAction secondary,
+                                  String tertiaryLabel, DarkAction tertiary, int tertiaryColor,
+                                  boolean dangerPrimary, int contentHeightDp) {
+        final Dialog dialog = new Dialog(this);
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
+
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(dp(18), dp(16), dp(18), dp(16));
+        root.setBackground(rounded(CARD, STROKE, 20));
+
+        LinearLayout head = new LinearLayout(this);
+        head.setOrientation(LinearLayout.HORIZONTAL);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout titles = new LinearLayout(this);
+        titles.setOrientation(LinearLayout.VERTICAL);
+        TextView titleView = text(title, 18, FG);
+        titleView.setTypeface(Typeface.DEFAULT_BOLD);
+        titles.addView(titleView);
+        if (subtitle != null && !subtitle.isEmpty()) {
+            TextView sub = text(subtitle, 11, MUTED);
+            sub.setPadding(0, dp(2), 0, 0);
+            titles.addView(sub);
+        }
+        head.addView(titles, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        TextView closeX = text("×", 22, MUTED);
+        closeX.setGravity(Gravity.CENTER);
+        closeX.setOnClickListener(v -> dialog.dismiss());
+        head.addView(closeX, new LinearLayout.LayoutParams(dp(36), dp(36)));
+        root.addView(head);
+
+        if (content != null) {
+            MaxHeightScrollView scroll = new MaxHeightScrollView(this);
+            scroll.setMaxHeight((int) (getResources().getDisplayMetrics().heightPixels * 0.55f));
+            scroll.addView(content);
+            int h = contentHeightDp > 0 ? dp(contentHeightDp) : ViewGroup.LayoutParams.WRAP_CONTENT;
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, h);
+            lp.topMargin = dp(12);
+            root.addView(scroll, lp);
+        }
+
+        if (tertiaryLabel != null && tertiary != null) {
+            TextView link = text(tertiaryLabel, 12, tertiaryColor);
+            link.setPadding(dp(4), dp(10), dp(4), 0);
+            link.setOnClickListener(v -> {
+                if (tertiary.run(dialog)) dialog.dismiss();
+            });
+            root.addView(link);
+        }
+
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams alp = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        alp.topMargin = dp(14);
+
+        if (primaryLabel != null && primary != null) {
+            TextView primaryBtn = text(primaryLabel, 14, Color.rgb(27, 18, 12));
+            primaryBtn.setTypeface(Typeface.DEFAULT_BOLD);
+            primaryBtn.setGravity(Gravity.CENTER);
+            primaryBtn.setPadding(0, dp(12), 0, dp(12));
+            primaryBtn.setBackground(rounded(dangerPrimary ? RED : ORANGE,
+                dangerPrimary ? RED : ORANGE, 12));
+            primaryBtn.setOnClickListener(v -> {
+                if (primary.run(dialog)) dialog.dismiss();
+            });
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1);
+            actions.addView(primaryBtn, lp);
+        }
+        if (secondaryLabel != null && secondary != null) {
+            TextView secondaryBtn = text(secondaryLabel, 14, FG);
+            secondaryBtn.setGravity(Gravity.CENTER);
+            secondaryBtn.setPadding(0, dp(12), 0, dp(12));
+            secondaryBtn.setBackground(rounded(0xFF1A1F27, STROKE, 12));
+            secondaryBtn.setOnClickListener(v -> {
+                if (secondary.run(dialog)) dialog.dismiss();
+            });
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1);
+            if (primaryLabel != null) lp.leftMargin = dp(10);
+            actions.addView(secondaryBtn, lp);
+        }
+        if (actions.getChildCount() > 0) root.addView(actions, alp);
+
+        dialog.setContentView(root);
+        configureDialogWindow(dialog, dialogWidth(0.92f, 520),
+            ViewGroup.LayoutParams.WRAP_CONTENT);
+        dialog.setOnDismissListener(d -> refreshSettingsDialogStatus());
+        dialog.show();
+        return dialog;
+    }
+
+    private Dialog showDarkMessage(String title, String subtitle, String message,
+                                   String primaryLabel, DarkAction primary,
+                                   String secondaryLabel, DarkAction secondary,
+                                   String tertiaryLabel, DarkAction tertiary, int tertiaryColor,
+                                   boolean dangerPrimary) {
+        TextView body = text(message, 13f, Color.rgb(200, 205, 212));
+        body.setLineSpacing(dp(4), 1f);
+        body.setPadding(dp(2), 0, dp(2), 0);
+        return showDarkDialog(title, subtitle, body, primaryLabel, primary,
+            secondaryLabel, secondary, tertiaryLabel, tertiary, tertiaryColor, dangerPrimary, 0);
     }
 
     private void showInfoDialog(String title, String message, String buttonLabel) {
@@ -1525,13 +1772,9 @@ public class MainActivity extends Activity {
         root.addView(close);
 
         dialog.setContentView(root);
-        dialog.setOnShowListener(d -> {
-            Window w = dialog.getWindow();
-            if (w == null) return;
-            w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
-            int width = (int) (getResources().getDisplayMetrics().widthPixels * 0.9f);
-            w.setLayout(Math.min(width, dp(480)), ViewGroup.LayoutParams.WRAP_CONTENT);
-        });
+        configureDialogWindow(dialog, dialogWidth(0.9f, 480),
+            ViewGroup.LayoutParams.WRAP_CONTENT);
+        dialog.setOnDismissListener(d -> refreshSettingsDialogStatus());
         dialog.show();
     }
 
@@ -1627,13 +1870,9 @@ public class MainActivity extends Activity {
         root.addView(actions, alp);
 
         dialog.setContentView(root);
-        dialog.setOnShowListener(d -> {
-            Window w = dialog.getWindow();
-            if (w == null) return;
-            w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
-            int width = (int) (getResources().getDisplayMetrics().widthPixels * 0.92f);
-            w.setLayout(Math.min(width, dp(520)), ViewGroup.LayoutParams.WRAP_CONTENT);
-        });
+        configureDialogWindow(dialog, dialogWidth(0.92f, 520),
+            ViewGroup.LayoutParams.WRAP_CONTENT);
+        dialog.setOnDismissListener(d -> refreshSettingsDialogStatus());
         dialog.show();
     }
 
@@ -1740,20 +1979,48 @@ public class MainActivity extends Activity {
         String safe = versionName == null ? "new"
             : versionName.replaceAll("[^0-9A-Za-z._-]", "_");
         final File target = new File(dir, "ClaudeWorkbench-" + safe + ".apk");
-        final ProgressDialog pd = new ProgressDialog(this);
+        final Dialog pd = new Dialog(this);
+        pd.requestWindowFeature(Window.FEATURE_NO_TITLE);
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(dp(18), dp(16), dp(18), dp(16));
+        root.setBackground(rounded(CARD, STROKE, 18));
+        TextView title = text("下载更新 " + versionName, 16, FG);
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        root.addView(title);
+        TextView msg = text("准备下载…", 12, MUTED);
+        msg.setPadding(0, dp(4), 0, dp(12));
+        root.addView(msg);
+        ProgressBar bar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        bar.setMax(100);
+        bar.setProgress(0);
+        bar.setProgressTintList(ColorStateList.valueOf(ORANGE));
+        root.addView(bar, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, dp(6)));
+        TextView cancel = text("取消下载", 13, FG);
+        cancel.setGravity(Gravity.CENTER);
+        cancel.setPadding(0, dp(10), 0, dp(10));
+        cancel.setBackground(rounded(0xFF1A1F27, STROKE, 10));
+        LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        clp.topMargin = dp(14);
+        root.addView(cancel, clp);
+        pd.setContentView(root);
+        configureDialogWindow(pd, dialogWidth(0.86f, 460),
+            ViewGroup.LayoutParams.WRAP_CONTENT);
         final boolean[] canceled = {false};
-        pd.setTitle("下载更新 " + versionName);
-        pd.setMessage("准备下载…");
-        pd.setProgressStyle(ProgressDialog.STYLE_HORIZONTAL);
-        pd.setMax(100);
         pd.setCancelable(true);
         pd.setOnCancelListener(d -> canceled[0] = true);
+        cancel.setOnClickListener(v -> {
+            canceled[0] = true;
+            pd.dismiss();
+        });
         pd.show();
         new Thread(() -> {
             Exception last = null;
             for (String u : mirroredUpdateUrls(url)) {
                 try {
-                    downloadUpdateFile(u, target, sha, pd, canceled);
+                    downloadUpdateFile(u, target, sha, pd, bar, msg, canceled);
                     last = null;
                     break;
                 } catch (Exception e) {
@@ -1782,8 +2049,9 @@ public class MainActivity extends Activity {
         }, "download-update").start();
     }
 
-    private void downloadUpdateFile(String url, File target, String sha,
-                                    ProgressDialog pd, boolean[] canceled) throws Exception {
+    private void downloadUpdateFile(String url, File target, String sha, Dialog pd,
+                                    ProgressBar bar, TextView msg, boolean[] canceled)
+        throws Exception {
         File part = new File(target.getAbsolutePath() + ".part");
         part.delete();
         HttpURLConnection con = null;
@@ -1815,7 +2083,9 @@ public class MainActivity extends Activity {
                             lastPct = pct;
                             final int p = pct;
                             runOnUiThread(() -> {
-                                if (pd.isShowing()) pd.setProgress(p);
+                                if (!pd.isShowing()) return;
+                                bar.setProgress(p);
+                                msg.setText("已下载 " + p + "%");
                             });
                         }
                     }
@@ -1849,28 +2119,35 @@ public class MainActivity extends Activity {
     }
 
     private void confirmClearAllData() {
-        new AlertDialog.Builder(this)
-            .setTitle("清空所有手机端数据？")
-            .setMessage("会停止手机端并删除：Alpine / Node / Claude 运行环境、/workspace、"
+        showDarkMessage("清空所有手机端数据？", "此操作不可恢复",
+            "会停止手机端并删除：Alpine / Node / Claude 运行环境、/workspace、"
                 + "手机端对话记录、API Key、Tailscale 配置、日志和手机控制配置。\n\n"
-                + "不会删除 /sdcard 里的照片、下载等用户文件；电脑端的数据也不受影响。\n\n"
-                + "此操作不可恢复。")
-            .setPositiveButton("清空", (d, w) -> doClearAllData(false))
-            .setNegativeButton("取消", null)
-            .show();
+                + "不会删除 /sdcard 里的照片、下载等用户文件；电脑端的数据也不受影响。",
+            "清空", d -> {
+                dismissSettingsDialog();
+                doClearAllData(false);
+                return true;
+            },
+            "取消", d -> true,
+            null, null, MUTED, true);
     }
 
     private void confirmUninstall() {
-        new AlertDialog.Builder(this)
-            .setTitle("卸载 App")
-            .setMessage("Android 卸载会自动删除 App 内部数据。\n\n"
-                + "选择「清空并卸载」会先停掉手机端，再删除 Alpine / Node / Claude、"
+        showDarkMessage("卸载 App", "Android 卸载会自动删除 App 内部数据",
+            "选择「清空并卸载」会先停掉手机端，再删除 Alpine / Node / Claude、"
                 + "/workspace、手机端对话和配置；不会删除 /sdcard 里的用户文件。\n\n"
-                + "选择「直接卸载」则交给系统卸载器处理。")
-            .setPositiveButton("清空并卸载", (d, w) -> doClearAllData(true))
-            .setNeutralButton("直接卸载", (d, w) -> launchUninstall())
-            .setNegativeButton("取消", null)
-            .show();
+                + "选择「直接卸载」则交给系统卸载器处理。",
+            "清空并卸载", d -> {
+                dismissSettingsDialog();
+                doClearAllData(true);
+                return true;
+            },
+            "直接卸载", d -> {
+                dismissSettingsDialog();
+                launchUninstall();
+                return true;
+            },
+            "取消", d -> true, MUTED, true);
     }
 
     private void doClearAllData(boolean thenUninstall) {
@@ -1947,8 +2224,7 @@ public class MainActivity extends Activity {
 
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
-        int pad = dp(20);
-        box.setPadding(pad, dp(8), pad, 0);
+        box.setPadding(dp(2), 0, dp(2), 0);
 
         EditText key = edit("Tailscale auth key", LocalConfig.tsAuthKey(this), true);
         box.addView(label("Auth key"));
@@ -1961,8 +2237,7 @@ public class MainActivity extends Activity {
         box.addView(pcInput, marginTop(dp(5)));
 
         TextView note = text(
-            "状态：" + state + "\n\n"
-            + "在 Tailscale 后台 → Settings → Keys → Generate auth key，生成 reusable key 粘贴到上面。\n"
+            "在 Tailscale 后台 → Settings → Keys → Generate auth key，生成 reusable key 粘贴到上面。\n"
             + "它会以 claude-phone 设备加入你的 tailnet，在 App 内跑用户态代理，不占用 Android VPN，"
             + "不需要安装 Tailscale App。\n"
             + "首次必须填 auth key；连接成功后设备状态保存在手机，之后可以留空。\n"
@@ -1972,55 +2247,52 @@ public class MainActivity extends Activity {
         note.setLineSpacing(dp(3), 1f);
         box.addView(note, marginTop(dp(10)));
 
-        ScrollView scroll = new ScrollView(this);
-        scroll.addView(box);
-
-        AlertDialog dlg = new AlertDialog.Builder(this)
-            .setTitle("内置 Tailscale（免装 App）")
-            .setView(scroll)
-            .setPositiveButton("保存并启动", null)
-            .setNegativeButton("停止", (d, w) -> {
+        showDarkDialog("内置 Tailscale", "状态：" + state, box,
+            "保存并启动", d -> {
+                List<String> urls = extractPcUrls(pcInput.getText().toString());
+                if (urls.isEmpty()) {
+                    pcInput.setError("请填写电脑的 Tailscale 地址");
+                    return false;
+                }
+                String k = key.getText().toString().trim();
+                if (k.isEmpty() && !LocalEngine.hasTsState(this)) {
+                    key.setError("首次使用需要 Tailscale auth key");
+                    return false;
+                }
+                LocalConfig.saveTs(this, k, urls.get(0));
+                LocalConfig.setTsEnabled(this, true);
+                Toast.makeText(this, "正在启动内置 Tailscale…", Toast.LENGTH_SHORT).show();
+                new Thread(() -> {
+                    try {
+                        LocalEngine.startTailscaleProxy(MainActivity.this,
+                            line -> LocalEngine.log(MainActivity.this, line));
+                        runOnUiThread(() -> {
+                            Toast.makeText(MainActivity.this,
+                                "内置 Tailscale 已连接", Toast.LENGTH_SHORT).show();
+                            refreshHomeStatus();
+                            refreshSettingsDialogStatus();
+                        });
+                    } catch (Exception e) {
+                        LocalConfig.setTsEnabled(MainActivity.this, false);
+                        runOnUiThread(() -> {
+                            Toast.makeText(MainActivity.this,
+                                "内置 Tailscale 启动失败：" + e.getMessage(),
+                                Toast.LENGTH_LONG).show();
+                            refreshSettingsDialogStatus();
+                            showLogDialog();
+                        });
+                    }
+                }, "tsnet-start").start();
+                return true;
+            },
+            "停止", d -> {
                 LocalConfig.setTsEnabled(this, false);
                 LocalEngine.stopTailscaleProxy(this);
                 Toast.makeText(this, "内置 Tailscale 已停止", Toast.LENGTH_SHORT).show();
                 refreshHomeStatus();
-            })
-            .setNeutralButton("取消", null)
-            .create();
-        dlg.setOnShowListener(d -> dlg.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
-            List<String> urls = extractPcUrls(pcInput.getText().toString());
-            if (urls.isEmpty()) {
-                pcInput.setError("请填写电脑的 Tailscale 地址");
-                return;
-            }
-            String k = key.getText().toString().trim();
-            if (k.isEmpty() && !LocalEngine.hasTsState(this)) {
-                key.setError("首次使用需要 Tailscale auth key");
-                return;
-            }
-            LocalConfig.saveTs(this, k, urls.get(0));
-            LocalConfig.setTsEnabled(this, true);
-            dlg.dismiss();
-            Toast.makeText(this, "正在启动内置 Tailscale…", Toast.LENGTH_SHORT).show();
-            new Thread(() -> {
-                try {
-                    LocalEngine.startTailscaleProxy(MainActivity.this,
-                        line -> LocalEngine.log(MainActivity.this, line));
-                    runOnUiThread(() -> {
-                        Toast.makeText(MainActivity.this, "内置 Tailscale 已连接", Toast.LENGTH_SHORT).show();
-                        refreshHomeStatus();
-                    });
-                } catch (Exception e) {
-                    LocalConfig.setTsEnabled(MainActivity.this, false);
-                    runOnUiThread(() -> {
-                        Toast.makeText(MainActivity.this,
-                            "内置 Tailscale 启动失败：" + e.getMessage(), Toast.LENGTH_LONG).show();
-                        showLogDialog();
-                    });
-                }
-            }, "tsnet-start").start();
-        }));
-        dlg.show();
+                return true;
+            },
+            "取消", d -> true, MUTED, false, 0);
     }
 
     private void showPhoneControlDialog() {
@@ -2031,8 +2303,7 @@ public class MainActivity extends Activity {
         String state = running ? "已开启"
             : enabled ? (connected ? "已授权，服务未启动" : "等待系统无障碍授权")
             : "未开启";
-        String msg = "状态：" + state + "\n\n"
-            + "开启后，手机端 Claude 可以读取当前屏幕、点按、输入和打开 App。\n"
+        String msg = "开启后，手机端 Claude 可以读取当前屏幕、点按、输入和打开 App。\n"
             + "密码框、支付、转账、验证码会被拒绝并交还给你；不用时可在同一菜单关闭。\n"
             + "操作时顶部会显示悬浮窗，可停止或插话。悬浮窗内输入需要系统「显示在其他应用上层」"
             + "权限；没授权时会提示先开启该权限，而不是切走当前页面。\n\n"
@@ -2042,28 +2313,33 @@ public class MainActivity extends Activity {
                     + "（需开启 USB 调试），之后 App 会自动恢复。\n\n")
             + "Android 13+ 侧载应用如果无障碍开关是灰的：\n"
             + "系统设置 → 应用 → Claude 工作台 → 右上角 ⋮ → 允许受限设置，再回来开启。";
-        new AlertDialog.Builder(this)
-            .setTitle("手机控制（无障碍点按）")
-            .setMessage(msg)
-            .setPositiveButton("开启", (d, w) -> {
+        showDarkMessage("手机控制（无障碍点按）", "状态：" + state, msg,
+            "开启", d -> {
                 PhoneControlServer.setEnabled(this, true);
                 if (PhoneControlServer.isAccessibilityConnected()) {
                     Toast.makeText(this, "手机控制已开启", Toast.LENGTH_SHORT).show();
                     refreshHomeStatus();
                 } else if (PhoneControlServer.ensureAccessibilityEnabled(this)) {
                     Toast.makeText(this, "已自动开启无障碍，正在连接…", Toast.LENGTH_SHORT).show();
-                    handler.postDelayed(this::refreshHomeStatus, 1800);
+                    handler.postDelayed(() -> {
+                        refreshHomeStatus();
+                        refreshSettingsDialogStatus();
+                    }, 1800);
                 } else {
                     openAccessibilitySettings();
                 }
-            })
-            .setNegativeButton("关闭", (d, w) -> {
+                return true;
+            },
+            "关闭", d -> {
                 PhoneControlServer.setEnabled(this, false);
                 Toast.makeText(this, "手机控制已关闭", Toast.LENGTH_SHORT).show();
                 refreshHomeStatus();
-            })
-            .setNeutralButton("系统无障碍设置", (d, w) -> openAccessibilitySettings())
-            .show();
+                return true;
+            },
+            "系统无障碍设置", d -> {
+                openAccessibilitySettings();
+                return true;
+            }, ORANGE, false);
     }
 
     private void openAccessibilitySettings() {
@@ -2106,7 +2382,7 @@ public class MainActivity extends Activity {
         scroll.setPadding(dp(16), dp(8), dp(16), dp(8));
         scroll.addView(tv);
         scroll.setLayoutParams(new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, dp(380)));
+            ViewGroup.LayoutParams.MATCH_PARENT, dp(250)));
 
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
@@ -2134,21 +2410,20 @@ public class MainActivity extends Activity {
             });
         };
 
-        final AlertDialog dlg = new AlertDialog.Builder(this)
-            .setTitle("手机端运行日志（自动刷新）")
-            .setView(box)
-            .setPositiveButton("复制", (d, w) -> {
+        final Dialog dlg = showDarkDialog("手机端运行日志", "自动刷新", box,
+            "复制", d -> {
                 ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
                 if (cm != null) cm.setPrimaryClip(ClipData.newPlainText("phone.log", tv.getText()));
                 Toast.makeText(this, "已复制", Toast.LENGTH_SHORT).show();
-            })
-            .setNeutralButton("清空", (d, w) -> {
+                return false;
+            },
+            "关闭", d -> true,
+            "清空", d -> {
                 LocalEngine.logFile(this).delete();
                 shown[0] = "";
                 Toast.makeText(this, "已清空", Toast.LENGTH_SHORT).show();
-            })
-            .setNegativeButton("关闭", null)
-            .create();
+                return false;
+            }, MUTED, false, 0);
         onlyErrors.setOnCheckedChangeListener((b, checked) -> {
             shown[0] = "";
             update[0].run();
@@ -2159,8 +2434,10 @@ public class MainActivity extends Activity {
             update[0].run();
             handler.postDelayed(refresh[0], 1000);
         };
-        dlg.setOnDismissListener(d -> handler.removeCallbacks(refresh[0]));
-        dlg.show();
+        dlg.setOnDismissListener(d -> {
+            handler.removeCallbacks(refresh[0]);
+            refreshSettingsDialogStatus();
+        });
         update[0].run();
         tv.post(() -> scroll.fullScroll(View.FOCUS_DOWN));
         handler.postDelayed(refresh[0], 800);
@@ -2430,6 +2707,7 @@ public class MainActivity extends Activity {
         EngineService.notifyTaskStatusChanged(this);
         maybeAutoEnableAccessibility();
         refreshHomeStatus();
+        refreshSettingsDialogStatus();
         checkImportantUpdateSilently();
     }
 
