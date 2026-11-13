@@ -1,10 +1,10 @@
 {
-  "versionCode": 120,
-  "versionName": "2.4.79",
+  "versionCode": 121,
+  "versionName": "2.4.80",
   "apk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.51/ClaudeWorkbench-full.apk",
   "sha256": "3bc07db344928c6b7b3def58f6c6bc80feeffb86e9c95faba1cfb524fe76c8eb",
   "slimApk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/latest/download/ClaudeWorkbench-slim.apk",
-  "slimSha256": "427f2bfbf88777ce6bb351250b0993953e68a1c235e9255a7a01275bcd1090ac",
+  "slimSha256": "44a8d62244cb2e3c872900570c825e08cd49e7e6d26745301e714bde792d084d",
   "important": false,
-  "notes": "2.4.79 更新\n\n- 消息选字不再使用系统菜单：系统菜单项全部隐藏，只保留网页自己的黑色工具条（复制 / 引用 / 引用至其他对话），彻底避免两个窗口。\n- 输入框菜单保持：复制、剪切、粘贴、全选，空输入框可粘贴。"
+  "notes": "2.4.80 更新\n\n- 修复消息选字工具条点了没反应：结束系统的空白 ActionMode 悬浮层，避免它挡住网页工具条；结束时自动恢复网页选区。\n- 消息选字只保留网页黑色工具条（复制 / 引用 / 引用至其他对话）。\n- 输入框菜单保持：复制、剪切、粘贴、全选。"
 }

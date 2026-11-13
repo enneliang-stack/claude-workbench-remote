@@ -58,8 +58,10 @@ public class SelectionWebView extends WebView {
                     if (isEditableMenu(menu)) {
                         rebuildEditableMenu(menu);
                     } else {
-                        // 消息选字完全交给网页自己的工具条：隐藏系统菜单所有项
+                        // 消息选字完全交给网页自己的工具条：隐藏系统菜单，
+                        // 并结束系统 ActionMode，否则它的空白悬浮层会挡住网页按钮的点击
                         rebuildMenu(menu);
+                        dismissMessageActionMode(mode);
                     }
                 } catch (Exception ignored) {
                     // 菜单兼容问题不能让 App 闪退
@@ -108,6 +110,7 @@ public class SelectionWebView extends WebView {
             @Override
             public void onDestroyActionMode(ActionMode mode) {
                 cancelSelectAllRetries();
+                closingMessageMode = false;
                 callback.onDestroyActionMode(mode);
                 evaluateJavascript("window.__nativeSelectionMenu=false", null);
             }
@@ -144,6 +147,37 @@ public class SelectionWebView extends WebView {
             if (info.isSelectAll()) hasSelectAll = true;
         }
         return hasSelectAll && !hasCopy;
+    }
+
+    private boolean closingMessageMode = false;
+
+    /**
+     * 消息选字：结束系统 ActionMode，把操作交给网页工具条。
+     * 先存一份当前 DOM 选区，系统结束时如果清掉了就再恢复。
+     */
+    private void dismissMessageActionMode(ActionMode mode) {
+        if (closingMessageMode) return;
+        closingMessageMode = true;
+        evaluateJavascript(
+                "(function(){var s=window.getSelection();window.__nativeSavedSel="
+                + "(s&&s.rangeCount&&!s.isCollapsed)?s.getRangeAt(0).cloneRange():null;})()",
+                null);
+        postDelayed(() -> {
+            try { mode.finish(); } catch (Exception ignored) { }
+            postDelayed(this::restoreSavedSelection, 120);
+            postDelayed(this::restoreSavedSelection, 400);
+        }, 50);
+    }
+
+    /** 恢复被系统 ActionMode 结束时清掉的网页选区 */
+    private void restoreSavedSelection() {
+        evaluateJavascript(
+                "(function(){var s=window.getSelection();if(!s)return;"
+                + "if(s.rangeCount&&!s.isCollapsed)return;"
+                + "if(window.__nativeSavedSel){try{s.removeAllRanges();"
+                + "s.addRange(window.__nativeSavedSel);}catch(e){}}})()",
+                null);
+        evaluateJavascript("window.__nativeSelectionMenu=false", null);
     }
 
     /** 输入框菜单：复制 → 剪切 → 粘贴 → 全选，点击全部由本类执行。 */
