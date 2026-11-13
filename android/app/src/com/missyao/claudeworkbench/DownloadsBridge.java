@@ -58,6 +58,12 @@ public class DownloadsBridge {
         activity.runOnUiThread(activity::showHome);
     }
 
+    /** App 内远程电脑页的「重连」：让原生重新探测地址并重建 WebView。 */
+    @JavascriptInterface
+    public boolean reconnectPc() {
+        return activity.reconnectPcFromPage();
+    }
+
     /** 悬浮窗插话后，手机端页面发送成功时通知控制层恢复自动化。 */
     @JavascriptInterface
     public void phoneSent() {

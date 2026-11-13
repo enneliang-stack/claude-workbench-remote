@@ -79,6 +79,7 @@ public class MainActivity extends Activity {
     private static final String PREF_URL = "url";
     private static final String PREF_URLS = "urls";
     private static final String PREF_LAST_MODE = "last_mode";
+    private static final String PREF_PC_RECONNECT = "pc_reconnect";
     private static final String UPDATE_MANIFEST_URL =
         "https://raw.githubusercontent.com/enneliang-stack/claude-workbench-remote/main/apk/update.json";
     private static final String UPDATE_MIRROR_PREFIX = "https://ghfast.top/";
@@ -88,6 +89,12 @@ public class MainActivity extends Activity {
         + "var s=document.createElement('style');s.id='apkHideTips';"
         + "s.textContent='#httpsTip,#installTip{display:none!important}';"
         + "if(document.head)document.head.appendChild(s);}catch(e){}})()";
+    /** App 内把页面的「重连」交给原生重新探测/重建 WebView，普通浏览器仍走 reload。 */
+    private static final String RECONNECT_JS =
+        "(function(){try{function bind(id){var b=document.getElementById(id);if(!b)return;"
+        + "b.onclick=function(){try{if(window.AndroidDownloads&&AndroidDownloads.reconnectPc"
+        + "&&AndroidDownloads.reconnectPc())return;}catch(e){}location.reload();};}"
+        + "bind('reconnectBtn');bind('reconnectBtn2');}catch(e){}})()";
     private static final int REQ_FILE = 1001;
     private static final int REQ_NOTIFY = 1002;
     private static final int REQ_STORAGE = 1003;
@@ -128,6 +135,13 @@ public class MainActivity extends Activity {
     private int pcProbeGeneration = 0;
     private boolean pcProbing = false;
     private String mode = "home"; // home | pc | phone
+    private ConnectivityManager.NetworkCallback networkCallback;
+    private String lastNetworkKey = "";
+    private String pcNetworkKey = "";
+    private boolean pcNetworkDirty = false;
+    private boolean pcReconnectScheduled = false;
+    private boolean pcReconnecting = false;
+    private boolean resumed = false;
 
     private final Runnable homeStatusPoll = new Runnable() {
         @Override
@@ -210,6 +224,7 @@ public class MainActivity extends Activity {
             @Override
             public void onPageFinished(WebView view, String url) {
                 view.evaluateJavascript(HIDE_TIPS_JS, null);
+                view.evaluateJavascript(RECONNECT_JS, null);
                 view.evaluateJavascript(
                     "(function(){return !!(document.getElementById('listScreen')||document.getElementById('chatScreen')||document.getElementById('app')||document.querySelector('input[name=token]'));})()",
                     value -> {
@@ -362,15 +377,22 @@ public class MainActivity extends Activity {
         root.addView(importantUpdateBadge, badgeLp);
 
         setContentView(root);
+        registerNetworkMonitor();
         loadPcUrls();
         LocalConfig.ensureDefaultEffort(this);
         PhoneControlServer.ensureConfigFile(this);
         showHome();
         refreshHomeStatus();
-        if (getIntent() != null && getIntent().getBooleanExtra(EXTRA_SHOW_LOG, false)) {
+        boolean reconnectPc = getSharedPreferences(PREFS, MODE_PRIVATE)
+            .getBoolean(PREF_PC_RECONNECT, false);
+        if (reconnectPc) {
+            getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                .putBoolean(PREF_PC_RECONNECT, false).apply();
+            handler.postDelayed(this::openPcMode, 300);
+        } else if (getIntent() != null && getIntent().getBooleanExtra(EXTRA_SHOW_LOG, false)) {
             handler.postDelayed(this::showLogDialog, 500);
         }
-        if (getIntent() != null) {
+        if (!reconnectPc && getIntent() != null) {
             String conv = getIntent().getStringExtra(EXTRA_CONV_ID);
             if (conv != null && !conv.isEmpty()) {
                 pendingPhoneConvId = conv;
@@ -379,6 +401,101 @@ public class MainActivity extends Activity {
                 handler.postDelayed(this::openPhoneMode, 350);
             }
         }
+    }
+
+    private void registerNetworkMonitor() {
+        if (networkCallback != null) return;
+        try {
+            ConnectivityManager cm =
+                (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+            if (cm == null) return;
+            lastNetworkKey = currentNetworkKey();
+            networkCallback = new ConnectivityManager.NetworkCallback() {
+                @Override public void onAvailable(Network network) {
+                    handler.post(MainActivity.this::onNetworkMaybeChanged);
+                }
+                @Override public void onLost(Network network) {
+                    handler.post(MainActivity.this::onNetworkMaybeChanged);
+                }
+                @Override public void onCapabilitiesChanged(Network network,
+                                                            NetworkCapabilities caps) {
+                    handler.post(MainActivity.this::onNetworkMaybeChanged);
+                }
+            };
+            cm.registerDefaultNetworkCallback(networkCallback);
+        } catch (Exception ignored) {
+            networkCallback = null;
+        }
+    }
+
+    private String currentNetworkKey() {
+        try {
+            ConnectivityManager cm =
+                (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+            if (cm == null) return "";
+            Network n = cm.getActiveNetwork();
+            if (n == null) return "none";
+            NetworkCapabilities caps = cm.getNetworkCapabilities(n);
+            if (caps == null) return "none";
+            String type = caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ? "wifi"
+                : caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) ? "cell"
+                : caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) ? "eth"
+                : caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) ? "vpn" : "other";
+            return type + ":" + n;
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    private void onNetworkMaybeChanged() {
+        if (isFinishing() || isDestroyed()) return;
+        String key = currentNetworkKey();
+        if (key.isEmpty() || key.equals(lastNetworkKey)) return;
+        lastNetworkKey = key;
+        if (!pcNetworkKey.isEmpty() && !key.equals(pcNetworkKey)) {
+            // 网络变了，旧 WebView 连接可能还绑在上一张网卡上；下次进电脑端时整体重建。
+            pcNetworkDirty = true;
+        }
+        if (!resumed || !"pc".equals(mode) || "none".equals(key)
+                || pcReconnectScheduled || pcReconnecting) {
+            return;
+        }
+        pcReconnectScheduled = true;
+        handler.postDelayed(() -> {
+            pcReconnectScheduled = false;
+            if ("pc".equals(mode) && !isFinishing()) recreateForPcReconnect(true);
+        }, 800);
+    }
+
+    private void recreateForPcReconnect(boolean resetTailscale) {
+        if (isFinishing() || isDestroyed() || pcReconnecting) return;
+        pcReconnecting = true;
+        final Runnable recreate = () -> {
+            if (isFinishing() || isDestroyed()) return;
+            getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                .putBoolean(PREF_PC_RECONNECT, true).apply();
+            pcProbeGeneration++;
+            pcProbing = false;
+            recreate();
+        };
+        if (!resetTailscale) {
+            recreate.run();
+            return;
+        }
+        new Thread(() -> {
+            try {
+                LocalEngine.stopTailscaleProxy(MainActivity.this);
+            } catch (Exception ignored) {
+            }
+            runOnUiThread(recreate);
+        }, "pc-net-reconnect").start();
+    }
+
+    /** 页面里的「重连」在 App 内改走原生重建；返回 false 时页面仍会 location.reload。 */
+    boolean reconnectPcFromPage() {
+        if (!"pc".equals(mode)) return false;
+        handler.post(() -> recreateForPcReconnect(true));
+        return true;
     }
 
     // ---------------------------------------------------------------- 主页
@@ -645,6 +762,11 @@ public class MainActivity extends Activity {
 
     private void openPcMode() {
         dismissSettingsDialog();
+        if (pcNetworkDirty) {
+            pcNetworkDirty = false;
+            recreateForPcReconnect(true);
+            return;
+        }
         if (pcUrls.isEmpty()) {
             String tsPc = LocalConfig.tsPcUrl(this);
             String normalized = normalizePcUrl(tsPc);
@@ -2482,6 +2604,10 @@ public class MainActivity extends Activity {
 
     private void showWebView(String url, String newMode) {
         mode = newMode;
+        if ("pc".equals(newMode)) {
+            pcNetworkKey = currentNetworkKey();
+            pcNetworkDirty = false;
+        }
         PhoneControlServer.setPhoneModeVisible("phone".equals(newMode));
         currentBaseHost = "";
         try {
@@ -2705,6 +2831,11 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        resumed = true;
+        if ("pc".equals(mode) && pcNetworkDirty && !pcReconnecting) {
+            recreateForPcReconnect(true);
+            return;
+        }
         PhoneControlServer.setAppForeground(true);
         // 用户已经回到 App，清掉“几个任务已完成”的通知计数；运行中的任务保留。
         TaskStatus.clearCompleted();
@@ -2717,6 +2848,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onPause() {
+        resumed = false;
         PhoneControlServer.setAppForeground(false);
         super.onPause();
     }
@@ -2807,6 +2939,16 @@ public class MainActivity extends Activity {
         cancelLoadTimeout();
         pcProbeGeneration++;
         pcProbing = false;
+        resumed = false;
+        if (networkCallback != null) {
+            try {
+                ConnectivityManager cm =
+                    (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+                if (cm != null) cm.unregisterNetworkCallback(networkCallback);
+            } catch (Exception ignored) {
+            }
+            networkCallback = null;
+        }
         handler.removeCallbacksAndMessages(null);
         if (installDialog != null && installDialog.isShowing()) installDialog.dismiss();
         if (webView != null) {

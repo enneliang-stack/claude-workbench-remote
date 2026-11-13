@@ -1,10 +1,10 @@
 {
-  "versionCode": 98,
-  "versionName": "2.4.57",
+  "versionCode": 99,
+  "versionName": "2.4.58",
   "apk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.51/ClaudeWorkbench-full.apk",
   "sha256": "3bc07db344928c6b7b3def58f6c6bc80feeffb86e9c95faba1cfb524fe76c8eb",
   "slimApk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/latest/download/ClaudeWorkbench-slim.apk",
-  "slimSha256": "1e456b65b88718c4c1f9d76c1ce74a38bd216ab927bea3eac5f07021700a05ab",
+  "slimSha256": "2e29a529592e52bc53f0db09085276e31674f4eb3d7b20e3bab73eea2b9ce1bc",
   "important": true,
-  "notes": "2.4.57：重要更新。手动检查更新找到新版本后，返回主页会立即显示“重要更新”入口，不再需要重启 App；包含 2.4.56 的全部改动：手机页最终结论/分条统计、上滑自动加载更早消息、PC↔手机同步兜底、设置二级窗口返回一级和深色弹窗。手机本机页安装本包；PC 远程页需重启一次工作台。"
+  "notes": "2.4.58：重要更新。修复 Wi-Fi 切流量后 App 内重连失败、返回主页再进电脑端仍失败、必须重启 App 才能连上的问题；现在切换网络会自动重新探测电脑地址、重建 WebView，并重置内置 Tailscale。手动「重连」也会走原生重连。包含 2.4.57 的全部改动：手动检查更新后主页立即显示重要更新提醒、手机页最终结论/分条统计、自动加载更早消息、PC↔手机同步兜底和深色弹窗。"
 }
