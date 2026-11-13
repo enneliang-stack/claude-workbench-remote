@@ -290,9 +290,15 @@ button { -webkit-tap-highlight-color: transparent; }
   padding: 4px 0 4px 10px;
 }
 .compact-divider {
-  align-self: center; max-width: 100%;
+  align-self: center; display: flex; align-items: center; gap: 8px;
+  width: 100%;
   color: var(--faint); font-size: 11.5px; line-height: 1.5;
   letter-spacing: .04em; white-space: nowrap; padding: 2px 0;
+}
+.compact-divider::before,
+.compact-divider::after {
+  content: ''; height: 1px; flex: 1 1 24px; min-width: 16px;
+  background: currentColor; opacity: .3;
 }
 
 details.think {

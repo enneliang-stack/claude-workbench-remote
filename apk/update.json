@@ -1,10 +1,10 @@
 {
-  "versionCode": 99,
-  "versionName": "2.4.58",
+  "versionCode": 100,
+  "versionName": "2.4.59",
   "apk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.51/ClaudeWorkbench-full.apk",
   "sha256": "3bc07db344928c6b7b3def58f6c6bc80feeffb86e9c95faba1cfb524fe76c8eb",
   "slimApk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/latest/download/ClaudeWorkbench-slim.apk",
-  "slimSha256": "2e29a529592e52bc53f0db09085276e31674f4eb3d7b20e3bab73eea2b9ce1bc",
-  "important": true,
-  "notes": "2.4.58：重要更新。修复 Wi-Fi 切流量后 App 内重连失败、返回主页再进电脑端仍失败、必须重启 App 才能连上的问题；现在切换网络会自动重新探测电脑地址、重建 WebView，并重置内置 Tailscale。手动「重连」也会走原生重连。包含 2.4.57 的全部改动：手动检查更新后主页立即显示重要更新提醒、手机页最终结论/分条统计、自动加载更早消息、PC↔手机同步兜底和深色弹窗。"
+  "slimSha256": "1eb5be70e0dc826a96cadf58e0f0aa65c47c9dbe044d81c044129631e658a5c0",
+  "important": false,
+  "notes": "2.4.59：普通更新。上下文压缩分隔线改为两侧细横线 + 中间文字，文字和线留间距；包含 2.4.58 的网络切换重连修复、2.4.57 的重要更新提醒修复和 2.4.56 的全部手机页改进。手机本机页安装本包；PC 远程页刷新即可。"
 }

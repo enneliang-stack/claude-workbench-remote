@@ -906,7 +906,7 @@
   }
 
   function compactDividerNode() {
-    return el('div', 'compact-divider', '——上下文对话已压缩——');
+    return el('div', 'compact-divider', '上下文对话已压缩');
   }
 
   // 长消息（例如一整段 App 日志）默认收起，和电脑端保持一致。
