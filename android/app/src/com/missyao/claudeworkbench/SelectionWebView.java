@@ -3,27 +3,29 @@ package com.missyao.claudeworkbench;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
-import android.graphics.drawable.Drawable;
 import android.view.ActionMode;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.webkit.WebView;
+import android.widget.Toast;
 
 import org.json.JSONObject;
-
-import java.util.ArrayList;
-import java.util.List;
+import org.json.JSONTokener;
 
 /**
  * 给 WebView 的系统文字选择菜单补上「引用 / 引用至其他对话」。
  * 网页侧通过 window.__nativeSelectionAction 接管选中文字；没有网页处理的页面不受影响。
- * 输入框等可编辑区域保留系统菜单并统一顺序：复制 → 剪切 → 粘贴 → 全选；
- * 没有选中文字（空输入框）时也补一个「粘贴」，避免长按没有任何反应。
+ *
+ * 输入框等可编辑区域使用 App 自己的四项菜单（复制 → 剪切 → 粘贴 → 全选）并自行执行动作：
+ * WebView 的系统菜单项一旦 clear() 后重新 add，点击就不会再触发原生动作，所以不能重建系统项。
  */
 public class SelectionWebView extends WebView {
     private static final int MENU_QUOTE = 0x5E1101;
     private static final int MENU_QUOTE_OTHER = 0x5E1102;
     private static final int MENU_PASTE = 0x5E1103;
+    private static final int MENU_COPY = 0x5E1104;
+    private static final int MENU_CUT = 0x5E1105;
+    private static final int MENU_SELECT_ALL = 0x5E1106;
 
     public SelectionWebView(Context context) {
         super(context);
@@ -52,7 +54,7 @@ public class SelectionWebView extends WebView {
                     rebuildEditableMenu(menu);
                     return true;
                 }
-                // WebView 的 onPrepare 会重新补系统项，必须在这里再排一次序
+                // WebView 的 onPrepare 会重新补系统项，必须在这里再补一次引用项
                 rebuildMenu(menu);
                 return true;
             }
@@ -75,6 +77,19 @@ public class SelectionWebView extends WebView {
                     finishLater(mode);
                     return true;
                 }
+                if (id == MENU_COPY) {
+                    copyEditableSelection(mode, false);
+                    return true;
+                }
+                if (id == MENU_CUT) {
+                    copyEditableSelection(mode, true);
+                    return true;
+                }
+                if (id == MENU_SELECT_ALL) {
+                    selectAllEditable();
+                    finishLater(mode);
+                    return true;
+                }
                 return callback.onActionItemClicked(mode, item);
             }
 
@@ -91,8 +106,7 @@ public class SelectionWebView extends WebView {
     }
 
     /**
-     * 输入框/可编辑区域用系统菜单（只重排、不删除、不加引用项）。
-     * 只根据系统给了哪些菜单项判断，避免网页状态和系统菜单创建时机不同步：
+     * 输入框/可编辑区域用 App 自己的菜单，只根据系统给了哪些项判断：
      * - 空菜单：空输入框长按，按输入框处理；
      * - 有剪切/粘贴：可编辑区域；
      * - 只有全选、没有复制：光标停在输入框里、没选文字；
@@ -111,71 +125,48 @@ public class SelectionWebView extends WebView {
         return hasSelectAll && !hasCopy;
     }
 
-    /** 输入框菜单：复制 → 剪切 → 粘贴 → 全选 → 其余；系统没给「粘贴」时补一个。 */
+    /** 输入框菜单：复制 → 剪切 → 粘贴 → 全选，点击全部由本类执行。 */
     private static void rebuildEditableMenu(Menu menu) {
-        List<MenuItemInfo> keep = new ArrayList<>();
-        boolean hasPaste = false;
+        boolean hasCopy = false;
+        boolean hasCut = false;
+        boolean hasSelectAll = false;
         for (int i = 0; i < menu.size(); i++) {
-            MenuItem item = menu.getItem(i);
-            int id = item.getItemId();
-            if (id == MENU_PASTE || id == MENU_QUOTE || id == MENU_QUOTE_OTHER) continue;
-            MenuItemInfo info = new MenuItemInfo(item);
-            keep.add(info);
-            if (info.isPaste()) hasPaste = true;
+            MenuItemInfo info = new MenuItemInfo(menu.getItem(i));
+            if (info.isCopy()) hasCopy = true;
+            if (info.isCut()) hasCut = true;
+            if (info.isSelectAll()) hasSelectAll = true;
         }
         menu.clear();
-        for (int rank = 0; rank <= 3; rank++) {
-            for (MenuItemInfo info : keep) {
-                if (info.rank() == rank) addItem(menu, info, rank);
-            }
-            if (rank == 2 && !hasPaste) {
-                menu.add(Menu.NONE, MENU_PASTE, 2, "粘贴");
-            }
-        }
-        int order = 100;
-        for (MenuItemInfo info : keep) {
-            if (info.rank() < 0) addItem(menu, info, order++);
-        }
+        if (hasCopy) menu.add(Menu.NONE, MENU_COPY, 0, "复制");
+        if (hasCut) menu.add(Menu.NONE, MENU_CUT, 1, "剪切");
+        menu.add(Menu.NONE, MENU_PASTE, 2, "粘贴");
+        if (hasSelectAll) menu.add(Menu.NONE, MENU_SELECT_ALL, 3, "全选");
     }
 
-    /** 系统项 + 引用项重新排：复制 → 引用 → 引用至其他对话 → 其余。 */
+    /**
+     * 消息选字菜单：系统自带的复制/全选保持原样（重建后点击会失效），
+     * 只去掉分享/网页搜索，再追加引用项。
+     */
     private static void rebuildMenu(Menu menu) {
-        List<MenuItemInfo> keep = new ArrayList<>();
-        for (int i = 0; i < menu.size(); i++) {
+        for (int i = menu.size() - 1; i >= 0; i--) {
             MenuItem item = menu.getItem(i);
-            int id = item.getItemId();
-            if (id == MENU_QUOTE || id == MENU_QUOTE_OTHER || id == MENU_PASTE) continue;
             MenuItemInfo info = new MenuItemInfo(item);
-            if (info.isWebSearchOrShare()) continue;
-            keep.add(info);
+            if (info.isWebSearchOrShare()) menu.removeItem(item.getItemId());
         }
-        menu.clear();
-        for (MenuItemInfo info : keep) {
-            if (info.isCopy()) addItem(menu, info, 0);
-        }
-        menu.add(Menu.NONE, MENU_QUOTE, 1, "引用");
-        menu.add(Menu.NONE, MENU_QUOTE_OTHER, 2, "引用至其他对话");
-        int order = 100;
-        for (MenuItemInfo info : keep) {
-            if (info.isCopy()) continue;
-            addItem(menu, info, order++);
+        if (menu.findItem(MENU_QUOTE) == null) {
+            menu.add(Menu.NONE, MENU_QUOTE, 100, "引用");
+            menu.add(Menu.NONE, MENU_QUOTE_OTHER, 101, "引用至其他对话");
         }
     }
 
     private static final class MenuItemInfo {
         final int id;
         final CharSequence title;
-        final boolean enabled;
-        final boolean visible;
-        final Drawable icon;
         private final String lower;
 
         MenuItemInfo(MenuItem item) {
             this.id = item.getItemId();
             this.title = item.getTitle();
-            this.enabled = item.isEnabled();
-            this.visible = item.isVisible();
-            this.icon = item.getIcon();
             this.lower = String.valueOf(title).toLowerCase();
         }
 
@@ -200,28 +191,50 @@ public class SelectionWebView extends WebView {
             return lower.contains("网页搜索") || lower.contains("web search")
                     || lower.contains("分享") || lower.contains("share");
         }
-
-        /** 0 复制，1 剪切，2 粘贴，3 全选，-1 其他 */
-        int rank() {
-            if (isCopy()) return 0;
-            if (isCut()) return 1;
-            if (isPaste()) return 2;
-            if (isSelectAll()) return 3;
-            return -1;
-        }
-    }
-
-    private static void addItem(Menu menu, MenuItemInfo info, int order) {
-        MenuItem item = menu.add(Menu.NONE, info.id, order, info.title);
-        item.setEnabled(info.enabled);
-        item.setVisible(info.visible);
-        if (info.icon != null) item.setIcon(info.icon);
     }
 
     private void runSelectionAction(String action) {
         evaluateJavascript(
                 "window.__nativeSelectionAction && window.__nativeSelectionAction('" + action + "')",
                 null);
+    }
+
+    // ---------------------------------------------------------------- 输入框动作
+
+    private static final String JS_GET_SELECTION =
+            "(function(){var el=document.activeElement;if(el){var t=(el.tagName||'').toLowerCase();"
+            + "if(t==='textarea'||t==='input'){var s=el.selectionStart==null?0:el.selectionStart;"
+            + "var e=el.selectionEnd==null?s:el.selectionEnd;return el.value.slice(s,e);}}"
+            + "return window.getSelection?String(window.getSelection()):'';})()";
+
+    private static final String JS_CUT_SELECTION =
+            "(function(){var el=document.activeElement;if(!el)return '';"
+            + "var t=(el.tagName||'').toLowerCase();"
+            + "if(t==='textarea'||t==='input'){var s=el.selectionStart==null?0:el.selectionStart;"
+            + "var e=el.selectionEnd==null?s:el.selectionEnd;if(e<=s)return '';"
+            + "var v=el.value.slice(s,e);el.setRangeText('',s,e,'end');"
+            + "el.dispatchEvent(new Event('input',{bubbles:true}));return v;}"
+            + "if(document.execCommand){document.execCommand('cut');}return '';})()";
+
+    private static final String JS_SELECT_ALL =
+            "(function(){var el=document.activeElement;if(!el)return;"
+            + "var t=(el.tagName||'').toLowerCase();"
+            + "if(t==='textarea'||t==='input'){try{el.focus();el.select();}catch(e){}}"
+            + "else if(document.execCommand){document.execCommand('selectAll');}})()";
+
+    private void copyEditableSelection(ActionMode mode, boolean cut) {
+        evaluateJavascript(cut ? JS_CUT_SELECTION : JS_GET_SELECTION, value -> {
+            String text = decodeJsString(value);
+            if (!text.isEmpty()) {
+                copyToClipboard(text);
+                Toast.makeText(getContext(), cut ? "已剪切" : "已复制", Toast.LENGTH_SHORT).show();
+            }
+        });
+        finishLater(mode);
+    }
+
+    private void selectAllEditable() {
+        evaluateJavascript(JS_SELECT_ALL, null);
     }
 
     /** 系统没提供「粘贴」时自己插入剪贴板文字（空输入框长按用）。 */
@@ -234,6 +247,16 @@ public class SelectionWebView extends WebView {
         evaluateJavascript(
                 "window.__nativePasteText && window.__nativePasteText(" + JSONObject.quote(text) + ")",
                 null);
+    }
+
+    private void copyToClipboard(String text) {
+        try {
+            ClipboardManager cm = (ClipboardManager) getContext()
+                    .getSystemService(Context.CLIPBOARD_SERVICE);
+            if (cm != null) cm.setPrimaryClip(ClipData.newPlainText("文本", text));
+        } catch (Exception ignored) {
+            // 剪贴板不可用时保持静默，菜单本身已经收起
+        }
     }
 
     private String readClipboardText() {
@@ -254,6 +277,17 @@ public class SelectionWebView extends WebView {
             return text == null ? null : text.toString();
         } catch (Exception e) {
             return null;
+        }
+    }
+
+    /** evaluateJavascript 返回的是 JSON 字符串字面量，这里还原成普通文本。 */
+    private static String decodeJsString(String value) {
+        if (value == null || "null".equals(value)) return "";
+        try {
+            Object v = new JSONTokener(value).nextValue();
+            return v == null ? "" : String.valueOf(v);
+        } catch (Exception e) {
+            return "";
         }
     }
 
