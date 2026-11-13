@@ -38,25 +38,33 @@ public class SelectionWebView extends WebView {
             public boolean onCreateActionMode(ActionMode mode, Menu menu) {
                 boolean ok = callback.onCreateActionMode(mode, menu);
                 if (!ok) return false;
-                if (isEditableMenu(menu)) {
-                    rebuildEditableMenu(menu);
-                    return true;
+                try {
+                    if (isEditableMenu(menu)) {
+                        rebuildEditableMenu(menu);
+                        return true;
+                    }
+                    rebuildMenu(menu);
+                    evaluateJavascript("window.__nativeSelectionMenu=true", null);
+                } catch (Exception ignored) {
+                    // 菜单兼容问题不能让 App 闪退
                 }
-                rebuildMenu(menu);
-                evaluateJavascript("window.__nativeSelectionMenu=true", null);
                 return true;
             }
 
             @Override
             public boolean onPrepareActionMode(ActionMode mode, Menu menu) {
                 callback.onPrepareActionMode(mode, menu);
-                if (isEditableMenu(menu)) {
-                    rebuildEditableMenu(menu);
-                    return true;
+                try {
+                    if (isEditableMenu(menu)) {
+                        rebuildEditableMenu(menu);
+                        return true;
+                    }
+                    // WebView 的 onPrepare 会重新补系统项，必须在这里再补一次引用项
+                    rebuildMenu(menu);
+                    evaluateJavascript("window.__nativeSelectionMenu=true", null);
+                } catch (Exception ignored) {
+                    // 同上，任何菜单兼容异常都吞掉
                 }
-                // WebView 的 onPrepare 会重新补系统项，必须在这里再补一次引用项
-                rebuildMenu(menu);
-                evaluateJavascript("window.__nativeSelectionMenu=true", null);
                 return true;
             }
 
@@ -168,12 +176,14 @@ public class SelectionWebView extends WebView {
      * 这样菜单正好三项，引用不会被挤到右侧第二页。
      */
     private static void rebuildMenu(Menu menu) {
-        for (int i = menu.size() - 1; i >= 0; i--) {
+        for (int i = 0; i < menu.size(); i++) {
             MenuItem item = menu.getItem(i);
             int id = item.getItemId();
             if (id == MENU_QUOTE || id == MENU_QUOTE_OTHER) continue;
             MenuItemInfo info = new MenuItemInfo(item);
-            if (!info.isCopy()) menu.removeItem(id);
+            // 用隐藏而不是 removeItem：系统菜单项可能共用 id，删除会误删并导致越界闪退；
+            // 重新 add 的系统项点击也会失效。
+            if (!info.isCopy()) item.setVisible(false);
         }
         if (menu.findItem(MENU_QUOTE) == null) {
             // 放最前面，保证引用项在第一页；标签用短名，避免被挤到右侧更多页
