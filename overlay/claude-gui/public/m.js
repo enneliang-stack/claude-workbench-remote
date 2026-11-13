@@ -4050,9 +4050,20 @@
     const bar = $('#selToolbar');
     if (!bar) return;
     // 点工具条时不要清掉选区，否则 click 还没触发系统就收起了选择
+    let selTouchHandledAt = 0;
     bar.addEventListener('mousedown', e => e.preventDefault());
     bar.addEventListener('touchstart', e => e.preventDefault(), { passive: false });
+    // Android WebView 里 touchstart 阻止默认行为后 click 可能不触发，触摸结束直接执行
+    bar.addEventListener('touchend', e => {
+      const btn = e.target.closest('[data-sel]');
+      if (!btn) return;
+      e.preventDefault();
+      e.stopPropagation();
+      selTouchHandledAt = Date.now();
+      handleSelAction(btn.dataset.sel);
+    }, { passive: false });
     bar.addEventListener('click', e => {
+      if (Date.now() - selTouchHandledAt < 800) return; // 触摸已处理，避免重复
       const btn = e.target.closest('[data-sel]');
       if (!btn) return;
       e.preventDefault();

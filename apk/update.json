@@ -1,10 +1,10 @@
 {
-  "versionCode": 121,
-  "versionName": "2.4.80",
+  "versionCode": 122,
+  "versionName": "2.4.81",
   "apk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.51/ClaudeWorkbench-full.apk",
   "sha256": "3bc07db344928c6b7b3def58f6c6bc80feeffb86e9c95faba1cfb524fe76c8eb",
   "slimApk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/latest/download/ClaudeWorkbench-slim.apk",
-  "slimSha256": "44a8d62244cb2e3c872900570c825e08cd49e7e6d26745301e714bde792d084d",
+  "slimSha256": "9de3785e0644ec941cd67e4ab281cf262b1669a6ed3de8361fa8e6859e976943",
   "important": false,
-  "notes": "2.4.80 更新\n\n- 修复消息选字工具条点了没反应：结束系统的空白 ActionMode 悬浮层，避免它挡住网页工具条；结束时自动恢复网页选区。\n- 消息选字只保留网页黑色工具条（复制 / 引用 / 引用至其他对话）。\n- 输入框菜单保持：复制、剪切、粘贴、全选。"
+  "notes": "2.4.81 更新\n\n- 修复消息选字工具条按钮点了没反应：网页工具条改为触摸结束（touchend）直接执行，不再依赖会被 WebView 吞掉的 click 事件。\n- 消息选字仍只保留网页黑色工具条（复制 / 引用 / 引用至其他对话）。\n- 输入框菜单保持：复制、剪切、粘贴、全选。"
 }
