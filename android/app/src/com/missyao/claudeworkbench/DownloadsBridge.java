@@ -64,6 +64,59 @@ public class DownloadsBridge {
         return activity.reconnectPcFromPage();
     }
 
+    /** 手机页草稿：按会话 id 存在 App 私有目录，和页面 origin 无关。 */
+    private File draftFile(String id) {
+        String safe = id == null ? "" : id.replaceAll("[^A-Za-z0-9._-]", "_");
+        if (safe.isEmpty()) return null;
+        File dir = new File(activity.getFilesDir(), "drafts");
+        if (!dir.isDirectory() && !dir.mkdirs()) return null;
+        return new File(dir, safe + ".json");
+    }
+
+    @JavascriptInterface
+    public String loadDraft(String id) {
+        File f = draftFile(id);
+        if (f == null || !f.isFile()) return "";
+        try (InputStream in = new FileInputStream(f)) {
+            int max = (int) Math.min(f.length(), 8L * 1024 * 1024);
+            byte[] buf = new byte[max];
+            int n = in.read(buf);
+            return n > 0 ? new String(buf, 0, n, StandardCharsets.UTF_8) : "";
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    @JavascriptInterface
+    public boolean saveDraft(String id, String json) {
+        File f = draftFile(id);
+        if (f == null || json == null) return false;
+        byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
+        if (bytes.length > 8 * 1024 * 1024) return false;
+        File tmp = new File(f.getParentFile(), f.getName() + ".tmp");
+        try (FileOutputStream out = new FileOutputStream(tmp)) {
+            out.write(bytes);
+        } catch (Exception e) {
+            return false;
+        }
+        if (!tmp.renameTo(f)) {
+            // 某些文件系统不支持覆盖改名；删掉旧文件再试一次。
+            //noinspection ResultOfMethodCallIgnored
+            f.delete();
+            if (!tmp.renameTo(f)) return false;
+        }
+        return true;
+    }
+
+    @JavascriptInterface
+    public void deleteDraft(String id) {
+        File f = draftFile(id);
+        if (f != null) {
+            //noinspection ResultOfMethodCallIgnored
+            f.delete();
+        }
+    }
+
     /** 悬浮窗插话后，手机端页面发送成功时通知控制层恢复自动化。 */
     @JavascriptInterface
     public void phoneSent() {

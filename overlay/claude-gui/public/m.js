@@ -7,6 +7,7 @@
 (() => {
   const TOKEN = window.__GUI_TOKEN__ || '';
   const IS_APP = new URLSearchParams(location.search).get('app') === '1';
+  const IS_PHONE_LOCAL = !!document.querySelector('meta[name="workbench-phone"]');
 
   const $ = sel => document.querySelector(sel);
   const el = (tag, cls, text) => {
@@ -415,6 +416,95 @@
     }
   }
 
+  const DRAFT_LS_PREFIX = 'm.draft.';
+  let draftTimer = null;
+  let draftTimerId = null;
+
+  // App 里用原生桥，草稿和 origin 无关（LAN / Tailscale / tsproxy 都能恢复）；
+  // 浏览器/PWA 退回 localStorage，只保证同一 origin 内重载不丢。
+  function nativeDraftStore() {
+    return !!(window.AndroidDownloads
+      && typeof AndroidDownloads.saveDraft === 'function'
+      && typeof AndroidDownloads.loadDraft === 'function');
+  }
+
+  function draftPack(d, withImages) {
+    const imgs = withImages ? (d.images || []).map(im => ({
+      media_type: im.media_type || '',
+      data: im.data || '',
+      name: im.name || '图片'
+    })).filter(im => im.data) : [];
+    const files = (d.files || []).filter(f => f && f.source === 'pc').map(f => ({
+      id: f.id, name: f.name, size: f.size || 0, path: f.path, source: 'pc', status: ''
+    }));
+    return {
+      text: d.text || '',
+      refs: d.refs || [],
+      quotes: d.quotes || [],
+      files,
+      images: imgs
+    };
+  }
+
+  function draftRawWrite(id, packed) {
+    const raw = JSON.stringify(packed);
+    try {
+      if (nativeDraftStore()) return !!AndroidDownloads.saveDraft(id, raw);
+      if (raw.length > 900 * 1024) return false;
+      localStorage.setItem(DRAFT_LS_PREFIX + id, raw);
+      return true;
+    } catch { return false; }
+  }
+
+  function draftRawClear(id) {
+    try {
+      if (nativeDraftStore() && AndroidDownloads.deleteDraft) AndroidDownloads.deleteDraft(id);
+      localStorage.removeItem(DRAFT_LS_PREFIX + id);
+    } catch { /* ignore */ }
+  }
+
+  function draftRawRead(id) {
+    try {
+      if (nativeDraftStore()) {
+        // App 内以原生存储为准；不要再回落到同 origin 的旧 localStorage 草稿。
+        const raw = AndroidDownloads.loadDraft(id);
+        return raw ? JSON.parse(raw) : null;
+      }
+      const raw = localStorage.getItem(DRAFT_LS_PREFIX + id);
+      return raw ? JSON.parse(raw) : null;
+    } catch { return null; }
+  }
+
+  function persistDraftNow(id, withImages = false) {
+    if (!id) return;
+    clearTimeout(draftTimer);
+    draftTimer = null;
+    draftTimerId = null;
+    const d = S.drafts.get(id);
+    if (!d) { draftRawClear(id); return; }
+    // 图片只在页面隐藏/切换对话/增删图片时序列化，打字时不要反复拼几 MB 的 base64。
+    const imgChars = withImages
+      ? (d.images || []).reduce((n, im) => n + String((im && im.data) || '').length, 0)
+      : 0;
+    const full = withImages && imgChars < 4 * 1024 * 1024;
+    if (!draftRawWrite(id, draftPack(d, full))) {
+      // 图片太大时只存文字/引用/文件路径，别因为图片把整份草稿丢了。
+      draftRawWrite(id, draftPack(d, false));
+    }
+  }
+
+  function schedulePersistDraft(id) {
+    if (!id) return;
+    draftTimerId = id;
+    clearTimeout(draftTimer);
+    draftTimer = setTimeout(() => {
+      const target = draftTimerId;
+      draftTimer = null;
+      draftTimerId = null;
+      if (target) persistDraftNow(target, false);
+    }, 600);
+  }
+
   function saveDraft(id) {
     if (!id) return;
     const text = $('#input').value;
@@ -424,13 +514,36 @@
     const quotes = S.pendingQuotes.slice();
     if (!text.trim() && !images.length && !refs.length && !files.length && !quotes.length) {
       S.drafts.delete(id);
+      draftRawClear(id);
+      clearTimeout(draftTimer);
+      draftTimer = null;
+      draftTimerId = null;
       return;
     }
     S.drafts.set(id, { text, images, refs, files, quotes });
+    schedulePersistDraft(id);
   }
 
   function restoreDraft(id) {
-    const d = S.drafts.get(id);
+    let d = S.drafts.get(id);
+    if (!d) {
+      const p = draftRawRead(id);
+      if (p) {
+        d = {
+          text: p.text || '',
+          images: (p.images || []).map(im => ({
+            media_type: im.media_type || 'image/jpeg',
+            data: im.data || '',
+            preview: im.data ? 'data:' + (im.media_type || 'image/jpeg') + ';base64,' + im.data : '',
+            name: im.name || '图片'
+          })).filter(im => im.preview),
+          refs: p.refs || [],
+          files: p.files || [],
+          quotes: p.quotes || []
+        };
+        S.drafts.set(id, d);
+      }
+    }
     $('#input').value = d ? d.text : '';
     S.pendingImages = d ? d.images.slice() : [];
     S.pendingRefs = d ? d.refs.slice() : [];
@@ -446,7 +559,10 @@
   }
 
   async function openConv(id, push = true) {
-    if (S.convId) saveDraft(S.convId);
+    if (S.convId) {
+      saveDraft(S.convId);
+      persistDraftNow(S.convId, true);
+    }
     stopConvSync();
     if (push) {
       try { history.pushState({ conv: id }, '', '#c=' + encodeURIComponent(id)); } catch { /* ignore */ }
@@ -505,7 +621,10 @@
       return;
     }
     stopConvSync();
-    if (S.convId) saveDraft(S.convId);
+    if (S.convId) {
+      saveDraft(S.convId);
+      persistDraftNow(S.convId, true);
+    }
     S.convId = null;
     S.conv = null;
     S.live = null;
@@ -1402,12 +1521,8 @@
   }
 
   /** 只有手机端页面才直接打开本机文件；App 里的远程电脑端仍走原下载逻辑。 */
-  function isPhonePage() {
-    return !!document.querySelector('meta[name="workbench-phone"]');
-  }
-
   function canOpenLocal() {
-    return isPhonePage() && window.AndroidDownloads && AndroidDownloads.openLocal;
+    return IS_PHONE_LOCAL && window.AndroidDownloads && AndroidDownloads.openLocal;
   }
 
   function openLocalFile(f) {
@@ -3196,6 +3311,8 @@
       setLiveProcessState(last.result != null ? (last.isError ? '失败' : '完成') : '运行中…');
     }
     syncLiveCursor(box);
+    // 过程框刚出现时也要贴底，否则只有等下一段白字总结才会被顶上来。
+    maybeScroll();
   }
 
   // 只在「最新一段白字阶段总结」末尾显示闪烁光标；后面接着工具/思考时也保留。
@@ -3255,6 +3372,8 @@
       S.liveEls.set(ev.key, { thinkingRow: row, textEl: row._textEl, text: b.text || '' });
       bumpLiveProcess(b);
       setRunProgress(progressForThinking(b), 'thinking');
+      // 思考通常是第一个 block：这里不贴底，过程框就只会在屏幕下沿露一条边。
+      maybeScroll();
       return;
     }
 
@@ -4022,6 +4141,7 @@
         S.pendingImages.splice(i, 1);
         renderPendingImages();
         updateSendState();
+        if (S.convId) { saveDraft(S.convId); persistDraftNow(S.convId, true); }
       };
       d.appendChild(b);
       box.appendChild(d);
@@ -4584,6 +4704,7 @@
     }
     if (skipped) toast(`最多 ${MAX_PENDING_IMAGES} 张图片，多余的已忽略`, 'err');
     updateSendState();
+    if (S.convId) { saveDraft(S.convId); persistDraftNow(S.convId, true); }
   }
 
   // ---------------------------------------------------------------- 发送
@@ -4717,6 +4838,12 @@
       S.pendingFiles = [];
       S.refSel = new Map();
       S.drafts.delete(sendConvId);
+      draftRawClear(sendConvId);
+      if (draftTimerId === sendConvId) {
+        clearTimeout(draftTimer);
+        draftTimer = null;
+        draftTimerId = null;
+      }
       renderPendingImages();
       renderPendingRefs();
       renderPendingQuotes();
@@ -4822,6 +4949,8 @@
     scrollPending = true;
     requestAnimationFrame(() => {
       scrollPending = false;
+      // 排队这一帧里用户可能刚开始看历史；不重新检查会把人拽回底部。
+      if (!force && (readingHistory || Date.now() < scrollHoldUntil)) return;
       const m = $('#messages');
       m.scrollTop = m.scrollHeight;
     });
@@ -5259,6 +5388,7 @@
     es.onopen = () => {
       clearTimeout(reconnectTimer);
       lastSseAt = Date.now();
+      netFailStreak = 0;
       const wasDown = S.wasDown;
       S.wasDown = false;
       setConn(true);
@@ -5276,6 +5406,52 @@
       lastSseAt = Date.now();
       try { handleEvent(JSON.parse(e.data)); } catch { /* 忽略坏事件 */ }
     };
+  }
+
+  // ---------------------------------------------------------------- 网络健康
+
+  let netFailStreak = 0;
+  let netWatchTimer = null;
+  let netWatchBusy = false;
+  let lastAutoReconnectAt = 0;
+
+  /** 远程电脑页连续多次探活失败才重建；手机本机页是 127.0.0.1，不需要。 */
+  function autoReconnectPc() {
+    if (IS_PHONE_LOCAL) return;
+    if (Date.now() - lastAutoReconnectAt < 60000) return;
+    lastAutoReconnectAt = Date.now();
+    try {
+      if (window.AndroidDownloads && AndroidDownloads.reconnectPc
+          && AndroidDownloads.reconnectPc()) return;
+    } catch { /* 非 App 环境 */ }
+    location.reload();
+  }
+
+  function startNetWatch() {
+    if (netWatchTimer || IS_PHONE_LOCAL) return;
+    netWatchTimer = setInterval(async () => {
+      if (document.hidden || netWatchBusy) return;
+      if (S.sending || S.loadingOlder) return;
+      // 上传中不抢网络，也不把上传失败误判成线路故障。
+      if ((S.pendingFiles || []).some(f => f && f.status && /^上传/.test(f.status))) return;
+      netWatchBusy = true;
+      try {
+        const pong = await api('/api/ping', { timeout: 5000 });
+        // 公共 Wi-Fi 认证页也可能返回 200/HTML，必须确认真正的服务标识。
+        if (pong && pong.app === 'claude-gui') {
+          netFailStreak = 0;
+        } else {
+          netFailStreak += 1;
+        }
+      } catch {
+        netFailStreak += 1;
+      }
+      if (netFailStreak >= 3) {
+        netFailStreak = 0;
+        autoReconnectPc();
+      }
+      netWatchBusy = false;
+    }, 20000);
   }
 
   // ---------------------------------------------------------------- 初始化
@@ -5364,6 +5540,7 @@
     $('#input').addEventListener('input', () => {
       autoGrow();
       updateSendState();
+      if (S.convId) saveDraft(S.convId);
     });
     $('#attachBtn').onclick = openAttachSheet;
     $('#attachClose').onclick = closeAttachSheet;
@@ -5435,7 +5612,10 @@
       if (!S.conn) hardReconnect();
       if (S.convId) void resumeSync(true);
     });
-    window.addEventListener('pagehide', () => { S.needsResumeSync = true; });
+    window.addEventListener('pagehide', () => {
+      if (S.convId) { saveDraft(S.convId); persistDraftNow(S.convId, true); }
+      S.needsResumeSync = true;
+    });
     window.addEventListener('focus', () => {
       if (S.convId && !document.hidden) void resumeSync();
     });
@@ -5570,6 +5750,7 @@
 
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) {
+        if (S.convId) { saveDraft(S.convId); persistDraftNow(S.convId, true); }
         S.needsResumeSync = true;
         return;
       }
@@ -5581,12 +5762,13 @@
         });
       }
     });
+    startNetWatch();
   }
 
   /** 只把手机本机页的任务状态报给 App，用于通知栏和悬浮窗；远程电脑页不参与。 */
   function notifyPageTask(running) {
     try {
-      if (!document.querySelector('meta[name="workbench-phone"]')) return;
+      if (!IS_PHONE_LOCAL) return;
       if (window.AndroidDownloads && AndroidDownloads.taskState) {
         AndroidDownloads.taskState(JSON.stringify({
           running: !!running,
@@ -5601,7 +5783,7 @@
   function ensureModeBadge() {
     // 手机本机页的 m.html 由 APK 构建脚本注入 workbench-phone；远程电脑页没有这个标记。
     // 不能按 127.0.0.1 判断：App 的内置 Tailscale 代理也是 127.0.0.1:4720。
-    const local = !!document.querySelector('meta[name="workbench-phone"]');
+    const local = IS_PHONE_LOCAL;
     const label = local ? '手机端' : '电脑端';
     const cls = 'mode-badge' + (local ? '' : ' pc');
     const make = () => {

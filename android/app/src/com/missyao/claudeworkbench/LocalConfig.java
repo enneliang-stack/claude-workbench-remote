@@ -89,6 +89,42 @@ public final class LocalConfig {
         return prefs(c).getString("ts_pc_url", "").trim();
     }
 
+    /**
+     * 内置 tsnet 的中继策略：
+     * 空 = 智能（有全局 IPv6 时自动，IPv4-only 时用 2/SFO）；
+     * 2 = 始终强制 SFO；其他数字 = 强制该区域。
+     */
+    public static String tsDerp(Context c) {
+        return prefs(c).getString("ts_derp", "").trim();
+    }
+
+    public static void setTsDerp(Context c, String derp) {
+        prefs(c).edit().putString("ts_derp", derp == null ? "" : derp.trim()).apply();
+    }
+
+    /** 正在运行的 tsproxy 实际使用的 DERP（空字符串=自动）；缺失表示未知。 */
+    public static String tsDerpEffective(Context c) {
+        return prefs(c).getString("ts_derp_effective", null);
+    }
+
+    public static void setTsDerpEffective(Context c, String derp) {
+        prefs(c).edit().putString("ts_derp_effective", derp == null ? "" : derp.trim()).apply();
+    }
+
+    public static void clearTsDerpEffective(Context c) {
+        prefs(c).edit().remove("ts_derp_effective").apply();
+    }
+
+    /** 2.4.103 起空值代表智能策略；把旧版默认的 "2" 迁移成空一次。 */
+    public static void ensureDerpPolicy(Context c) {
+        SharedPreferences p = prefs(c);
+        if (p.getBoolean("ts_derp_policy_v1", false)) return;
+        String current = p.getString("ts_derp", "").trim();
+        SharedPreferences.Editor e = p.edit();
+        if ("2".equals(current)) e.putString("ts_derp", "");
+        e.putBoolean("ts_derp_policy_v1", true).apply();
+    }
+
     public static void saveTs(Context c, String authKey, String pcUrl) {
         prefs(c).edit()
             .putString("ts_auth_key", authKey == null ? "" : authKey.trim())

@@ -17,6 +17,8 @@ import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.StateListDrawable;
 import android.net.ConnectivityManager;
+import android.net.LinkAddress;
+import android.net.LinkProperties;
 import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.net.Uri;
@@ -62,6 +64,8 @@ import java.io.InputStream;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.net.HttpURLConnection;
+import java.net.Inet4Address;
+import java.net.InetAddress;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -117,6 +121,7 @@ public class MainActivity extends Activity {
     private LinearLayout errorView;
     private TextView errorTitle;
     private TextView errorNote;
+    private Button errorTailscaleBtn;
     private LinearLayout homeView;
     private TextView homePcStatus;
     private TextView homePhoneStatus;
@@ -142,6 +147,8 @@ public class MainActivity extends Activity {
     private boolean pcReconnectScheduled = false;
     private boolean pcReconnecting = false;
     private boolean resumed = false;
+    private boolean lastNetworkValidated = true;
+    private volatile Thread tsPrewarmThread;
 
     private final Runnable homeStatusPoll = new Runnable() {
         @Override
@@ -386,6 +393,7 @@ public class MainActivity extends Activity {
         registerNetworkMonitor();
         loadPcUrls();
         LocalConfig.ensureDefaultEffort(this);
+        LocalConfig.ensureDerpPolicy(this);
         PhoneControlServer.ensureConfigFile(this);
         showHome();
         refreshHomeStatus();
@@ -416,6 +424,7 @@ public class MainActivity extends Activity {
                 (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
             if (cm == null) return;
             lastNetworkKey = currentNetworkKey();
+            lastNetworkValidated = isNetworkValidated();
             networkCallback = new ConnectivityManager.NetworkCallback() {
                 @Override public void onAvailable(Network network) {
                     handler.post(MainActivity.this::onNetworkMaybeChanged);
@@ -456,21 +465,51 @@ public class MainActivity extends Activity {
     private void onNetworkMaybeChanged() {
         if (isFinishing() || isDestroyed()) return;
         String key = currentNetworkKey();
-        if (key.isEmpty() || key.equals(lastNetworkKey)) return;
-        lastNetworkKey = key;
-        if (!pcNetworkKey.isEmpty() && !key.equals(pcNetworkKey)) {
-            // 网络变了，旧 WebView 连接可能还绑在上一张网卡上；下次进电脑端时整体重建。
-            pcNetworkDirty = true;
-        }
-        if (!resumed || !"pc".equals(mode) || "none".equals(key)
-                || pcReconnectScheduled || pcReconnecting) {
+        if (key.isEmpty()) return;
+        boolean validated = isNetworkValidated();
+        boolean becameValidated = validated && !lastNetworkValidated;
+        lastNetworkValidated = validated;
+        boolean keyChanged = !key.equals(lastNetworkKey);
+        if (!keyChanged && !becameValidated) return;
+
+        if (keyChanged) {
+            lastNetworkKey = key;
+            if (!pcNetworkKey.isEmpty() && !key.equals(pcNetworkKey)) {
+                // 网络变了，旧 WebView 连接可能还绑在上一张网卡上；下次进电脑端时整体重建。
+                pcNetworkDirty = true;
+            }
+            if (!resumed || !"pc".equals(mode) || "none".equals(key)
+                    || pcReconnectScheduled || pcReconnecting) {
+                return;
+            }
+            pcReconnectScheduled = true;
+            handler.postDelayed(() -> {
+                pcReconnectScheduled = false;
+                if ("pc".equals(mode) && !isFinishing()) recreateForPcReconnect(false);
+            }, 800);
             return;
         }
-        pcReconnectScheduled = true;
-        handler.postDelayed(() -> {
-            pcReconnectScheduled = false;
-            if ("pc".equals(mode) && !isFinishing()) recreateForPcReconnect(true);
-        }, 800);
+
+        // 同一个 Wi-Fi 从不认证变成已认证：只在连接失败页自动重试，
+        // 不要打断已经正常打开的页面。
+        if (becameValidated && "pc".equals(mode) && resumed
+                && !pcProbing && !pcReconnecting
+                && errorView != null && errorView.getVisibility() == View.VISIBLE) {
+            LocalEngine.log(this, "网络认证完成，自动重试电脑端");
+            openPcMode();
+        }
+    }
+
+    private boolean isNetworkValidated() {
+        try {
+            ConnectivityManager cm = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+            if (cm == null) return false;
+            Network n = cm.getActiveNetwork();
+            NetworkCapabilities caps = n == null ? null : cm.getNetworkCapabilities(n);
+            return caps != null && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED);
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     private void recreateForPcReconnect(boolean resetTailscale) {
@@ -770,7 +809,8 @@ public class MainActivity extends Activity {
         dismissSettingsDialog();
         if (pcNetworkDirty) {
             pcNetworkDirty = false;
-            recreateForPcReconnect(true);
+            // 先复用已经在跑且健康的 tsproxy；openPcMode 探活失败时会自己重启。
+            recreateForPcReconnect(false);
             return;
         }
         if (pcUrls.isEmpty()) {
@@ -790,10 +830,17 @@ public class MainActivity extends Activity {
         showLoading("正在连接电脑端…");
         final int generation = ++pcProbeGeneration;
         new Thread(() -> {
-            waitForNetworkReady(3000);
+            // 代理已经在跑、或预热线程已经在连接，就不要再等网络校验。
+            Thread pw = tsPrewarmThread;
+            if (!LocalEngine.isTailscaleProxyRunning()
+                    && (pw == null || !pw.isAlive())) {
+                waitForNetworkReady(1000);
+            }
             final boolean cellular = isCellularNetwork();
             final boolean tsEnabled = LocalConfig.tsEnabled(MainActivity.this)
                 && !LocalConfig.tsPcUrl(MainActivity.this).isEmpty();
+            final boolean lanReachable = !cellular && hasReachableLanCandidate(pcUrls);
+            final boolean skipLan = cellular || !lanReachable;
             String found = null;
             boolean builtinTried = false;
 
@@ -804,10 +851,17 @@ public class MainActivity extends Activity {
                 found = startBuiltinAndProbe(generation);
             }
 
+            // 公网/别人家 Wi-Fi：LAN 不在同网段，提前并行预热 tsproxy，
+            // 和地址探测重叠，省掉“等探测超时再启动”的 6 秒。
+            if (!cellular && !lanReachable && tsEnabled
+                    && !LocalEngine.isTailscaleProxyRunning()) {
+                startTailscalePrewarm();
+            }
+
             if (found == null) {
                 // 同时探测所有可用地址，谁先返回首字节就用谁；避免只按顺序
                 // 选中一个虽然能用、但延迟更高的地址。
-                found = probeFastestPcUrl(new ArrayList<>(pcUrls), generation, cellular);
+                found = probeFastestPcUrl(new ArrayList<>(pcUrls), generation, skipLan);
             }
 
             // 配置的地址都不通时，再启动内置 tsnet 代理（不依赖 Tailscale App）。
@@ -833,12 +887,14 @@ public class MainActivity extends Activity {
     private boolean probeBuiltinPc(int generation) {
         String local = LocalConfig.tsLocalUrl(this);
         if (local.isEmpty()) return false;
+        // 第一次请求有时会卡在 tsnet 的首个 Dial 上；12 秒才超时会白等。
+        // 5 秒超时 + 3 次重试，能更早触发第二次 Dial/握手。
         for (int i = 0; i < 3; i++) {
             if (generation != pcProbeGeneration || !"pc".equals(mode)) return false;
-            if (probePcUrl(local, 2500, 12000)) return true;
+            if (probePcUrl(local, 2500, 5000)) return true;
             if (i < 2) {
                 try {
-                    Thread.sleep(1500);
+                    Thread.sleep(1000);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     return false;
@@ -851,9 +907,37 @@ public class MainActivity extends Activity {
     /** 启动内置 Tailscale，再用它本机的 127.0.0.1:4720 探测电脑页面。 */
     private String startBuiltinAndProbe(int generation) {
         if (generation != pcProbeGeneration || !"pc".equals(mode)) return null;
-        // 代理已经在跑时不要再显示“启动”，直接用它探测；返回主页不会停掉它。
-        if (LocalEngine.isTailscaleProxyRunning() && probeBuiltinPc(generation)) {
-            return LocalConfig.tsLocalUrl(MainActivity.this);
+        // 公网 Wi-Fi 的预热线程可能还在登录；等它，避免又起一个抢 4720。
+        Thread prewarm = tsPrewarmThread;
+        if (prewarm != null && prewarm.isAlive()) {
+            try {
+                prewarm.join(12000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return null;
+            }
+        }
+        // 代理已经在跑：先看 DERP 策略是否随网络变了，再探活；都不行就重启。
+        if (LocalEngine.isTailscaleProxyRunning()) {
+            boolean policyChanged = LocalEngine.tsDerpPolicyChanged(MainActivity.this);
+            if (!policyChanged && probeBuiltinPc(generation)) {
+                return LocalConfig.tsLocalUrl(MainActivity.this);
+            }
+            // 这一轮可能已经被新的探测/重建取代，别去停别人正在用的代理。
+            if (generation != pcProbeGeneration || !"pc".equals(mode)) return null;
+            Boolean peerOnline = LocalEngine.tsPeerOnline(MainActivity.this);
+            if (!policyChanged && peerOnline != null && !peerOnline) {
+                // Tailscale 已连上，但电脑端不在线；再重启代理也帮不上，直接报错。
+                LocalEngine.log(MainActivity.this, "内置 Tailscale 已连接，但电脑端不在线");
+                return null;
+            }
+            LocalEngine.log(MainActivity.this, policyChanged
+                ? "内置 Tailscale 的 DERP 策略随网络变化，重启代理"
+                : "内置 Tailscale 探活失败，重启代理");
+            try {
+                LocalEngine.stopTailscaleProxy(MainActivity.this);
+            } catch (Exception ignored) {
+            }
         }
         runOnUiThread(() -> {
             if (generation == pcProbeGeneration && "pc".equals(mode) && loadingText != null) {
@@ -878,8 +962,28 @@ public class MainActivity extends Activity {
         return null;
     }
 
+    /** 在后台提前启动内置 tsnet，和地址探测并行，省掉公网 Wi-Fi 的启动等待。 */
+    private void startTailscalePrewarm() {
+        Thread old = tsPrewarmThread;
+        if (old != null && old.isAlive()) return;
+        Thread t = new Thread(() -> {
+            try {
+                // 不在预热前等网络校验：tsnet 自己能等网卡/重试，
+                // 多等 2.5 秒只会把首次连接整体往后推。
+                LocalEngine.startTailscaleProxy(MainActivity.this,
+                    line -> LocalEngine.log(MainActivity.this, line));
+                LocalEngine.log(MainActivity.this, "内置 Tailscale 已预连接");
+            } catch (Exception e) {
+                LocalEngine.log(MainActivity.this, "内置 Tailscale 预连接失败：" + e);
+            }
+        }, "tsnet-prewarm");
+        t.setDaemon(true);
+        tsPrewarmThread = t;
+        t.start();
+    }
+
     /**
-     * 上次用的是电脑端、当前又在蜂窝网络：App 一打开就在后台预热内置 Tailscale。
+     * 上次用的是电脑端、当前又在蜂窝/非同网段 Wi-Fi：App 一打开就在后台预热内置 Tailscale。
      * 这样用户点「电脑端」时代理往往已经连好，不用再等 6 秒 tsnet 登录。
      */
     private void maybePrewarmTailscale() {
@@ -888,16 +992,10 @@ public class MainActivity extends Activity {
                 .getString(PREF_LAST_MODE, "");
             if (!"pc".equals(last)) return;
             if (!LocalConfig.tsEnabled(this) || LocalConfig.tsPcUrl(this).isEmpty()) return;
-            if (!isCellularNetwork() || LocalEngine.isTailscaleProxyRunning()) return;
-            handler.postDelayed(() -> new Thread(() -> {
-                try {
-                    LocalEngine.startTailscaleProxy(MainActivity.this,
-                        line -> LocalEngine.log(MainActivity.this, line));
-                    LocalEngine.log(MainActivity.this, "内置 Tailscale 已预连接");
-                } catch (Exception e) {
-                    LocalEngine.log(MainActivity.this, "内置 Tailscale 预连接失败：" + e);
-                }
-            }, "tsnet-prewarm").start(), 800);
+            if (LocalEngine.isTailscaleProxyRunning()) return;
+            boolean needTailscale = isCellularNetwork() || !hasReachableLanCandidate(pcUrls);
+            if (!needTailscale) return;
+            handler.postDelayed(this::startTailscalePrewarm, 100);
         } catch (Exception ignored) {
         }
     }
@@ -962,9 +1060,59 @@ public class MainActivity extends Activity {
         }
     }
 
-    /** 逐个探测配置的地址，哪个在当前网络下能打开就用哪个。 */
-    private boolean probePcUrl(String url) {
-        return probePcUrl(url, 4000, 6000);
+    /** 当前 Wi-Fi 是否和某个配置的 LAN 地址在同一网段；不同网段就不用探它。 */
+    private boolean hasReachableLanCandidate(List<String> urls) {
+        for (String u : urls) {
+            if (isPrivateLanUrl(u) && isOnSameSubnetAs(u)) return true;
+        }
+        return false;
+    }
+
+    private boolean isOnSameSubnetAs(String url) {
+        try {
+            String host = Uri.parse(url).getHost();
+            if (host == null) return false;
+            // 主机名/ .local 无法在不确定网络的情况下解析，交给短超时探测。
+            if (!host.matches("\\d+\\.\\d+\\.\\d+\\.\\d+")) return true;
+            InetAddress target = InetAddress.getByName(host);
+            if (!(target instanceof Inet4Address)) return true;
+            ConnectivityManager cm = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+            if (cm == null) return true;
+            long want = ipv4ToLong(target);
+            boolean sawLan = false;
+            // 不能只看 activeNetwork：官方 Tailscale App 会占 VPN 通道，
+            // 活动网络可能是 100.x 的 VPN，而不是 Wi-Fi。这里单独看 Wi-Fi/以太网。
+            for (Network n : cm.getAllNetworks()) {
+                NetworkCapabilities caps = cm.getNetworkCapabilities(n);
+                if (caps == null) continue;
+                if (!caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+                        && !caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) {
+                    continue;
+                }
+                sawLan = true;
+                LinkProperties lp = cm.getLinkProperties(n);
+                if (lp == null) continue;
+                for (LinkAddress la : lp.getLinkAddresses()) {
+                    InetAddress local = la.getAddress();
+                    if (!(local instanceof Inet4Address)) continue;
+                    int prefix = la.getPrefixLength();
+                    if (prefix < 0 || prefix > 32) continue;
+                    long mask = prefix == 0 ? 0L : (0xffffffffL << (32 - prefix)) & 0xffffffffL;
+                    if ((ipv4ToLong(local) & mask) == (want & mask)) return true;
+                }
+            }
+            // 没有 Wi-Fi/以太网信息时交给短超时探测，避免误跳过。
+            return !sawLan;
+        } catch (Exception e) {
+            return true;
+        }
+    }
+
+    private long ipv4ToLong(InetAddress a) {
+        byte[] b = a.getAddress();
+        if (b == null || b.length != 4) return 0L;
+        return ((long) (b[0] & 0xff) << 24) | ((long) (b[1] & 0xff) << 16)
+            | ((long) (b[2] & 0xff) << 8) | (long) (b[3] & 0xff);
     }
 
     private boolean probePcUrl(String url, int connectMs, int readMs) {
@@ -990,8 +1138,10 @@ public class MainActivity extends Activity {
                 int n = in.read(buf);
                 if (n <= 0) return -1L;
                 String head = new String(buf, 0, n, StandardCharsets.UTF_8);
-                if (head.contains("Claude 工作台") || head.contains("listScreen")
-                        || head.contains("workbench") || head.contains("token")) {
+                // 只认页面主结构，不能认 "token"：远程登录页也有 name="token"，
+                // 旧令牌会因此被误判成“能打开”，最后选中一个只能显示登录页的地址。
+                if (head.contains("id=\"listScreen\"") || head.contains("id=\"app\"")
+                        || head.contains("Claude 工作台")) {
                     return System.currentTimeMillis() - started;
                 }
                 return -1L;
@@ -1003,36 +1153,47 @@ public class MainActivity extends Activity {
         }
     }
 
-    /** 并行探测配置的地址，选首字节最快的一条；不按配置顺序硬选。 */
-    private String probeFastestPcUrl(List<String> urls, int generation, boolean cellular) {
+    /** 并行探测配置的地址：首个成功后短暂收尾，选 TTFB 最低的一条。 */
+    private String probeFastestPcUrl(List<String> urls, int generation, boolean skipPrivateLan) {
         final List<String> list = new ArrayList<>();
         for (String u : urls) {
             if (generation != pcProbeGeneration || !"pc".equals(mode)) break;
-            if (cellular && isPrivateLanUrl(u)) continue;
+            if (skipPrivateLan && isPrivateLanUrl(u)) continue;
             list.add(u);
         }
         if (list.isEmpty()) return null;
+        if (list.size() == 1) {
+            String only = list.get(0);
+            boolean lan = isPrivateLanUrl(only);
+            long ms = probePcLatency(only, lan ? 800 : 2000, lan ? 1500 : 2000);
+            return ms >= 0 ? only : null;
+        }
         final Object lock = new Object();
         final String[] best = {null};
         final long[] bestMs = {Long.MAX_VALUE};
-        final java.util.concurrent.CountDownLatch latch =
-            new java.util.concurrent.CountDownLatch(list.size());
+        final java.util.concurrent.CountDownLatch first =
+            new java.util.concurrent.CountDownLatch(1);
         for (String u : list) {
+            final boolean lan = isPrivateLanUrl(u);
             Thread t = new Thread(() -> {
-                long ms = probePcLatency(u, 3000, 4500);
+                // LAN 正常几十毫秒就返回；给它更短的超时，公网 Wi-Fi 下不再白等 3-7 秒。
+                long ms = probePcLatency(u, lan ? 800 : 2000, lan ? 1500 : 2000);
                 synchronized (lock) {
                     if (ms >= 0 && ms < bestMs[0]) {
                         bestMs[0] = ms;
                         best[0] = u;
                     }
                 }
-                latch.countDown();
+                if (ms >= 0) first.countDown();
             }, "pc-probe");
             t.setDaemon(true);
             t.start();
         }
         try {
-            latch.await(8, java.util.concurrent.TimeUnit.SECONDS);
+            // 第一个成功后只等 350ms 收尾，不陪慢候选耗满超时；一个都不成功则最多等 4 秒。
+            if (first.await(4, java.util.concurrent.TimeUnit.SECONDS)) {
+                Thread.sleep(350);
+            }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
@@ -2368,12 +2529,18 @@ public class MainActivity extends Activity {
         box.addView(label("电脑地址"));
         box.addView(pcInput, marginTop(dp(5)));
 
+        EditText derp = edit("DERP 区域 ID，留空智能", LocalConfig.tsDerp(this), false);
+        box.addView(label("DERP 区域（可选）"));
+        box.addView(derp, marginTop(dp(5)));
+
         TextView note = text(
             "在 Tailscale 后台 → Settings → Keys → Generate auth key，生成 reusable key 粘贴到上面。\n"
             + "它会以 claude-phone 设备加入你的 tailnet，在 App 内跑用户态代理，不占用 Android VPN，"
             + "不需要安装 Tailscale App。\n"
             + "首次必须填 auth key；连接成功后设备状态保存在手机，之后可以留空。\n"
             + "电脑地址填电脑的 Tailscale 地址（通常 100.x 或 *.ts.net，带 token）。\n"
+            + "DERP 留空 = 智能：有全局 IPv6 用自动，IPv4-only 用旧金山；2 = 始终强制旧金山；"
+            + "其他数字 = 强制该区域。改动后保存并启动会重启内置代理，连接日志里能看到实际中继区域。\n"
             + "auth key 只保存在手机本地，不要发给别人。",
             11, MUTED);
         note.setLineSpacing(dp(3), 1f);
@@ -2391,11 +2558,21 @@ public class MainActivity extends Activity {
                     key.setError("首次使用需要 Tailscale auth key");
                     return false;
                 }
+                String newDerp = derp.getText().toString().trim();
+                if (!newDerp.isEmpty() && !newDerp.matches("\\d+")) {
+                    derp.setError("DERP 区域是数字，例如 2；留空表示智能策略");
+                    return false;
+                }
+                boolean derpChanged = !newDerp.equals(LocalConfig.tsDerp(this));
                 LocalConfig.saveTs(this, k, urls.get(0));
+                LocalConfig.setTsDerp(this, newDerp);
                 LocalConfig.setTsEnabled(this, true);
                 Toast.makeText(this, "正在启动内置 Tailscale…", Toast.LENGTH_SHORT).show();
                 new Thread(() -> {
                     try {
+                        if (derpChanged && LocalEngine.isTailscaleProxyRunning()) {
+                            LocalEngine.stopTailscaleProxy(MainActivity.this);
+                        }
                         LocalEngine.startTailscaleProxy(MainActivity.this,
                             line -> LocalEngine.log(MainActivity.this, line));
                         runOnUiThread(() -> {
@@ -2693,9 +2870,24 @@ public class MainActivity extends Activity {
         } else {
             errorTitle.setText("连接不上电脑端");
             String tried = pcUrls.isEmpty() ? "" : "已尝试 " + pcUrls.size() + " 个配置地址。\n";
-            errorNote.setText(tried + "请确认：\n1. 手机 Tailscale 已开启并登录\n"
-                + "2. 如果开了其它 VPN/加速器，Tailscale 无法同时连接，先关掉它\n"
-                + "3. 电脑保持开机联网\n4. 或者手机连回家里的 Wi-Fi");
+            boolean builtin = LocalConfig.tsEnabled(this);
+            errorNote.setText(tried + "请确认：\n"
+                + (builtin
+                    ? "1. 电脑和手机都已联网，电脑端工作台正在运行，并且已开启远程访问\n"
+                      + "2. 设置与日志 → 内置 Tailscale 状态正常（不是「未配置」）\n"
+                    : "1. 手机 Tailscale 已开启并登录\n"
+                      + "2. 如果开了其它 VPN/加速器，Tailscale 无法同时连接，先关掉它\n")
+                + "3. 电脑保持开机联网\n"
+                + "4. 或者手机连回家里的 Wi-Fi\n"
+                + "5. 如果电脑端重装过或令牌变了，重新粘贴「远程访问」窗口的完整地址"
+                + (currentNetworkKey().startsWith("wifi") && !isNetworkValidated()
+                    ? "\n6. 当前 Wi-Fi 可能需要在浏览器里完成认证；认证后会自动重试"
+                    : ""));
+        }
+        if (errorTailscaleBtn != null) {
+            // 内置 tsproxy 不需要官方 Tailscale App；手机端模式也不显示这个按钮。
+            errorTailscaleBtn.setVisibility(
+                "pc".equals(mode) && !LocalConfig.tsEnabled(this) ? View.VISIBLE : View.GONE);
         }
         errorView.setVisibility(View.VISIBLE);
         webView.setVisibility(View.GONE);
@@ -2741,6 +2933,7 @@ public class MainActivity extends Activity {
         box.addView(setup, bp);
 
         Button tailscale = new Button(this);
+        errorTailscaleBtn = tailscale;
         tailscale.setText("打开 Tailscale");
         tailscale.setOnClickListener(v -> {
             try {
@@ -2839,8 +3032,16 @@ public class MainActivity extends Activity {
         super.onResume();
         resumed = true;
         if ("pc".equals(mode) && pcNetworkDirty && !pcReconnecting) {
-            recreateForPcReconnect(true);
+            // 先复用健康的 tsproxy；openPcMode 探活失败会重启，不牺牲稳定性。
+            recreateForPcReconnect(false);
             return;
+        }
+        // 从公共 Wi-Fi 认证页回到 App：网络已认证但上次连接失败，自动重试一次。
+        if ("pc".equals(mode) && !pcProbing && !pcReconnecting
+                && errorView != null && errorView.getVisibility() == View.VISIBLE
+                && isNetworkValidated()) {
+            LocalEngine.log(this, "网络已认证，自动重试电脑端");
+            openPcMode();
         }
         PhoneControlServer.setAppForeground(true);
         // 用户已经回到 App，清掉“几个任务已完成”的通知计数；运行中的任务保留。

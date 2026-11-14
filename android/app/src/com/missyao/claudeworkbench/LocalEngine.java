@@ -3,8 +3,10 @@ package com.missyao.claudeworkbench;
 import android.content.Context;
 import android.content.res.AssetManager;
 import android.net.ConnectivityManager;
+import android.net.LinkAddress;
 import android.net.LinkProperties;
 import android.net.Network;
+import android.net.NetworkCapabilities;
 import android.net.Uri;
 import android.os.StatFs;
 import android.system.Os;
@@ -23,6 +25,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.Inet4Address;
+import java.net.Inet6Address;
 import java.net.InetAddress;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
@@ -51,7 +54,7 @@ public final class LocalEngine {
                     + ALPINE_VERSION + "-aarch64.tar.gz"
     };
     private static final int SERVER_PORT = 4712;
-    private static final int ASSET_VERSION = 95;
+    private static final int ASSET_VERSION = 97;
     private static final String GCS_BASE =
             "https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases";
     private static final String FALLBACK_CLAUDE_VERSION = "2.1.319";
@@ -67,6 +70,7 @@ public final class LocalEngine {
     private static Process tsProxyProcess;
     private static Thread tsWatchThread;
     private static boolean tsProxyRunning;
+    private static volatile String tsProxyEffectiveDerp;
     private static final Object TS_LOCK = new Object();
     private static boolean installing;
     private static boolean running;
@@ -1043,6 +1047,76 @@ public final class LocalEngine {
         return iface;
     }
 
+    /**
+     * 空配置 = 智能策略：有全局 IPv6 让 Tailscale 自动选，IPv4-only 时用 2（SFO）。
+     * 显式填 2 或其他数字 = 强制该区域，不再按 IPv6 改写。
+     */
+    private static String desiredDerp(Context c) {
+        String configured = LocalConfig.tsDerp(c);
+        if (!configured.isEmpty()) return configured;
+        return hasPhysicalIpv6(c) ? "" : "2";
+    }
+
+    /** 网络变化后，当前网络应使用的 DERP 是否和正在跑的代理不一致。 */
+    public static boolean tsDerpPolicyChanged(Context c) {
+        String current = tsProxyEffectiveDerp;
+        if (current == null) {
+            // App 进程重启后从持久化记录恢复；没有记录时宁可重建一次，
+            // 也不要在升级后继续用旧策略（例如旧的强制 SFO）。
+            current = LocalConfig.tsDerpEffective(c);
+            tsProxyEffectiveDerp = current;
+            if (current == null) return true;
+        }
+        return !current.equals(desiredDerp(c));
+    }
+
+    private static boolean linkHasGlobalIpv6(LinkProperties lp) {
+        if (lp == null) return false;
+        for (LinkAddress la : lp.getLinkAddresses()) {
+            InetAddress a = la.getAddress();
+            if (!(a instanceof Inet6Address)
+                    || a.isLinkLocalAddress() || a.isLoopbackAddress()) {
+                continue;
+            }
+            byte[] b = a.getAddress();
+            // 只认全局单播 2000::/3；ULA(fc/fd)、组播等不算“能直连的公网 IPv6”。
+            if (b != null && b.length == 16 && (b[0] & 0xe0) == 0x20) return true;
+        }
+        return false;
+    }
+
+    /** 当前活动网络是否有公网 IPv6；有 IPv6 时 Tailscale 更容易直连。 */
+    private static boolean hasPhysicalIpv6(Context c) {
+        try {
+            ConnectivityManager cm = (ConnectivityManager) c.getSystemService(Context.CONNECTIVITY_SERVICE);
+            if (cm == null) return false;
+            // 先看当前活动网络：手机常见 Wi-Fi 在用、闲置蜂窝仍有 IPv6，
+            // 不能因为闲置网络有 IPv6 就把当前 Wi-Fi 误判成 IPv6 网络。
+            Network active = cm.getActiveNetwork();
+            if (active != null) {
+                NetworkCapabilities caps = cm.getNetworkCapabilities(active);
+                if (caps != null && (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+                        || caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
+                        || caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET))) {
+                    return linkHasGlobalIpv6(cm.getLinkProperties(active));
+                }
+            }
+            // 活动网络是 VPN 等无法直接判断时，再看物理网络。
+            for (Network n : cm.getAllNetworks()) {
+                NetworkCapabilities caps = cm.getNetworkCapabilities(n);
+                if (caps == null) continue;
+                if (!caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+                        && !caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
+                        && !caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) {
+                    continue;
+                }
+                if (linkHasGlobalIpv6(cm.getLinkProperties(n))) return true;
+            }
+        } catch (Exception ignored) {
+        }
+        return false;
+    }
+
     private static File ensureTsRoute(Context c) {
         String iface = activeNetworkInterface(c);
         File f = new File(phoneDir(c), "ts-route");
@@ -1055,6 +1129,13 @@ public final class LocalEngine {
             log(c, "写 ts-route 失败：" + e);
         }
         return f;
+    }
+
+    /** 当前 peer 是否在线；null 表示状态接口不可用/未知。 */
+    public static Boolean tsPeerOnline(Context c) {
+        JSONObject st = tsStatus();
+        if (st == null) return null;
+        return st.optBoolean("peerOnline", false);
     }
 
     private static JSONObject tsStatus() {
@@ -1105,22 +1186,27 @@ public final class LocalEngine {
             File bin = new File(phoneDir(c), "tsproxy");
             if (!bin.isFile()) throw new IOException("tsproxy 未安装，请重新安装手机端环境");
 
-            if (tsProxyRunning) {
-                JSONObject st = tsStatus();
-                if (st != null && st.optBoolean("up", false)) return;
-            }
             // 更新 App 后旧进程可能已经退出，但它启动的 tsproxy 还占着 4720。
-            // 如果它已经连上且目标没变，直接复用，避免新进程再起一个抢端口。
+            // 只有「已连上且目标没变」才复用；目标变了要继续走下面的停止/重启，
+            // 否则用户改了电脑地址后仍在连旧目标。
+            String derp = desiredDerp(c);
             JSONObject existing = tsStatus();
-            if (existing != null && existing.optBoolean("up", false)
-                    && target.equals(existing.optString("target", ""))) {
+            boolean canReuse = existing != null && existing.optBoolean("up", false)
+                && target.equals(existing.optString("target", ""));
+            boolean policyChanged = canReuse && tsDerpPolicyChanged(c);
+            if (canReuse && !policyChanged) {
                 tsProxyRunning = true;
                 tsProxyProcess = null;
+                tsProxyEffectiveDerp = derp;
+                LocalConfig.setTsDerpEffective(c, derp);
                 startTsWatch();
                 String line = "复用已连接的内置 Tailscale";
                 log(c, line);
                 progress(listener, line);
                 return;
+            }
+            if (policyChanged) {
+                log(c, "DERP 策略变化，重启内置 Tailscale");
             }
             stopTailscaleProxy(c);
             // 上一次 App 进程留下的代理可能还在占 4720；起新进程前清掉。
@@ -1132,17 +1218,29 @@ public final class LocalEngine {
             ensureTsHosts(c);
 
             String iface = activeNetworkInterface(c);
+            if (LocalConfig.tsDerp(c).isEmpty()) {
+                log(c, derp.isEmpty()
+                    ? "DERP 自动（检测到全局 IPv6）"
+                    : "DERP 2（当前网络无全局 IPv6）");
+            } else {
+                log(c, "DERP " + derp + "（指定）");
+            }
+            tsProxyEffectiveDerp = derp;
+            LocalConfig.setTsDerpEffective(c, derp);
+            List<String> env = new ArrayList<>();
+            env.add("TS_AUTHKEY=" + key);
+            env.add("TS_TARGET=" + target);
+            env.add("TS_STATE_DIR=/opt/workbench/data/tsnet");
+            env.add("TS_LISTEN=127.0.0.1:" + TS_PROXY_PORT);
+            env.add("TS_HOSTNAME=claude-phone");
+            env.add("TS_FAKE_DEFAULT_IFACE=" + iface);
+            if (!derp.isEmpty()) env.add("TS_PREFER_DERP=" + derp);
+            env.add("GODEBUG=asyncpreemptoff=1");
+            env.add("GOMAXPROCS=4");
             List<String> cmd = buildCommand(c, "exec /opt/workbench/tsproxy", false,
-                "TS_AUTHKEY=" + key,
-                "TS_TARGET=" + target,
-                "TS_STATE_DIR=/opt/workbench/data/tsnet",
-                "TS_LISTEN=127.0.0.1:" + TS_PROXY_PORT,
-                "TS_HOSTNAME=claude-phone",
-                "TS_FAKE_DEFAULT_IFACE=" + iface,
-                "TS_PREFER_DERP=2",
-                "GODEBUG=asyncpreemptoff=1",
-                "GOMAXPROCS=4");
+                env.toArray(new String[0]));
             log(c, "启动内置 Tailscale -> " + target + "，默认网卡 " + iface
+                + "，DERP " + (derp.isEmpty() ? "自动" : derp)
                 + "（auth key " + (key.isEmpty() ? "使用已保存状态" : "已提供") + "）");
             ProcessBuilder pb = new ProcessBuilder(cmd);
             pb.redirectErrorStream(true);
@@ -1229,6 +1327,8 @@ public final class LocalEngine {
             boolean wasRunning = tsProxyRunning;
             tsProxyProcess = null;
             tsProxyRunning = false;
+            tsProxyEffectiveDerp = null;
+            LocalConfig.clearTsDerpEffective(c);
             if (tsWatchThread != null) {
                 tsWatchThread.interrupt();
                 tsWatchThread = null;
