@@ -1,10 +1,10 @@
 {
-  "versionCode": 146,
-  "versionName": "2.4.105",
+  "versionCode": 147,
+  "versionName": "2.4.106",
   "apk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.51/ClaudeWorkbench-full.apk",
   "sha256": "3bc07db344928c6b7b3def58f6c6bc80feeffb86e9c95faba1cfb524fe76c8eb",
   "slimApk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/latest/download/ClaudeWorkbench-slim.apk",
-  "slimSha256": "1819158c67523d3733ec1f1a04d4d9e89c6aa05253153297e933a8d4f21d4ed3",
+  "slimSha256": "a0863b6757d2f7743b7fa7f33ceae5a8bf3ebfc122481dabd8a28ab130ca3fc3",
   "important": false,
-  "notes": "2.4.105 更新\n\n- 手机页历史分组和 PC 一致：同一轮内的插话不再切成多张卡片。\n- 插话产生的中间白字结论收进过程，只留任务最终结论在过程条外面。\n- 过程条收起时插话显示在过程条上方；展开后回到过程内的原位置。\n- 「已编辑文件」按整轮汇总，只显示一次，放在最终总结后面。\n- 包含 2.4.104 的通知续跑过程分组修复。\n"
+  "notes": "2.4.106 更新\n\n- 手机页任务结束后的用时自动换算：不足 60 秒保持秒数，60 秒以上显示 Xm Ys，60 分钟以上显示 Xh Ym Zs。\n- 与 PC 客户端 1.2.39 的用时格式保持一致。\n- 手机页资源版本提升到 100，App 升级后会自动刷新。\n- 旧对话重新打开即可，不需要重建。\n"
 }

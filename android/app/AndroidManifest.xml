@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.missyao.claudeworkbench"
-    android:versionCode="146"
-    android:versionName="2.4.105">
+    android:versionCode="147"
+    android:versionName="2.4.106">
 
     <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="34" />
 

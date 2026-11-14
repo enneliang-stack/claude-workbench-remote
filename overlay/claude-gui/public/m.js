@@ -128,6 +128,20 @@
     return String(n);
   }
 
+  /** 用时：与 PC 客户端一致，超过 1 分钟用 m/s，超过 1 小时用 h/m/s */
+  function fmtDuration(ms) {
+    if (typeof ms !== 'number' || !isFinite(ms) || ms < 0) return '';
+    if (ms < 1000) return `${Math.round(ms)}ms`;
+    const s = ms / 1000;
+    const total = Math.round(s);
+    if (total < 60) return `${s.toFixed(1)}s`;
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const rest = total % 60;
+    if (!h) return `${m}m${rest ? ' ' + rest + 's' : ''}`;
+    return `${h}h${m ? ' ' + m + 'm' : ''}${rest ? ' ' + rest + 's' : ''}`;
+  }
+
   function setConn(on) {
     S.conn = on;
     $('#connDot').className = 'conn-dot ' + (on ? 'on' : 'off');
@@ -2146,10 +2160,8 @@
   function turnMetaNode(meta) {
     const u = meta.usage || {};
     const parts = [];
-    if (meta.duration) {
-      const sec = meta.duration / 1000;
-      parts.push(`用时 ${sec < 10 ? sec.toFixed(1) : Math.round(sec)}s`);
-    }
+    const dur = fmtDuration(meta.duration);
+    if (dur) parts.push(`用时 ${dur}`);
     const inTok = (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0);
     const outTok = u.output_tokens || 0;
     if (inTok || outTok) parts.push(`输入 ${fmtTok(inTok)} / 输出 ${fmtTok(outTok)}`);
