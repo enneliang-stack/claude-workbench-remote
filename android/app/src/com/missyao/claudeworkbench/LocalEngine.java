@@ -51,7 +51,7 @@ public final class LocalEngine {
                     + ALPINE_VERSION + "-aarch64.tar.gz"
     };
     private static final int SERVER_PORT = 4712;
-    private static final int ASSET_VERSION = 94;
+    private static final int ASSET_VERSION = 95;
     private static final String GCS_BASE =
             "https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases";
     private static final String FALLBACK_CLAUDE_VERSION = "2.1.319";

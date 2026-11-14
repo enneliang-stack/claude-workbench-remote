@@ -22,8 +22,7 @@ const PUBLIC_DIR = path.join(ROOT, 'public');
 const DATA_DIR = path.join(ROOT, 'data');
 const TOOL_IMAGE_DIR = path.join(DATA_DIR, 'tool-images');
 const TOOL_IMAGE_MAX_PER_RESULT = 4;
-const TOOL_IMAGE_MERGE_GAP_MS = 25000;        // 连续读图间隔在此时间内视为同一批，追加到上一张卡
-const TOOL_IMAGE_MAX_PER_CARD = 12;           // 单张卡片最多合并多少张图，超出后另起一张卡
+const TOOL_IMAGE_MERGE_GAP_MS = 60000;        // 连续读图间隔在此时间内视为同一批，追加到上一张卡
 const TOOL_IMAGE_MAX_BYTES = 8 * 1024 * 1024;
 const TOOL_IMAGE_MAX_FILES = 400;
 const TOOL_IMAGE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -1331,15 +1330,9 @@ function parseTranscript(text) {
                   const cardImgs = Array.isArray(imageCardBlk.images) ? imageCardBlk.images : [];
                   const seenUrls = new Set(cardImgs.map(x => x && x.url).filter(Boolean));
                   const add = saved.filter(x => x && x.url && !seenUrls.has(x.url));
-                  if (add.length && cardImgs.length + add.length <= TOOL_IMAGE_MAX_PER_CARD) {
+                  if (add.length) {
                     // 同一批连续读图：追加到上一张卡
                     imageCardBlk.images = cardImgs.concat(add);
-                    if (hasTs) imageLastTs = ts;
-                    imageBreak = false;
-                  } else if (add.length) {
-                    // 单卡已满，另起一张卡
-                    blk.images = add;
-                    imageCardBlk = blk;
                     if (hasTs) imageLastTs = ts;
                     imageBreak = false;
                   }
@@ -2399,8 +2392,7 @@ class Runner {
 
   /**
    * 工具结果里带图片时，把图片缓存到本地并决定归到哪张卡片。
-   * 同一批连续读图（间隔 ≤25 秒，期间没有正文/插话打断）追加到上一张卡；
-   * 单卡最多 12 张图，超出后另起一张卡。
+   * 同一批连续读图（间隔 ≤60 秒，期间没有正文/插话打断）追加到上一张卡。
    */
   captureToolImages(content, block) {
     if (!this.live || !block) return null;
@@ -2430,7 +2422,7 @@ class Runner {
     }
     if (!out.length) return null;
 
-    if (merge && cardImages.length + out.length <= TOOL_IMAGE_MAX_PER_CARD) {
+    if (merge) {
       this.live.lastImageAt = now;
       this.live.imageMergeBroken = false;
       return { cardKey: card.id, images: cardImages.concat(out) };

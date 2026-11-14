@@ -1,10 +1,10 @@
 {
-  "versionCode": 138,
-  "versionName": "2.4.97",
+  "versionCode": 139,
+  "versionName": "2.4.98",
   "apk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.51/ClaudeWorkbench-full.apk",
   "sha256": "3bc07db344928c6b7b3def58f6c6bc80feeffb86e9c95faba1cfb524fe76c8eb",
   "slimApk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/latest/download/ClaudeWorkbench-slim.apk",
-  "slimSha256": "179e61c5de570e8b40091833880b841aa8167a5348d3e8af3dcefa9dc3fb3ccc",
+  "slimSha256": "845fa9d9f012a711c449ae41ed3e0d2da09425f7564d5ebf43b446ca95b55a7b",
   "important": true,
-  "notes": "2.4.97 重要更新\n\n- 去掉每轮 8 张图片卡片的数量上限，不再因为卡片数达到上限而丢弃后面的图。\n- 图片卡片里最多渲染前 4 张缩略图，第 5 张起用「+N」表示，点开查看器仍能看到全部图片。\n- 同一对话内只保留最近两次已完成任务的图片；更早的卡片保留「查看了 N 张图片」标题，缩略图清掉并显示「图片已清理」。\n- 磁盘图片缓存不受影响，仍按 7 天/400 张清理；手机本机模式和连接 PC 的手机页规则一致。"
+  "notes": "2.4.98 重要更新\n\n- 去掉单张图片卡片的 12 张合并上限：同一批连续读图会全部并入同一张卡，标题显示总张数。\n- 卡片仍然最多渲染前 4 张缩略图，第 5 张起用「+N」表示，查看器仍带全部图片。\n- 连续读图的合并间隔从 25 秒放宽到 60 秒，截图/截帧稍慢也不会被拆成很多卡片。\n- 正文白字、插话、权限/提问仍会打断合并；磁盘缓存仍按 7 天/400 张清理。"
 }
