@@ -1,10 +1,10 @@
 {
-  "versionCode": 136,
-  "versionName": "2.4.95",
+  "versionCode": 137,
+  "versionName": "2.4.96",
   "apk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.51/ClaudeWorkbench-full.apk",
   "sha256": "3bc07db344928c6b7b3def58f6c6bc80feeffb86e9c95faba1cfb524fe76c8eb",
   "slimApk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/latest/download/ClaudeWorkbench-slim.apk",
-  "slimSha256": "57f32b1f6dd6b92c217986e2c5e6345bf36196cd86199870b9a183ffe97628a3",
+  "slimSha256": "1fd426d77ffe993679ef0423294a16dd81978873180f4921695a5e58f3a109ad",
   "important": true,
-  "notes": "2.4.95 重要更新\n\n- 去掉长按消息弹出的操作面板，长按直接进入文字选择，用网页工具条复制/引用。\n- 关闭 WebView 长按空白处的系统振动。\n- 修复流式过程块出现或任务结束时页面突然跳到前面几条消息的问题：跟随状态始终贴底，看历史时暂缓重建消息列表，回到底部再刷新。\n- 发送消息后强制贴底，过程块弹出也不会停止跟随。\n- 包含 2.4.86 的弹层返回修复，以及 2.4.85 的选字、输入框菜单和图片查看手势更新。"
+  "notes": "2.4.96 重要更新\n\n- 工具连续查看图片改为合并显示：第一张实时出现，后续同一批图片自动追加到同一张「查看了 N 张图片」卡片。\n- 思考、普通工具结果和自动进度白字不打断；模型正文、插话、权限/提问会断开。\n- 每轮最多 8 张卡片（按合并后的卡片计数），单张卡片最多 12 张图，超出另起一张卡。\n- 手机本机模式与连接 PC 的手机页使用同一套合并规则，历史回放刷新前后一致。"
 }

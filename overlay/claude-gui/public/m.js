@@ -3030,9 +3030,9 @@
     return wrap;
   }
 
-  function upsertLiveImageCard(toolUseId, images) {
+  function upsertLiveImageCard(cardKey, images) {
     if (!images || !images.length) return;
-    const key = 'imgview:' + toolUseId;
+    const key = 'imgview:' + cardKey;
     const ref = S.liveEls.get(key);
     if (ref && ref.imageCard && ref.imageCard.isConnected) {
       ref.imageCard._update(images);
@@ -3255,9 +3255,11 @@
       liveBlock.done = true;
     }
     if (Array.isArray(ev.images) && ev.images.length) {
-      const liveBlock = (S.live && S.live.blocks || []).find(b => b.key === 'tool:' + ev.toolUseId);
-      if (liveBlock) liveBlock.images = ev.images;
-      upsertLiveImageCard(ev.toolUseId, ev.images);
+      // 连续读图会合并到同一张卡（imageCardKey 可能是更早的工具调用）
+      const cardKey = ev.imageCardKey || ev.toolUseId;
+      const cardBlock = (S.live && S.live.blocks || []).find(b => b.key === 'tool:' + cardKey);
+      if (cardBlock) cardBlock.images = ev.images;
+      upsertLiveImageCard(cardKey, ev.images);
     }
     setLiveProcessState(ev.isError ? '失败' : '完成');
   }
