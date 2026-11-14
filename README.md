@@ -11,14 +11,15 @@
 电脑端使用方式：安装 1.2.0+ 的统一客户端，侧栏「手机连接」里开启访问并复制地址；
 手机 App 粘贴地址即可。同一 Wi-Fi 不需要 Tailscale 账号。
 
-## 最新 APK（2.4.103 精简 / 2.4.51 完整）
+## 最新 APK（2.4.104 精简 / 2.4.51 完整）
 
 - 完整包（新用户/未装环境）：`ClaudeWorkbench-full.apk`，2.4.51，202,562,281 字节（约 194 MB）
   SHA-256：`3bc07db344928c6b7b3def58f6c6bc80feeffb86e9c95faba1cfb524fe76c8eb`
   下载：`https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.51/ClaudeWorkbench-full.apk`
-- 精简包（已装手机环境）：`ClaudeWorkbench-slim.apk`，2.4.103，8,547,084 字节（约 8.2 MB）
-  SHA-256：`553da21dbab97da3bf8f0e9a4aefc63fecb65c465dd14c4b6f5ede2347256c1c`
-  下载：`https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.103/ClaudeWorkbench-slim.apk`
+- 精简包（已装手机环境）：`ClaudeWorkbench-slim.apk`，2.4.104，8,551,180 字节（约 8.2 MB）
+  SHA-256：`f7dd63feffdcf1603bb7ca6e5f47f79af6a8cc063bc37f48b2e85f8a17ea8ef9`
+  下载：`https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.104/ClaudeWorkbench-slim.apk`
+- 2.4.104 重要更新：修复后台任务通知到达后同一轮被拆成多条过程、最终结论被挤进过程的问题；过程条默认收起。
 - 2.4.103 重要更新：修复 2.4.99 预热误停正在使用的内置 Tailscale 代理；启动更快；DERP 按当前网络智能选择（IPv4-only 用 SFO，IPv6 自动）；公共 Wi-Fi 认证后自动重试。
 - 2.4.95：去掉长按消息面板和长按振动；修复过程块出现、任务结束和发送后的滚动跟随与跳位；包含 2.4.85/2.4.86 的全部更新。
 - 2.4.75：输入框的复制、剪切、粘贴、全选改由 App 自己执行，修复按钮只有表面、点了没反应；消息选字不再重建系统复制项，复制恢复正常。

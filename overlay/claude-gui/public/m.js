@@ -820,6 +820,20 @@
     };
   }
 
+  /** 这一组在最后一个过程块之后有没有最终文字。 */
+  function groupHasFinalText(g) {
+    if (!g || !Array.isArray(g.blocks) || !g.blocks.length) return false;
+    let lastNonText = -1;
+    g.blocks.forEach((b, i) => {
+      if (b && b.type !== 'text') lastNonText = i;
+    });
+    for (let i = lastNonText + 1; i < g.blocks.length; i++) {
+      const b = g.blocks[i];
+      if (b && b.type === 'text' && String(b.text || '').trim()) return true;
+    }
+    return false;
+  }
+
   /** 一轮任务里连续的 assistant 消息合并成一张卡片，过程只留一行；
       最后一次工具调用之后的最终结论全部保留，避免被最后一条覆盖。 */
   function groupedHistory() {
@@ -827,6 +841,8 @@
     let cur = null;
     for (const m of historyForRender()) {
       if (m.role === 'assistant') {
+        // 主轮已有最终结论才另起一组；主轮停在工具上时，通知续跑并入同一组。
+        if (m.breakBefore && cur && groupHasFinalText(cur)) cur = null;
         if (!cur) {
           cur = { id: m.id, role: 'assistant', blocks: [], conclusions: [], segments: [],
             ts: m.ts, meta: m.meta || null };

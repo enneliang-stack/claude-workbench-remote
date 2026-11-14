@@ -1192,6 +1192,11 @@ function parseTranscript(text) {
   let gitBranch = null;
   let cliVersion = null;
   let turnStartTs = null;
+  // 后台任务通知不是用户消息。主轮已收尾时，把它触发的助手续跑标成新阶段，
+  // 让 UI 保留主轮结论；任务中途的通知不切，避免误吞后续工作。
+  let pendingTurnBreak = false;
+  const hasPendingTool = (entry) => !!entry && Array.isArray(entry.blocks) &&
+    entry.blocks.some(b => b && b.type === 'tool_use' && b.result == null);
   // 历史回放按与实时一致的规则合并连续读图
   let imageCardBlk = null;  // 当前卡片所属的工具块
   let imageLastTs = 0;      // 上一张已展示图片的结果时间
@@ -1228,8 +1233,13 @@ function parseTranscript(text) {
       if (a.commandMode === 'task-notification' ||
           (a.origin && a.origin.kind === 'task-notification') ||
           (typeof a.prompt === 'string' && /^\s*<task-notification\b/i.test(a.prompt))) {
+        // 只有上一轮已经收尾（没有未完成的工具调用）才切出通知轮；
+        // 任务执行中途来的通知不能误吞后续工作。
+        if (!lastAssistant || !hasPendingTool(lastAssistant)) pendingTurnBreak = true;
         continue;
       }
+      // 普通插话是用户消息，不切通知轮。
+      pendingTurnBreak = false;
 
       const key = a.delivery_id || o.uuid;
       if (key && steerSeen.has(key)) continue;
@@ -1359,9 +1369,13 @@ function parseTranscript(text) {
       if (sawToolResult && !textPart.trim() && !images.length) continue;
       if (!textPart.trim() && !images.length) continue;
       if (/^<(system-reminder|command-name|local-command)/.test(textPart.trim())) continue;
-      if (o.origin && o.origin.kind && o.origin.kind !== 'human') continue;
+      if (o.origin && o.origin.kind && o.origin.kind !== 'human') {
+        if (!lastAssistant || !hasPendingTool(lastAssistant)) pendingTurnBreak = true;
+        continue;
+      }
 
       lastAssistant = null;
+      pendingTurnBreak = false;
       turnStartTs = Date.parse(o.timestamp) || turnStartTs;
       imageCardBlk = null;
       imageLastTs = 0;
@@ -1382,7 +1396,11 @@ function parseTranscript(text) {
       const id = msg.id || o.uuid;
       let entry = assistantById.get(id);
       if (!entry) {
-        entry = { id, role: 'assistant', blocks: [], ts: o.timestamp };
+        entry = {
+          id, role: 'assistant', blocks: [], ts: o.timestamp,
+          breakBefore: pendingTurnBreak || undefined
+        };
+        pendingTurnBreak = false;
         assistantById.set(id, entry);
         messages.push(entry);
         lastAssistant = entry;
