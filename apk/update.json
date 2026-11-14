@@ -1,10 +1,10 @@
 {
-  "versionCode": 139,
-  "versionName": "2.4.98",
+  "versionCode": 144,
+  "versionName": "2.4.103",
   "apk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.51/ClaudeWorkbench-full.apk",
   "sha256": "3bc07db344928c6b7b3def58f6c6bc80feeffb86e9c95faba1cfb524fe76c8eb",
   "slimApk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/latest/download/ClaudeWorkbench-slim.apk",
-  "slimSha256": "845fa9d9f012a711c449ae41ed3e0d2da09425f7564d5ebf43b446ca95b55a7b",
+  "slimSha256": "553da21dbab97da3bf8f0e9a4aefc63fecb65c465dd14c4b6f5ede2347256c1c",
   "important": true,
-  "notes": "2.4.98 重要更新\n\n- 去掉单张图片卡片的 12 张合并上限：同一批连续读图会全部并入同一张卡，标题显示总张数。\n- 卡片仍然最多渲染前 4 张缩略图，第 5 张起用「+N」表示，查看器仍带全部图片。\n- 连续读图的合并间隔从 25 秒放宽到 60 秒，截图/截帧稍慢也不会被拆成很多卡片。\n- 正文白字、插话、权限/提问仍会打断合并；磁盘缓存仍按 7 天/400 张清理。"
+  "notes": "2.4.103 更新\n\n- 修复 2.4.99 引入的稳定性问题：内置 Tailscale 预热成功后误停正在使用的代理，导致连接失败或反复重连。\n- 启动更快：预热提前到 App 启动、去掉多余的 2.5 秒网络等待；页面探测改为 5 秒超时、3 次重试，更早踢醒首次 Dial。\n- 网络变化时复用健康代理；代理实际使用的 DERP 会持久化，策略变化才重启。\n- DERP 智能策略：默认按当前活动网络，IPv4-only 用 SFO，有全局 IPv6 时自动选择；填 2 始终强制 SFO；旧默认的 2 会自动迁移。\n- 公共 Wi-Fi 增加认证提示；认证完成且之前连接失败时自动重试；电脑端离线时不再反复重启代理。\n- 手机页同步 1.2.35：草稿持久化、过程框贴底、网络卡死自动重连。\n- 包含 2.4.102 / 2.4.101 的启动与稳定性优化。\n"
 }
