@@ -820,14 +820,23 @@
     };
   }
 
-  /** 这一组在最后一个过程块之后有没有最终文字。 */
-  function groupHasFinalText(g) {
-    if (!g || !Array.isArray(g.blocks) || !g.blocks.length) return false;
+  /** 过程/最终结论的分界：最后一个过程块或最后一次插话之前。 */
+  function groupCut(g) {
+    if (!g || !Array.isArray(g.blocks) || !g.blocks.length) return -1;
     let lastNonText = -1;
     g.blocks.forEach((b, i) => {
       if (b && b.type !== 'text') lastNonText = i;
     });
-    for (let i = lastNonText + 1; i < g.blocks.length; i++) {
+    let lastSteerAt = 0;
+    for (const s of g.steers || []) lastSteerAt = Math.max(lastSteerAt, s.at || 0);
+    return Math.max(lastNonText, lastSteerAt - 1);
+  }
+
+  /** 这一组在最后一个过程块或最后一次插话之后有没有最终文字。 */
+  function groupHasFinalText(g) {
+    if (!g || !Array.isArray(g.blocks) || !g.blocks.length) return false;
+    const cut = groupCut(g);
+    for (let i = cut + 1; i < g.blocks.length; i++) {
       const b = g.blocks[i];
       if (b && b.type === 'text' && String(b.text || '').trim()) return true;
     }
@@ -845,59 +854,65 @@
         if (m.breakBefore && cur && groupHasFinalText(cur)) cur = null;
         if (!cur) {
           cur = { id: m.id, role: 'assistant', blocks: [], conclusions: [], segments: [],
-            ts: m.ts, meta: m.meta || null };
+            steers: [], ts: m.ts, meta: m.meta || null };
           out.push(cur);
         }
         const blocks = Array.isArray(m.blocks) ? m.blocks.filter(Boolean) : [];
         const texts = blocks.filter(b => b.type === 'text');
-        const hasProc = blocks.some(b => b.type === 'thinking' || b.type === 'tool_use');
-        const hasTool = blocks.some(b => b.type === 'tool_use');
         cur.blocks.push(...blocks);
-        cur.segments.push({ texts, hasProc, hasTool, meta: m.meta || null });
+        cur.segments.push({ texts, meta: m.meta || null });
         if (m.ts) cur.ts = m.ts;
         if (m.meta) cur.meta = mergeMeta(cur.meta, m.meta);
+      } else if (m.steer) {
+        // 插话留在同一轮里：收起时露在过程条上方，展开时按原位置插回过程。
+        if (cur) {
+          cur.steers.push({ text: m.text || '', images: m.images, at: cur.blocks.length });
+          if (m.ts) cur.ts = m.ts;
+        } else {
+          out.push(m);
+        }
       } else {
         cur = null;
         out.push(m);
       }
     }
 
-    // 最后一次工具调用之后的文字是这一轮的最终结论；更早的过渡文字仍收进过程。
+    // 和 PC 一样：最后一次过程或最后一次插话之后的文字才是最终结论；
+    // 中间插话产生的白字结论收进过程。
     for (const item of out) {
       if (item.role !== 'assistant' || !item.segments) continue;
-      let lastTool = -1;
-      let hasProc = false;
-      for (let i = 0; i < item.segments.length; i++) {
-        if (item.segments[i].hasTool) lastTool = i;
-        if (item.segments[i].hasProc) hasProc = true;
-      }
+      const cut = groupCut(item);
+      item.cut = cut;
       const tail = [];
-      const pushSeg = (seg) => {
-        seg.texts.forEach((b, i) => {
+      for (const seg of item.segments) {
+        const after = seg.texts.filter(b => item.blocks.indexOf(b) > cut);
+        after.forEach((b, i) => {
           // 同一段消息里只有最后一块带统计，避免一条统计重复贴在多段文字后。
-          tail.push({ block: b, meta: i === seg.texts.length - 1 ? seg.meta : null });
+          tail.push({ block: b, meta: i === after.length - 1 ? seg.meta : null });
         });
-      };
-      if (lastTool >= 0) {
-        for (let i = lastTool + 1; i < item.segments.length; i++) {
-          pushSeg(item.segments[i]);
-        }
-      } else if (!hasProc) {
-        for (const seg of item.segments) pushSeg(seg);
-      }
-      // 没有工具后的文字时退回原来的规则：只保留最后一段结论。
-      if (!tail.length) {
-        for (let i = item.segments.length - 1; i >= 0; i--) {
-          const seg = item.segments[i];
-          if (seg.texts.length) {
-            tail.push({ block: seg.texts[seg.texts.length - 1], meta: seg.meta });
-            break;
-          }
-        }
       }
       item.conclusions = tail;
       delete item.segments;
     }
+
+    // 「已编辑文件」按整个任务轮次聚合一次，放在本轮最后一个助手分组的结论后面。
+    // 插话只分隔过程，不重复生成编辑卡片；后台通知续跑也并回同一轮。
+    let turnGroups = [];
+    const flushTurnEdits = () => {
+      if (!turnGroups.length) return;
+      const blocks = [];
+      for (const g of turnGroups) {
+        for (const b of g.blocks || []) blocks.push(b);
+        g.editBlocks = [];
+      }
+      turnGroups[turnGroups.length - 1].editBlocks = blocks;
+      turnGroups = [];
+    };
+    for (const item of out) {
+      if (item.role === 'assistant') turnGroups.push(item);
+      else if (!item.steer) flushTurnEdits();
+    }
+    flushTurnEdits();
     return out;
   }
 
@@ -1199,23 +1214,45 @@
     return d;
   }
 
+  function steerInlineNode(s) {
+    const wrap = el('div', 'steer-inline');
+    wrap.appendChild(userNode({ role: 'user', steer: true, text: s.text || '', images: s.images }));
+    return wrap;
+  }
+
   function messageNode(m) {
     if (m.role === 'user') return userNode(m);
     const wrap = el('div', 'msg assistant');
     const blocks = (m.blocks || []).filter(Boolean);
-    const proc = blocks.filter(b => b.type === 'thinking' || b.type === 'tool_use');
-    const texts = blocks.filter(b => b.type === 'text');
+    const cut = Number.isInteger(m.cut) ? m.cut : groupCut(m);
+    const processBlocks = cut >= 0 ? blocks.slice(0, cut + 1) : [];
+    const steers = Array.isArray(m.steers) ? m.steers : [];
     const conclusions = Array.isArray(m.conclusions)
       ? m.conclusions.filter(c => c && c.block)
-      : (proc.length ? texts.slice(-1) : texts).map(block => ({ block, meta: null }));
-    const conclusionBlocks = conclusions.map(c => c.block);
-    const processTexts = texts.filter(b => !conclusionBlocks.includes(b));
+      : blocks.slice(cut + 1)
+        .filter(b => b && b.type === 'text' && String(b.text || '').trim())
+        .map(block => ({ block, meta: null }));
     const finalText = conclusions.length
       ? conclusions[conclusions.length - 1].block.text : '';
 
-    // 思考、工具和中间过程文本收进「过程」；最后一次工具后的最终结论全部保留
-    if (proc.length || processTexts.length) {
-      wrap.appendChild(processNode(proc, processTexts));
+    // 过程条收起时插话显示在它上方；展开后收回原位置，和 PC 一致。
+    if (processBlocks.length) {
+      const summaries = [];
+      for (const s of steers) {
+        const summary = steerInlineNode(s);
+        summary.classList.add('steer-summary');
+        wrap.appendChild(summary);
+        summaries.push(summary);
+      }
+      const procEl = processNode(processBlocks, steers);
+      wrap.appendChild(procEl);
+      const sync = () => {
+        for (const n of summaries) n.style.display = procEl.open ? 'none' : '';
+      };
+      sync();
+      procEl.addEventListener('toggle', sync);
+    } else if (steers.length) {
+      for (const s of steers) wrap.appendChild(steerInlineNode(s));
     }
     for (const c of conclusions) {
       const node = blockNode(c.block);
@@ -1225,7 +1262,8 @@
     }
     const artifacts = extractArtifactPaths(finalText);
     if (artifacts.length) wrap.appendChild(artifactNode(artifacts));
-    const edits = aggregateEdits(blocks);
+    const editBlocks = Array.isArray(m.editBlocks) ? m.editBlocks : blocks;
+    const edits = aggregateEdits(editBlocks);
     if (edits.length) wrap.appendChild(editCardNode(edits));
     // 没有分条统计时（例如旧消息没有 meta）才显示整轮合并统计。
     if (!conclusions.some(c => c.meta) && m.meta) wrap.appendChild(turnMetaNode(m.meta));
@@ -2449,8 +2487,8 @@
     });
   }
 
-  /** 历史消息里的「过程」：思考、工具调用、中间结论文本统一折叠，默认合上 */
-  function processNode(blocks, extraTexts = []) {
+  /** 历史消息里的「过程」：思考、工具、中间结论和插话按原顺序折叠，默认合上 */
+  function processNode(blocks, steers = []) {
     const d = el('details', 'process');
     const sum = el('summary');
     const label = el('span', 'process-label', '过程');
@@ -2458,13 +2496,20 @@
     sum.append(label, meta);
 
     const body = el('div', 'process-body');
-    for (const b of extraTexts) {
-      const t = el('div', 'txt temp');
-      t.innerHTML = formatText(b.text);
-      enhanceCodeBlocks(t);
-      body.appendChild(t);
-    }
-    for (const b of blocks) {
+    let si = 0;
+    for (let i = 0; i < blocks.length; i++) {
+      while (si < steers.length && (steers[si].at || 0) <= i) {
+        body.appendChild(steerInlineNode(steers[si]));
+        si++;
+      }
+      const b = blocks[i];
+      if (b.type === 'text') {
+        const t = el('div', 'txt temp');
+        t.innerHTML = formatText(b.text);
+        enhanceCodeBlocks(t);
+        body.appendChild(t);
+        continue;
+      }
       const node = b.type === 'thinking'
         ? thinkingRow(b)
         : (b.type === 'tool_use' ? toolNode(b) : null);
@@ -2472,6 +2517,10 @@
       if (b.type === 'tool_use' && Array.isArray(b.images) && b.images.length) {
         body.appendChild(imageCardNode(b.images));
       }
+    }
+    while (si < steers.length) {
+      body.appendChild(steerInlineNode(steers[si]));
+      si++;
     }
 
     d.append(sum, body);

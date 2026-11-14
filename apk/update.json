@@ -1,10 +1,10 @@
 {
-  "versionCode": 145,
-  "versionName": "2.4.104",
+  "versionCode": 146,
+  "versionName": "2.4.105",
   "apk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.51/ClaudeWorkbench-full.apk",
   "sha256": "3bc07db344928c6b7b3def58f6c6bc80feeffb86e9c95faba1cfb524fe76c8eb",
   "slimApk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/latest/download/ClaudeWorkbench-slim.apk",
-  "slimSha256": "f7dd63feffdcf1603bb7ca6e5f47f79af6a8cc063bc37f48b2e85f8a17ea8ef9",
-  "important": true,
-  "notes": "2.4.104 重要更新\n\n- 修复后台任务通知到达后，同一轮被拆成多条「过程」、最终结论被挤进过程的问题。\n- 主轮已经给出最终结论时，后台续跑单独成一条过程，主轮和续跑的结论都留在过程外面。\n- 主轮停在工具调用上时，续跑并入同一条过程，不再出现没有结论的空过程条。\n- 打开历史对话时，过程条一律默认收起，不再自动展开多段步骤。\n- 手机页同步客户端 1.2.37；ASSET_VERSION 98，App 升级后自动刷新手机端资源。\n- 包含 2.4.103 的稳定性、启动速度和 DERP 智能策略优化。\n"
+  "slimSha256": "1819158c67523d3733ec1f1a04d4d9e89c6aa05253153297e933a8d4f21d4ed3",
+  "important": false,
+  "notes": "2.4.105 更新\n\n- 手机页历史分组和 PC 一致：同一轮内的插话不再切成多张卡片。\n- 插话产生的中间白字结论收进过程，只留任务最终结论在过程条外面。\n- 过程条收起时插话显示在过程条上方；展开后回到过程内的原位置。\n- 「已编辑文件」按整轮汇总，只显示一次，放在最终总结后面。\n- 包含 2.4.104 的通知续跑过程分组修复。\n"
 }

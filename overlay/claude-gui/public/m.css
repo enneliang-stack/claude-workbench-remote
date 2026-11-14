@@ -213,6 +213,10 @@ button { -webkit-tap-highlight-color: transparent; }
   border: 1px solid #4a3324; border-radius: 999px; padding: 0 6px;
   margin-bottom: 4px;
 }
+/* 历史轮次里的插话：收起时在过程条上方，展开后回到过程内部原位置 */
+.steer-inline { display: flex; justify-content: flex-end; }
+.steer-inline .msg.user { max-width: 86%; }
+.process-body .steer-inline { margin: 7px 0; }
 .msg.assistant img {
   max-width: 100%; border-radius: 10px; display: block; margin-top: 6px;
 }
