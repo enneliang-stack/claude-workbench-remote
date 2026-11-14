@@ -274,6 +274,17 @@ button { -webkit-tap-highlight-color: transparent; }
   border-radius: 5px;
   background: #000;
 }
+.image-view-more {
+  display: flex; align-items: center; justify-content: center;
+  padding: 0;
+  border: 1px solid #2a3038;
+  color: var(--muted);
+  background: #111;
+  font-size: 12px;
+  font-family: inherit;
+  font-variant-numeric: tabular-nums;
+}
+.image-view-cleared { color: var(--faint); font-size: 12px; padding: 2px 0 3px; }
 .msg.user .user-images {
   display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px;
   margin-bottom: 7px;

@@ -22,7 +22,6 @@ const PUBLIC_DIR = path.join(ROOT, 'public');
 const DATA_DIR = path.join(ROOT, 'data');
 const TOOL_IMAGE_DIR = path.join(DATA_DIR, 'tool-images');
 const TOOL_IMAGE_MAX_PER_RESULT = 4;
-const TOOL_IMAGE_MAX_CARDS_PER_RUN = 8;       // 每轮最多展示几张「查看图片」卡片（合并后按卡计数）
 const TOOL_IMAGE_MERGE_GAP_MS = 25000;        // 连续读图间隔在此时间内视为同一批，追加到上一张卡
 const TOOL_IMAGE_MAX_PER_CARD = 12;           // 单张卡片最多合并多少张图，超出后另起一张卡
 const TOOL_IMAGE_MAX_BYTES = 8 * 1024 * 1024;
@@ -1194,8 +1193,7 @@ function parseTranscript(text) {
   let gitBranch = null;
   let cliVersion = null;
   let turnStartTs = null;
-  // 历史回放按与实时一致的规则合并连续读图：每轮最多 8 张卡片（合并后按卡计数）
-  let imageCardCount = 0;
+  // 历史回放按与实时一致的规则合并连续读图
   let imageCardBlk = null;  // 当前卡片所属的工具块
   let imageLastTs = 0;      // 上一张已展示图片的结果时间
   let imageBreak = false;   // 模型正文/插话打断合并
@@ -1260,7 +1258,6 @@ function parseTranscript(text) {
 
       if (!textPart.trim() && !images.length) continue;
       lastAssistant = null;
-      imageCardCount = 0;
       imageCardBlk = null;
       imageLastTs = 0;
       imageBreak = false;
@@ -1297,64 +1294,60 @@ function parseTranscript(text) {
               const gapOk = !hasTs || !imageLastTs ||
                 ts - imageLastTs <= TOOL_IMAGE_MERGE_GAP_MS;
               const canMerge = !!(imageCardBlk && !imageBreak && gapOk);
-              if (canMerge || imageCardCount < TOOL_IMAGE_MAX_CARDS_PER_RUN) {
-                const id = b.tool_use_id;
-                let saved = toolImageHistoryCache.get(id) || null;
-                if (saved && !saved.every(x => {
-                  const n = String(x.url || '').split('name=')[1] || '';
-                  return n && fs.existsSync(path.join(TOOL_IMAGE_DIR, n));
-                })) {
-                  toolImageHistoryCache.delete(id);
-                  saved = null;
-                }
-                if (saved) {
-                  // 旧缓存也要重新判一次，避免升级后继续展示工作图
-                  if (classifyToolImage(blk, saved, blk.turnStart || ts, lastCwd) === 'working') saved = null;
-                } else {
-                  const toolImgs = toolResultImages(b.content);
-                  if (toolImgs.length &&
-                      classifyToolImage(blk, toolImgs, blk.turnStart || ts, lastCwd) !== 'working') {
-                    const out = [];
-                    const seen = new Set();
-                    for (const img of toolImgs) {
-                      const one = saveToolImage(img);
-                      if (one && !seen.has(one.url)) { seen.add(one.url); out.push(one); }
-                    }
-                    if (out.length) {
-                      saved = out;
-                      toolImageHistoryCache.set(id, saved);
-                      if (toolImageHistoryCache.size > 1000) {
-                        const first = toolImageHistoryCache.keys().next().value;
-                        if (first) toolImageHistoryCache.delete(first);
-                      }
+              const id = b.tool_use_id;
+              let saved = toolImageHistoryCache.get(id) || null;
+              if (saved && !saved.every(x => {
+                const n = String(x.url || '').split('name=')[1] || '';
+                return n && fs.existsSync(path.join(TOOL_IMAGE_DIR, n));
+              })) {
+                toolImageHistoryCache.delete(id);
+                saved = null;
+              }
+              if (saved) {
+                // 旧缓存也要重新判一次，避免升级后继续展示工作图
+                if (classifyToolImage(blk, saved, blk.turnStart || ts, lastCwd) === 'working') saved = null;
+              } else {
+                const toolImgs = toolResultImages(b.content);
+                if (toolImgs.length &&
+                    classifyToolImage(blk, toolImgs, blk.turnStart || ts, lastCwd) !== 'working') {
+                  const out = [];
+                  const seen = new Set();
+                  for (const img of toolImgs) {
+                    const one = saveToolImage(img);
+                    if (one && !seen.has(one.url)) { seen.add(one.url); out.push(one); }
+                  }
+                  if (out.length) {
+                    saved = out;
+                    toolImageHistoryCache.set(id, saved);
+                    if (toolImageHistoryCache.size > 1000) {
+                      const first = toolImageHistoryCache.keys().next().value;
+                      if (first) toolImageHistoryCache.delete(first);
                     }
                   }
                 }
-                if (saved && saved.length) {
-                  if (canMerge) {
-                    const cardImgs = Array.isArray(imageCardBlk.images) ? imageCardBlk.images : [];
-                    const seenUrls = new Set(cardImgs.map(x => x && x.url).filter(Boolean));
-                    const add = saved.filter(x => x && x.url && !seenUrls.has(x.url));
-                    if (add.length && cardImgs.length + add.length <= TOOL_IMAGE_MAX_PER_CARD) {
-                      // 同一批连续读图：追加到上一张卡
-                      imageCardBlk.images = cardImgs.concat(add);
-                      if (hasTs) imageLastTs = ts;
-                      imageBreak = false;
-                    } else if (add.length && imageCardCount < TOOL_IMAGE_MAX_CARDS_PER_RUN) {
-                      // 单卡已满，另起一张卡
-                      blk.images = add;
-                      imageCardBlk = blk;
-                      imageCardCount += 1;
-                      if (hasTs) imageLastTs = ts;
-                      imageBreak = false;
-                    }
-                  } else if (imageCardCount < TOOL_IMAGE_MAX_CARDS_PER_RUN) {
-                    blk.images = saved;
+              }
+              if (saved && saved.length) {
+                if (canMerge) {
+                  const cardImgs = Array.isArray(imageCardBlk.images) ? imageCardBlk.images : [];
+                  const seenUrls = new Set(cardImgs.map(x => x && x.url).filter(Boolean));
+                  const add = saved.filter(x => x && x.url && !seenUrls.has(x.url));
+                  if (add.length && cardImgs.length + add.length <= TOOL_IMAGE_MAX_PER_CARD) {
+                    // 同一批连续读图：追加到上一张卡
+                    imageCardBlk.images = cardImgs.concat(add);
+                    if (hasTs) imageLastTs = ts;
+                    imageBreak = false;
+                  } else if (add.length) {
+                    // 单卡已满，另起一张卡
+                    blk.images = add;
                     imageCardBlk = blk;
-                    imageCardCount += 1;
                     if (hasTs) imageLastTs = ts;
                     imageBreak = false;
                   }
+                } else {
+                  blk.images = saved;
+                  imageCardBlk = blk;
+                  if (hasTs) imageLastTs = ts;
+                  imageBreak = false;
                 }
               }
             }
@@ -1377,7 +1370,6 @@ function parseTranscript(text) {
 
       lastAssistant = null;
       turnStartTs = Date.parse(o.timestamp) || turnStartTs;
-      imageCardCount = 0;
       imageCardBlk = null;
       imageLastTs = 0;
       imageBreak = false;
@@ -2408,7 +2400,7 @@ class Runner {
   /**
    * 工具结果里带图片时，把图片缓存到本地并决定归到哪张卡片。
    * 同一批连续读图（间隔 ≤25 秒，期间没有正文/插话打断）追加到上一张卡；
-   * 只有新建卡片才计入每轮 8 张上限；单卡最多 12 张图。
+   * 单卡最多 12 张图，超出后另起一张卡。
    */
   captureToolImages(content, block) {
     if (!this.live || !block) return null;
@@ -2426,9 +2418,6 @@ class Runner {
       now - (this.live.lastImageAt || 0) <= TOOL_IMAGE_MERGE_GAP_MS);
 
     const cardImages = merge && Array.isArray(card.images) ? card.images : [];
-    const canStartCard = (this.live.imageCardCount || 0) < TOOL_IMAGE_MAX_CARDS_PER_RUN;
-    // 没有能接收图片的卡片时，不必解码/落盘
-    if (!(merge && cardImages.length < TOOL_IMAGE_MAX_PER_CARD) && !canStartCard) return null;
 
     const seen = new Set(cardImages.map(x => x && x.url).filter(Boolean));
     const out = [];
@@ -2446,9 +2435,7 @@ class Runner {
       this.live.imageMergeBroken = false;
       return { cardKey: card.id, images: cardImages.concat(out) };
     }
-    if (!canStartCard) return null;
 
-    this.live.imageCardCount = (this.live.imageCardCount || 0) + 1;
     this.live.imageCardKey = block.id;
     this.live.lastImageAt = now;
     this.live.imageMergeBroken = false;
@@ -2628,7 +2615,6 @@ class Runner {
             blocks: [],
             permission: null,
             ask: null,
-            imageCardCount: 0,
             imageCardKey: '',
             lastImageAt: 0,
             imageMergeBroken: false
@@ -3099,7 +3085,6 @@ class Runner {
       blocks: [],
       permission: null,
       ask: null,
-      imageCardCount: 0,
       imageCardKey: '',
       lastImageAt: 0,
       imageMergeBroken: false

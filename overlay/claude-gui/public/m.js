@@ -822,13 +822,26 @@
     }
 
     let mi = 0;
+    let turnOrdinal = 0;
+    let curTurnSeq = 0;
     for (const m of groupedHistory()) {
+      if (m.role !== 'assistant' && !m.steer && !isCompactSummaryMessage(m)) {
+        turnOrdinal += 1;
+        curTurnSeq = turnOrdinal;
+      }
       const node = messageNode(m);
       if (node) {
         node.dataset.mi = String(mi++);
+        if (curTurnSeq) {
+          for (const card of node.querySelectorAll('.image-view')) {
+            card.dataset.turnSeq = String(curTurnSeq);
+          }
+        }
         box.appendChild(node);
       }
     }
+    // 图片卡片只保留最近两次已完成任务的图，更早的保留标题、清空缩略图
+    clearOldImageCards(box, Math.max(1, turnOrdinal - 1));
     const live = el('div', 'live-turn');
     live.id = 'liveTurn';
     box.appendChild(live);
@@ -2983,6 +2996,8 @@
   }
 
   const IMAGE_VIEW_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="M21 15l-5-5L5 20"/></svg>';
+  // 卡片里最多渲染几张缩略图；其余用「+N」表示，点开查看器仍能看全部
+  const IMAGE_VIEW_THUMB_MAX = 4;
 
   function toolImageSrc(url) {
     if (!url) return '';
@@ -3004,21 +3019,30 @@
     thumbs.hidden = true;
     const render = list => {
       thumbs.innerHTML = '';
-      for (const im of list || []) {
-        if (!im || !im.url) continue;
+      const items = (list || []).filter(im => im && im.url);
+      const urls = items.map(im => toolImageSrc(im.url));
+      // 卡片里只渲染前 4 张，后面的用「+N」占位；查看器仍然带全部图片
+      const visible = Math.min(items.length, IMAGE_VIEW_THUMB_MAX);
+      for (let i = 0; i < visible; i++) {
         const img = el('img', 'image-view-thumb');
-        img.src = toolImageSrc(im.url);
+        img.src = urls[i];
         img.alt = '工具查看的图片';
         img.loading = 'lazy';
-        img.onclick = () => {
-          const imgs = [...thumbs.querySelectorAll('img')];
-          openImageViewer(img.src, imgs.map(x => x.src), imgs.indexOf(img));
-        };
+        img.onclick = () => openImageViewer(urls[i], urls, i);
         thumbs.appendChild(img);
       }
-      title.textContent = (list && list.length) === 1
+      const hidden = items.length - visible;
+      if (hidden > 0) {
+        const more = el('button', 'image-view-thumb image-view-more', '+' + hidden);
+        more.type = 'button';
+        more.title = `还有 ${hidden} 张图片`;
+        const at = Math.min(IMAGE_VIEW_THUMB_MAX, urls.length - 1);
+        more.onclick = () => openImageViewer(urls[at], urls, at);
+        thumbs.appendChild(more);
+      }
+      title.textContent = items.length === 1
         ? '查看了 1 张图片'
-        : `查看了 ${(list && list.length) || 0} 张图片`;
+        : `查看了 ${items.length} 张图片`;
     };
     render(images);
     head.onclick = () => {
@@ -3028,6 +3052,26 @@
     wrap.append(head, thumbs);
     wrap._update = render;
     return wrap;
+  }
+
+  // 只保留最近两次任务的图片；更早的任务卡片保留标题，缩略图清掉
+  function clearImageViewEl(card) {
+    if (!card || card.dataset.cleared === '1') return;
+    card.dataset.cleared = '1';
+    const thumbs = card.querySelector('.image-view-thumbs');
+    if (!thumbs) return;
+    thumbs.innerHTML = '';
+    thumbs.appendChild(el('div', 'image-view-cleared', '图片已清理'));
+    thumbs.hidden = !card.classList.contains('open');
+  }
+
+  /** keepFromSeq：从这个任务序号起保留图片，更早的卡片清空 */
+  function clearOldImageCards(root, keepFromSeq) {
+    if (!root) return;
+    for (const card of root.querySelectorAll('.image-view')) {
+      const seq = Number(card.dataset.turnSeq || 0);
+      if (seq && seq < keepFromSeq) clearImageViewEl(card);
+    }
   }
 
   function upsertLiveImageCard(cardKey, images) {
