@@ -11,14 +11,15 @@
 电脑端使用方式：安装 1.2.0+ 的统一客户端，侧栏「手机连接」里开启访问并复制地址；
 手机 App 粘贴地址即可。同一 Wi-Fi 不需要 Tailscale 账号。
 
-## 最新 APK（2.4.112 精简 / 2.4.51 完整）
+## 最新 APK（2.4.113 精简 / 2.4.51 完整）
 
 - 完整包（新用户/未装环境）：`ClaudeWorkbench-full.apk`，2.4.51，202,562,281 字节（约 194 MB）
   SHA-256：`3bc07db344928c6b7b3def58f6c6bc80feeffb86e9c95faba1cfb524fe76c8eb`
   下载：`https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.51/ClaudeWorkbench-full.apk`
-- 精简包（已装手机环境）：`ClaudeWorkbench-slim.apk`，2.4.112，8,559,294 字节（约 8.2 MB）
-  SHA-256：`7003d0061c06831a337e15f61036f38f299392ffbab912c92df6680e68efefd2`
-  下载：`https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.112/ClaudeWorkbench-slim.apk`
+- 精简包（已装手机环境）：`ClaudeWorkbench-slim.apk`，2.4.113，8,559,294 字节（约 8.2 MB）
+  SHA-256：`4fa44af70f65fce950079c702bc7b72283f83a3aec896810dfe2f1fc65ecf799`
+  下载：`https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.113/ClaudeWorkbench-slim.apk`
+- 2.4.113：修复手机页上滑自动补页时「加载更早消息」和「正在加载更早消息…」来回闪；连续补多页期间按钮保持加载中，补页结束或遇到上一轮用户消息后恢复。手机页资源版本 107，对应 PC 客户端 1.2.44。
 - 2.4.112：手机页上滑加载优化、增量插入、历史过程懒展开、刷新保留已加载历史；APP 增加 GUI token 缓存、日志弹窗后台读取、下载索引恢复、手机控制异常复位、日志轮转和拍照缓存清理。手机页资源版本 106，对应 PC 客户端 1.2.43。
 - 2.4.109：手机本机页新建/删除文件夹改为标题下方的「新建文件夹」「选择此文件夹」按钮；删除改为长按文件夹确认，仅允许删除 APP 新建的文件夹，并级联清理其中的对话；旧版 APP 新建文件夹自动补记；已下载文件支持多选/全选/批量删除。手机页资源版本 103，对应 PC 客户端 1.2.42。
 - 2.4.106：手机页任务结束后的用时自动换算，60 秒以上显示 Xm Ys、60 分钟以上显示 Xh Ym Zs；与 PC 客户端 1.2.39 一致。手机页资源版本 100。

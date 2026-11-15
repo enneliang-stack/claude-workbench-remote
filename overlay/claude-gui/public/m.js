@@ -698,7 +698,7 @@
     if (!S.running) S.pendingEcho = null;
     if (S.running) notifyPageTask(true);
     // 打开/切换对话时才重置；后台同步不能把进行中的“加载更早消息”状态清掉。
-    if (!keepScroll) S.loadingOlder = false;
+    if (!keepScroll) { S.loadingOlder = false; olderChainPending = false; }
     S.conv.start = Number.isFinite(data.start) ? data.start : 0;
     S.conv.hasMore = !!data.hasMore;
     S.conv.total = Number.isFinite(data.total) ? data.total : (data.messages || []).length;
@@ -983,14 +983,15 @@
     box.innerHTML = '';
 
     if (S.conv && S.conv.hasMore) {
-      // 加载中途若有实时事件触发重建，新按钮也要保持“正在加载”状态。
+      // 加载中途或自动补页链未结束时若有实时事件触发重建，新按钮也要保持“正在加载”状态。
+      const busy = olderUiBusy();
       const older = el('button', 'load-older',
-        S.loadingOlder ? '正在加载更早消息…' : '↑ 加载更早消息');
+        busy ? '正在加载更早消息…' : '↑ 加载更早消息');
       older.type = 'button';
-      older.disabled = !!S.loadingOlder;
-      older.classList.toggle('loading', !!S.loadingOlder);
+      older.disabled = busy;
+      older.classList.toggle('loading', busy);
       older.onclick = () => {
-        if (S.loadingOlder) return;
+        if (olderUiBusy()) return;
         loadOlderMessages(true);
       };
       box.appendChild(older);
@@ -4170,7 +4171,13 @@
 
   let olderLoadSeq = 0;
   let olderRetryAt = 0;
+  // 自动补页链还在继续：两页之间的 80ms 里按钮也要保持“正在加载”，否则会来回闪。
+  let olderChainPending = false;
   const OLDER_PAGE_LIMIT = 30;
+
+  function olderUiBusy() {
+    return S.loadingOlder || olderChainPending;
+  }
 
   /** 加载中统一禁用按钮；自动补页和手动点击都走这里，避免按钮被重建成可点状态。 */
   function setOlderButtonsLoading(loading) {
@@ -4223,6 +4230,7 @@
       if (!older.length) {
         // 服务端已经到底：把已经失效的按钮收掉，别让用户点一个永远没反应的按钮。
         S.conv.hasMore = false;
+        olderChainPending = false;
         resetOlderButton(box, false);
         return;
       }
@@ -4249,11 +4257,24 @@
         renderMessages(false, anchor);
       }
       // 仍然停在顶部就继续补下一页，直到可以正常往上滚。
-      scheduleOlderPump(80);
+      // 续页期间按钮保持“正在加载”，等整条补页链结束再恢复文案，避免两页之间闪一下。
+      const willPump = S.conv.hasMore && !olderBoundaryHit
+        && box.scrollTop <= olderPumpDistance(box);
+      olderChainPending = willPump;
+      // 续页时按钮保持“正在加载”；文案变化在极窄屏可能换行，按高度差补回滚动位置。
+      const uiH = box.scrollHeight;
+      setOlderButtonsLoading(willPump);
+      const uiGrown = box.scrollHeight - uiH;
+      if (uiGrown) {
+        box.scrollTop = Math.max(0, box.scrollTop + uiGrown);
+        lastScrollTop = box.scrollTop;
+      }
+      if (willPump) scheduleOlderPump(80);
     } catch (e) {
       if (seq !== olderLoadSeq || S.convId !== convId) return;
       // 网络差时滚动会持续触发补页，失败后短暂退避，避免每帧都发请求。
       olderRetryAt = Date.now() + 2500;
+      olderChainPending = false;
       toast('加载更早消息失败：' + e.message, 'err');
       resetOlderButton(box, !!S.conv.hasMore);
     } finally {
@@ -5278,12 +5299,21 @@
 
   /** 停在顶部附近时连续补页，直到积够 1.4 屏或遇到上一轮用户消息。 */
   function pumpOlderMessages() {
-    if (!S.conv || !S.conv.hasMore || S.loadingOlder || document.hidden) return;
-    if (Date.now() < olderRetryAt) return;
-    if (olderBoundaryHit) return;
+    // 新一页已经在加载：保持当前状态，等这次加载自己收尾。
+    if (S.loadingOlder) return;
     const box = $('#messages');
-    if (!box || box.scrollTop > olderPumpDistance(box)) return;
-    loadOlderMessages();
+    const canPump = S.convId && S.conv && S.conv.hasMore && !document.hidden
+      && Date.now() >= olderRetryAt && !olderBoundaryHit
+      && box && box.scrollTop <= olderPumpDistance(box);
+    if (canPump) {
+      loadOlderMessages();
+      return;
+    }
+    // 补页链结束：恢复按钮文案，别一直停在“正在加载”。
+    if (olderChainPending) {
+      olderChainPending = false;
+      if (box) setOlderButtonsLoading(false);
+    }
   }
 
   function scheduleOlderPump(delay = 100) {

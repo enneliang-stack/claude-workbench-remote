@@ -1,12 +1,12 @@
 {
-  "versionCode": 153,
-  "versionName": "2.4.112",
+  "versionCode": 154,
+  "versionName": "2.4.113",
   "apk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.51/ClaudeWorkbench-full.apk",
   "sha256": "3bc07db344928c6b7b3def58f6c6bc80feeffb86e9c95faba1cfb524fe76c8eb",
   "fullVersionCode": 92,
   "fullVersionName": "2.4.51",
   "slimApk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/latest/download/ClaudeWorkbench-slim.apk",
-  "slimSha256": "7003d0061c06831a337e15f61036f38f299392ffbab912c92df6680e68efefd2",
+  "slimSha256": "4fa44af70f65fce950079c702bc7b72283f83a3aec896810dfe2f1fc65ecf799",
   "important": false,
-  "notes": "2.4.112 更新\n\n- 手机页上滑加载优化：上滑提前预取、旧消息增量插入、历史过程正文点开才构建、加载更早按钮加载中禁用。\n- 任务结束/回前台刷新时保留已上滑加载的更早消息，不再截回最新 100 条。\n- 手机控制工具异常时复位「正在…」状态；/ui 的 max_nodes 生效并预编译敏感数字/验证码正则。\n- 日志 2MB 轮转；拍照临时文件按时间/数量清理；主页状态轮询在后台暂停。\n- GUI token 缓存、日志弹窗后台读取、精简包/完整包版本校验、下载索引损坏恢复。\n- 手机页资源版本 106，对应 PC 客户端 1.2.43。"
+  "notes": "2.4.113 更新\n\n- 手机页（电脑端 / 本机页）上滑自动补页时，「加载更早消息」和「正在加载更早消息…」不再来回闪。\n- 自动连续补多页期间按钮保持「正在加载更早消息…」并禁用；补够 1.4 屏、遇到上一轮用户消息、没有更多历史或加载失败后才恢复。\n- 极窄屏/大字号下补页文案换行时补回滚动位置，页面不再小幅跳动。\n- 手机页资源版本 107，对应 PC 客户端 1.2.44。"
 }
