@@ -515,6 +515,7 @@ details.process[open] > summary::before { content: "▾"; }
   width: 100%; text-align: left; border: 1px solid transparent;
   background: transparent; border-radius: 9px; padding: 9px 10px;
   display: flex; align-items: center; gap: 9px; cursor: pointer;
+  user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
 }
 .pc-row:active { background: #1b2028; }
 .pc-row.sel { background: #16202b; border-color: #3d5a7a; }
@@ -527,10 +528,35 @@ details.process[open] > summary::before { content: "▾"; }
 .pc-empty { padding: 40px 20px; text-align: center; color: var(--faint); font-size: 12.5px; }
 
 .downloads-list { flex: 1; overflow-y: auto; padding: 0 10px calc(12px + var(--safe-bottom)); }
+.sheet-hd-text-btn {
+  border: 0; background: transparent; color: var(--accent);
+  height: 38px; padding: 0 6px; font-size: 13px; font-weight: 600;
+  cursor: pointer;
+}
 .download-row {
   display: flex; align-items: center; gap: 9px;
   padding: 10px; border-bottom: 1px solid var(--line);
 }
+.download-row.selecting { cursor: pointer; }
+.download-row.sel { background: #16202b; }
+.download-check {
+  flex: 0 0 auto; width: 20px; height: 20px; border-radius: 50%;
+  border: 1px solid var(--line); display: flex; align-items: center;
+  justify-content: center; color: var(--accent); font-size: 12px;
+}
+.download-row.sel .download-check { border-color: var(--accent); }
+.downloads-actions {
+  display: flex; gap: 9px; padding: 10px 16px 4px;
+  border-top: 1px solid var(--line);
+}
+.downloads-actions .btn {
+  flex: 1; padding: 11px; border-radius: 10px; border: 1px solid var(--line);
+  background: #1a1f27; font-weight: 600; cursor: pointer;
+}
+.downloads-actions .btn.danger-solid {
+  background: var(--red); color: #2a0f0b; border-color: transparent;
+}
+.downloads-actions .btn:disabled { opacity: .45; cursor: default; }
 .download-main { flex: 1; min-width: 0; }
 .download-name {
   font-size: 13px; font-weight: 600; white-space: nowrap;
@@ -817,6 +843,7 @@ details.process[open] > summary::before { content: "▾"; }
 .ref-actions .btn.primary {
   background: var(--accent); color: var(--accent-ink); border-color: transparent;
 }
+.ref-actions .btn:disabled { opacity: .45; cursor: default; }
 
 /* ---------- 新对话 ---------- */
 .sheet {
@@ -885,14 +912,29 @@ details.process[open] > summary::before { content: "▾"; }
 .folder-pick:active { background: #1b2028; }
 .folder-pick .n { font-size: 14px; font-weight: 600; }
 .folder-pick .p { font-size: 11px; color: var(--faint); margin-top: 2px; word-break: break-all; }
-.path-row { display: flex; gap: 8px; padding: 10px 16px 4px; }
-.path-row input {
-  flex: 1; min-width: 0; border: 1px solid var(--line); background: var(--bg);
-  border-radius: 10px; padding: 9px 11px; outline: none; font-size: 16px;
+.pick-folder-btn {
+  display: flex; align-items: center; gap: 9px; margin: 10px 16px 4px;
+  padding: 11px 12px; border: 1px dashed var(--line); border-radius: 10px;
+  background: transparent; color: var(--muted); font-size: 13.5px;
+  text-align: left; cursor: pointer;
 }
+.pick-folder-btn:active { background: #1b2028; }
+.pick-folder-plus {
+  flex: 0 0 auto; width: 20px; height: 20px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  background: #262b33; color: var(--accent); font-size: 15px; line-height: 1;
+}
+.pick-folder-label { flex: 1; min-width: 0; }
+.pick-folder-arrow { flex: 0 0 auto; color: var(--faint); font-size: 16px; }
+.pc-group {
+  padding: 10px 10px 4px; font-size: 10.5px; letter-spacing: .5px;
+  color: var(--faint);
+}
+.pc-arrow { flex: 0 0 auto; color: var(--faint); font-size: 16px; }
+#folderSheet .ref-actions { padding-bottom: 4px; border-top: 0; }
 .mini-btn {
   border: 1px solid var(--line); background: #1a1f27; border-radius: 10px;
-  padding: 0 14px; cursor: pointer; font-weight: 600;
+  padding: 10px 14px; cursor: pointer; font-weight: 600;
 }
 
 /* ---------- 对话设置 ---------- */
@@ -934,12 +976,27 @@ details.process[open] > summary::before { content: "▾"; }
 .confirm-actions .danger-solid {
   background: var(--red); color: #2a0f0b; border-color: transparent;
 }
+.confirm-actions .btn.primary {
+  background: var(--accent); color: var(--accent-ink); border-color: transparent;
+}
+.confirm-actions .btn:disabled { opacity: .45; cursor: default; }
+.confirm-card .new-folder-parent {
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 11.5px; word-break: break-all;
+}
+#newFolderName {
+  width: 100%; box-sizing: border-box; margin-bottom: 14px;
+  border: 1px solid var(--line); background: var(--bg);
+  border-radius: 10px; padding: 10px 12px; outline: none;
+  color: var(--text); font-size: 16px;
+}
+#newFolderName:focus { border-color: var(--accent); }
 
 /* ---------- toast ---------- */
 .toast {
   position: fixed; left: 50%; bottom: calc(76px + var(--safe-bottom));
   transform: translateX(-50%); z-index: 60;
-  max-width: 86vw; padding: 9px 14px; border-radius: 11px;
+  max-width: 86vw; width: max-content; padding: 9px 14px; border-radius: 11px;
   background: #222932; color: var(--text); font-size: 12.5px;
   box-shadow: 0 10px 30px rgba(0, 0, 0, .5);
   text-align: center;

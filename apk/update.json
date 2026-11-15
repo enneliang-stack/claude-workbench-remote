@@ -1,10 +1,10 @@
 {
-  "versionCode": 147,
-  "versionName": "2.4.106",
+  "versionCode": 150,
+  "versionName": "2.4.109",
   "apk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.51/ClaudeWorkbench-full.apk",
   "sha256": "3bc07db344928c6b7b3def58f6c6bc80feeffb86e9c95faba1cfb524fe76c8eb",
   "slimApk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/latest/download/ClaudeWorkbench-slim.apk",
-  "slimSha256": "a0863b6757d2f7743b7fa7f33ceae5a8bf3ebfc122481dabd8a28ab130ca3fc3",
+  "slimSha256": "4558401a41cf46326eaa5a3dc408d23fad5711249952cff6e8e04f86456b0abd",
   "important": false,
-  "notes": "2.4.106 更新\n\n- 手机页任务结束后的用时自动换算：不足 60 秒保持秒数，60 秒以上显示 Xm Ys，60 分钟以上显示 Xh Ym Zs。\n- 与 PC 客户端 1.2.39 的用时格式保持一致。\n- 手机页资源版本提升到 100，App 升级后会自动刷新。\n- 旧对话重新打开即可，不需要重建。\n"
+  "notes": "2.4.109 更新\n\n- 手机本机页「选择手机文件夹」：去掉顶部删除按钮，「新建文件夹」和「选择此文件夹」放到标题下方。\n- 文件夹删除改为长按文件夹弹出确认；仅允许删除通过 APP 新建的文件夹，长按普通文件夹只提示。\n- 删除 APP 新建文件夹时，会同时清理其中的对话和会话记录。\n- 旧版通过 APP 新建但没有记录的文件夹，升级后会自动补记。\n- 「已下载文件」页面新增多选、全选和批量删除。\n- 手机页资源版本 103，对应 PC 客户端 1.2.42。"
 }

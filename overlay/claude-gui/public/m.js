@@ -52,9 +52,15 @@
     pcParent: null,
     pcEntries: [],
     pcSel: new Map(),
+    pickPath: '',
+    pickParent: null,
+    pickEntries: [],
+    pickQuick: [],
     collapsedFolders: new Set(),
     drafts: new Map(),      // convId -> { text, images, refs, files, quotes }
     downloads: [],          // 手机 App 已下载的文件
+    downloadSelecting: false,
+    downloadSel: new Set(),
     status: { data: null, open: false, loading: false, timer: 0 },
     loadingOlder: false,
     sending: false,
@@ -1718,37 +1724,107 @@
     refreshDownloads();
   }
 
+  function setDownloadSelecting(on) {
+    S.downloadSelecting = !!on;
+    S.downloadSel.clear();
+    renderDownloads();
+  }
+
+  function toggleDownloadSel(path) {
+    if (S.downloadSel.has(path)) S.downloadSel.delete(path);
+    else S.downloadSel.add(path);
+    renderDownloads();
+  }
+
+  function toggleSelectAllDownloads() {
+    const list = S.downloads || [];
+    const all = list.length > 0 && list.every(d => S.downloadSel.has(d.path));
+    S.downloadSel.clear();
+    if (!all) for (const d of list) S.downloadSel.add(d.path);
+    renderDownloads();
+  }
+
+  function deleteSelectedDownloads() {
+    const paths = [...S.downloadSel];
+    if (!paths.length) return;
+    if (!confirm(`删除所选 ${paths.length} 个文件？`)) return;
+    let failed = 0;
+    for (const p of paths) {
+      try {
+        if (!window.AndroidDownloads.delete(p)) failed++;
+      } catch {
+        failed++;
+      }
+    }
+    S.downloadSelecting = false;
+    S.downloadSel.clear();
+    refreshDownloads();
+    toast(failed ? `有 ${failed} 个文件删除失败` : `已删除 ${paths.length} 个文件`, failed ? 'err' : '');
+  }
+
   function renderDownloads() {
     const box = $('#downloadsList');
     box.innerHTML = '';
     if (!window.AndroidDownloads) {
       $('#downloadsNote').textContent = '浏览器版无法在这里管理下载文件，请在浏览器下载管理中查看。';
+      $('#downloadsSelect').hidden = true;
+      $('#downloadsActions').hidden = true;
       box.innerHTML = '<div class="empty">请使用 Claude 工作台 App 下载和管理文件</div>';
       return;
     }
-    $('#downloadsNote').textContent = '文件保存在手机 App 的下载目录';
     const list = S.downloads || [];
+    if (!list.length) {
+      S.downloadSelecting = false;
+      S.downloadSel.clear();
+    }
+    const selectable = list.length > 0;
+    $('#downloadsSelect').hidden = !selectable;
+    $('#downloadsSelect').textContent = S.downloadSelecting ? '完成' : '多选';
+    $('#downloadsSelect').title = S.downloadSelecting ? '完成多选' : '多选';
+    $('#downloadsNote').textContent = S.downloadSelecting
+      ? '点文件选择，或全选后删除'
+      : '文件保存在手机 App 的下载目录';
+    $('#downloadsActions').hidden = !(S.downloadSelecting && selectable);
     if (!list.length) {
       box.innerHTML = '<div class="empty">还没有下载文件</div>';
       return;
     }
+    const paths = new Set(list.map(d => d.path));
+    for (const p of [...S.downloadSel]) if (!paths.has(p)) S.downloadSel.delete(p);
+    const allSel = list.every(d => S.downloadSel.has(d.path));
+    $('#downloadsSelectAll').textContent = allSel ? '取消全选' : '全选';
+    const selectedCount = S.downloadSel.size;
+    $('#downloadsDeleteSelected').textContent = selectedCount
+      ? `删除所选 (${selectedCount})`
+      : '删除所选';
+    $('#downloadsDeleteSelected').disabled = selectedCount === 0;
+
     for (const d of list) {
       const row = el('div', 'download-row');
+      if (S.downloadSelecting) {
+        const selected = S.downloadSel.has(d.path);
+        row.classList.add('selecting');
+        if (selected) row.classList.add('sel');
+        row.appendChild(el('span', 'download-check', selected ? '✓' : ''));
+        row.onclick = () => toggleDownloadSel(d.path);
+      }
       const main = el('div', 'download-main');
       main.appendChild(el('div', 'download-name', d.name || '文件'));
       const date = d.mtime ? new Date(Number(d.mtime)).toLocaleString() : '';
       main.appendChild(el('div', 'download-meta',
         `${fmtBytes(d.size)}${date ? ' · ' + date : ''}`));
       row.appendChild(main);
-      const actions = el('div', 'download-actions');
-      const open = el('button', 'file-btn', '打开');
-      open.type = 'button';
-      open.onclick = () => openDownloaded(d);
-      const del = el('button', 'file-btn danger', '删除');
-      del.type = 'button';
-      del.onclick = () => deleteDownloaded(d);
-      actions.append(open, del);
-      row.appendChild(actions);
+      if (!S.downloadSelecting) {
+        const actions = el('div', 'download-actions');
+        const open = el('button', 'file-btn', '打开');
+        open.type = 'button';
+        open.onclick = () => openDownloaded(d);
+        const del = el('button', 'file-btn danger', '删除');
+        del.type = 'button';
+        del.onclick = () => deleteDownloaded(d);
+        actions.append(open, del);
+        row.appendChild(actions);
+      }
       box.appendChild(row);
     }
   }
@@ -1758,12 +1834,16 @@
       toast('浏览器版请在浏览器下载管理中查看');
       return;
     }
+    S.downloadSelecting = false;
+    S.downloadSel.clear();
     refreshDownloads();
     renderDownloads();
     $('#downloadsSheet').hidden = false;
   }
 
   function closeDownloadsSheet() {
+    S.downloadSelecting = false;
+    S.downloadSel.clear();
     $('#downloadsSheet').hidden = true;
   }
 
@@ -5056,9 +5136,8 @@
       box.appendChild(b);
     }
     if (!box.children.length) {
-      box.innerHTML = '<div class="empty">还没有文件夹，直接在下面输入路径</div>';
+      box.innerHTML = '<div class="empty">还没有文件夹，点下方按钮选择文件夹</div>';
     }
-    $('#pathInput').value = '';
     $('#sheet').hidden = false;
   }
 
@@ -5066,11 +5145,208 @@
     $('#sheet').hidden = true;
   }
 
+  function openFolderPicker() {
+    S.pickPath = '';
+    S.pickParent = null;
+    S.pickEntries = [];
+    S.pickQuick = [];
+    $('#folderPath').textContent = '读取中…';
+    $('#folderUp').disabled = true;
+    $('#folderNew').disabled = true;
+    $('#folderUse').disabled = true;
+    $('#folderBrowser').innerHTML = '<div class="pc-empty">读取中…</div>';
+    $('#folderSheet').hidden = false;
+    const start = (S.conv && S.conv.cwd) || '';
+    loadFolderPickerDir(start).catch(async e => {
+      try {
+        await loadFolderPickerDir('');
+        toast('原文件夹不可用，已切到磁盘列表', 'err');
+      } catch {
+        $('#folderBrowser').innerHTML = '';
+        toast('读取电脑目录失败：' + e.message, 'err');
+      }
+    });
+  }
+
+  function closeFolderPicker() {
+    $('#folderSheet').hidden = true;
+    closeNewFolderDialog();
+  }
+
+  function openNewFolderDialog() {
+    if (!S.pickPath) {
+      toast('请先进入一个磁盘或文件夹', 'err');
+      return;
+    }
+    $('#newFolderParent').textContent = S.pickPath;
+    $('#newFolderName').value = '';
+    $('#newFolderCreate').disabled = true;
+    $('#newFolderSheet').hidden = false;
+    setTimeout(() => $('#newFolderName').focus(), 60);
+  }
+
+  function closeNewFolderDialog() {
+    $('#newFolderSheet').hidden = true;
+  }
+
+  function updateNewFolderButton() {
+    $('#newFolderCreate').disabled = !$('#newFolderName').value.trim();
+  }
+
+  async function createNewFolder() {
+    if (!S.pickPath) {
+      toast('请先进入一个磁盘或文件夹', 'err');
+      return;
+    }
+    const name = $('#newFolderName').value.trim();
+    if (!name) {
+      toast('请输入文件夹名称', 'err');
+      return;
+    }
+    const btn = $('#newFolderCreate');
+    if (btn.disabled) return;
+    btn.disabled = true;
+    try {
+      const data = await api('/api/fs/mkdir', {
+        method: 'POST',
+        body: JSON.stringify({ path: S.pickPath, name })
+      });
+      closeNewFolderDialog();
+      await loadFolderPickerDir(data.path || S.pickPath);
+      toast('文件夹已创建');
+    } catch (e) {
+      toast(e.message, 'err');
+      updateNewFolderButton();
+    }
+  }
+
+  async function loadFolderPickerDir(p) {
+    const data = await api('/api/fs?path=' + encodeURIComponent(p || ''));
+    S.pickPath = data.path || '';
+    S.pickParent = data.parent || null;
+    S.pickEntries = (data.entries || []).filter(e => e.isDir && !e.hidden);
+    S.pickQuick = data.quick || [];
+    renderFolderPicker();
+  }
+
+  function renderFolderPicker() {
+    $('#folderPath').textContent = S.pickPath || '此电脑（选择磁盘）';
+    $('#folderUp').disabled = !S.pickParent;
+    $('#folderNew').disabled = !S.pickPath;
+    $('#folderUse').disabled = !S.pickPath;
+
+    const box = $('#folderBrowser');
+    box.innerHTML = '';
+
+    const quick = (S.pickQuick || []).filter(q => q && q.path && q.path !== S.pickPath);
+    if (quick.length) {
+      box.appendChild(el('div', 'pc-group', '常用位置'));
+      for (const q of quick) {
+        const row = el('button', 'pc-row');
+        row.type = 'button';
+        row.appendChild(el('span', 'pc-ic', '★'));
+        row.appendChild(el('span', 'pc-name', q.name));
+        row.appendChild(el('span', 'pc-arrow', '›'));
+        row.onclick = () => loadFolderPickerDir(q.path)
+          .catch(err => toast('读取失败：' + err.message, 'err'));
+        box.appendChild(row);
+      }
+    }
+
+    if (S.pickPath) box.appendChild(el('div', 'pc-group', '文件夹'));
+    if (!S.pickEntries.length) {
+      box.appendChild(el('div', 'pc-empty', '这个文件夹里没有子文件夹'));
+    }
+    for (const e of S.pickEntries) {
+      const row = el('button', 'pc-row');
+      row.type = 'button';
+      row.appendChild(el('span', 'pc-ic', '📁'));
+      row.appendChild(el('span', 'pc-name', e.name));
+      row.appendChild(el('span', 'pc-arrow', '›'));
+      row.onclick = () => loadFolderPickerDir(e.path)
+        .catch(err => toast('读取失败：' + err.message, 'err'));
+      if (S.pickPath) bindLongPressDelete(row, e.path, e.name, !!e.created);
+      box.appendChild(row);
+    }
+  }
+
+  function bindLongPressDelete(row, targetPath, name, created) {
+    let timer = 0;
+    let sx = 0;
+    let sy = 0;
+    let longPressed = false;
+    const cancelPress = () => {
+      if (timer) {
+        clearTimeout(timer);
+        timer = 0;
+      }
+    };
+    row.addEventListener('pointerdown', e => {
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      sx = e.clientX;
+      sy = e.clientY;
+      longPressed = false;
+      cancelPress();
+      timer = setTimeout(() => {
+        timer = 0;
+        longPressed = true;
+        askDeleteFolder(targetPath, name, created);
+      }, 650);
+    });
+    row.addEventListener('pointermove', e => {
+      if (!timer) return;
+      if (Math.abs(e.clientX - sx) > 10 || Math.abs(e.clientY - sy) > 10) cancelPress();
+    });
+    row.addEventListener('pointerup', cancelPress);
+    row.addEventListener('pointercancel', cancelPress);
+    row.addEventListener('pointerleave', cancelPress);
+    row.addEventListener('contextmenu', e => e.preventDefault());
+
+    const navigate = row.onclick;
+    row.onclick = e => {
+      if (longPressed) {
+        longPressed = false;
+        e.preventDefault();
+        return;
+      }
+      if (navigate) navigate.call(row, e);
+    };
+  }
+
+  async function askDeleteFolder(targetPath, name, created) {
+    if (!created) {
+      toast('只能删除通过 APP 新建的文件夹', 'err');
+      return;
+    }
+    const label = name ? `${name}\n${targetPath}` : targetPath;
+    if (!window.confirm(`删除文件夹？\n\n${label}\n\n里面的文件、子文件夹和相关对话会一起删除，无法恢复。`)) return;
+    try {
+      const data = await api('/api/fs/delete', {
+        method: 'POST',
+        body: JSON.stringify({ path: targetPath })
+      });
+      const n = Number(data && data.removedConversations) || 0;
+      toast(n ? `文件夹和 ${n} 个对话已删除` : '文件夹已删除');
+      await loadFolderPickerDir(S.pickPath);
+    } catch (e) {
+      toast(e.message, 'err');
+    }
+  }
+
+  async function usePickedFolder() {
+    if (!S.pickPath) {
+      toast('请先选择磁盘和文件夹', 'err');
+      return;
+    }
+    const ok = await newConversation(S.pickPath);
+    if (ok) closeFolderPicker();
+  }
+
   async function newConversation(cwd) {
     cwd = String(cwd || '').trim();
     if (!cwd) {
-      toast('请选择或输入文件夹路径', 'err');
-      return;
+      toast('请选择一个工作文件夹', 'err');
+      return false;
     }
     try {
       const data = await api('/api/conversation', {
@@ -5080,8 +5356,10 @@
       closeSheet();
       await loadBoot();
       openConv(data.id);
+      return true;
     } catch (e) {
       toast(e.message, 'err');
+      return false;
     }
   }
 
@@ -5540,6 +5818,9 @@
     $('#sheet').addEventListener('click', e => {
       if (e.target === $('#sheet')) closeSheet();
     });
+    $('#pickFolderBtn').onclick = openFolderPicker;
+    if (IS_PHONE_LOCAL) $('#pickFolderBtn').hidden = true;
+    // 手机本机页的 phone-folder-picker.js 仍通过这两个节点提交所选目录
     $('#pathGo').onclick = () => newConversation($('#pathInput').value);
     $('#pathInput').addEventListener('keydown', e => {
       if (e.key === 'Enter') {
@@ -5547,6 +5828,32 @@
         newConversation($('#pathInput').value);
       }
     });
+    $('#folderSheetClose').onclick = closeFolderPicker;
+    $('#folderCancel').onclick = closeFolderPicker;
+    $('#folderSheet').addEventListener('click', e => {
+      if (e.target === $('#folderSheet')) closeFolderPicker();
+    });
+    $('#folderDrives').onclick = () => loadFolderPickerDir('')
+      .catch(e => toast('读取磁盘列表失败：' + e.message, 'err'));
+    $('#folderNew').onclick = openNewFolderDialog;
+    $('#newFolderCancel').onclick = closeNewFolderDialog;
+    $('#newFolderCreate').onclick = createNewFolder;
+    $('#newFolderName').addEventListener('input', updateNewFolderButton);
+    $('#newFolderName').addEventListener('keydown', e => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        createNewFolder();
+      }
+    });
+    $('#newFolderSheet').addEventListener('click', e => {
+      if (e.target === $('#newFolderSheet')) closeNewFolderDialog();
+    });
+    $('#folderUp').onclick = () => {
+      if (!S.pickParent) return;
+      loadFolderPickerDir(S.pickParent)
+        .catch(e => toast('读取失败：' + e.message, 'err'));
+    };
+    $('#folderUse').onclick = usePickedFolder;
     $('#searchInput').addEventListener('input', renderList);
     const filterRow = $('#filterRow');
     if (filterRow) filterRow.addEventListener('click', e => {
@@ -5698,6 +6005,9 @@
     });
     $('#downloadsBtn').onclick = openDownloadsSheet;
     $('#downloadsClose').onclick = closeDownloadsSheet;
+    $('#downloadsSelect').onclick = () => setDownloadSelecting(!S.downloadSelecting);
+    $('#downloadsSelectAll').onclick = toggleSelectAllDownloads;
+    $('#downloadsDeleteSelected').onclick = deleteSelectedDownloads;
     $('#downloadsSheet').addEventListener('click', e => {
       if (e.target === $('#downloadsSheet')) closeDownloadsSheet();
     });

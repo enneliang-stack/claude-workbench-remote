@@ -142,6 +142,8 @@ const DEFAULT_STATE = {
   conversations: {},      // id -> { cwd, title, createdAt, updatedAt, model, permissionMode }
   settings: { defaultPermissionMode: 'bypassPermissions', defaultModel: '', defaultEffort: '' },
   cwdCache: {},           // 项目目录名 -> 真实 cwd
+  createdFolders: [],     // 通过手机页/APP 新建的文件夹，只有这些允许删除
+  createdFoldersMigrated: false,
   lastConversation: null
 };
 
@@ -156,6 +158,7 @@ function loadState() {
       settings: { ...DEFAULT_STATE.settings, ...(raw.settings || {}) },
       conversations: raw.conversations || {},
       folders: raw.folders || [],
+      createdFolders: Array.isArray(raw.createdFolders) ? raw.createdFolders : [],
       cwdCache: raw.cwdCache || {}
     };
   } catch {
@@ -226,6 +229,7 @@ function saveState() {
 }
 
 state = loadState();
+migrateLegacyCreatedFolders();
 
 // ---------------------------------------------------------------- 小工具
 
@@ -417,6 +421,36 @@ async function readdirSafe(dir) {
 
 function normKey(p) {
   return path.resolve(p).toLowerCase();
+}
+
+/**
+ * 兼容旧版：2.4.108 之前没有 createdFolders，旧服务端新建的文件夹不会被记录。
+ * 只认“文件夹创建时间、首次加入时间和其中对话创建时间几乎同时”的目录，
+ * 避免把普通的已有文件夹误标成 APP 新建。
+ */
+function migrateLegacyCreatedFolders() {
+  if (state.createdFoldersMigrated) return;
+  if (!Array.isArray(state.createdFolders)) state.createdFolders = [];
+  const seen = new Set(state.createdFolders.map(normKey));
+  const convs = Object.values(state.conversations || {});
+  const addedFolders = [];
+  for (const f of state.folders || []) {
+    if (!f || !f.path || seen.has(normKey(f.path))) continue;
+    const added = Date.parse(f.addedAt || '');
+    if (!added) continue;
+    let born = 0;
+    try { born = fs.statSync(f.path).birthtimeMs || 0; } catch { /* ignore */ }
+    if (!born || Math.abs(added - born) > 15000) continue;
+    const hit = convs.some(c => c && c.cwd && normKey(c.cwd) === normKey(f.path)
+      && Math.abs(Date.parse(c.createdAt || '') - born) < 15000);
+    if (!hit) continue;
+    state.createdFolders.push(f.path);
+    seen.add(normKey(f.path));
+    addedFolders.push(f.path);
+  }
+  state.createdFoldersMigrated = true;
+  saveState();
+  if (addedFolders.length) console.log('[state] 已补记旧版 APP 新建文件夹：', addedFolders.join(', '));
 }
 
 /** Claude Code 的项目目录编码：所有非字母数字字符 → "-" */
@@ -741,6 +775,38 @@ async function findSessionFile(id) {
     }
   }
   return null;
+}
+
+/** 删除某个文件夹（含子文件夹）下的所有对话，返回删除数量。 */
+async function deleteConversationsUnder(target) {
+  const key = normKey(target);
+  const prefix = key.endsWith(path.sep) ? key : key + path.sep;
+  const ids = Object.keys(state.conversations || {}).filter(id => {
+    const c = state.conversations[id];
+    if (!c || !c.cwd) return false;
+    const ck = normKey(c.cwd);
+    return ck === key || ck.startsWith(prefix);
+  });
+  for (const id of ids) {
+    const r = runners.get(id);
+    if (r) {
+      try { r.kill(); } catch { /* ignore */ }
+      runners.delete(id);
+    }
+    const file = await findSessionFile(id);
+    if (file) {
+      try { await fsp.unlink(file); } catch { /* ignore */ }
+    }
+    delete state.conversations[id];
+    convIndex.delete(id);
+    if (state.lastConversation === id) state.lastConversation = null;
+    sessionFileCache.delete(id);
+    dropTurnMeta(id);
+    titleAttempts.delete(id);
+    titleSkipped.delete(id);
+    broadcast({ t: 'conv_removed', id });
+  }
+  return ids.length;
 }
 
 async function cwdOfProjectDir(dirName) {
@@ -3289,12 +3355,16 @@ async function browseDir(dir, includeFiles = false) {
   if (!stat.isDirectory()) throw new Error('不是文件夹');
 
   const parent = path.dirname(target);
+  const createdKeys = new Set((state.createdFolders || []).map(normKey));
   const entries = [];
   for (const d of await readdirSafe(target)) {
     if (d.name === '$RECYCLE.BIN' || d.name === 'System Volume Information') continue;
     const full = path.join(target, d.name);
     if (d.isDirectory()) {
-      entries.push({ name: d.name, path: full, isDir: true, hidden: d.name.startsWith('.') });
+      entries.push({
+        name: d.name, path: full, isDir: true, hidden: d.name.startsWith('.'),
+        created: createdKeys.has(normKey(full))
+      });
     } else if (includeFiles && d.isFile()) {
       let size = 0;
       try { size = (await fsp.stat(full)).size; } catch { /* ignore */ }
@@ -4407,6 +4477,12 @@ async function handleApi(req, res, url) {
     const target = path.join(parent, name);
     try {
       await fsp.mkdir(target, { recursive: false });
+      const key = normKey(target);
+      if (!Array.isArray(state.createdFolders)) state.createdFolders = [];
+      if (!state.createdFolders.some(p => normKey(p) === key)) {
+        state.createdFolders.push(target);
+        saveState();
+      }
       return json(res, { ok: true, path: target });
     } catch (e) {
       return json(res, { error: e.code === 'EEXIST' ? '文件夹已存在' : e.message }, 400);
@@ -4428,9 +4504,34 @@ async function handleApi(req, res, url) {
     let st;
     try { st = await fsp.lstat(target); } catch { return json(res, { error: '文件夹不存在' }, 400); }
     if (!st.isDirectory() && !st.isSymbolicLink()) return json(res, { error: '不是文件夹' }, 400);
+    const created = (state.createdFolders || []).some(p => normKey(p) === normKey(target));
+    if (!created) {
+      return json(res, { error: '只能删除通过 APP 新建的文件夹' }, 403);
+    }
+    const key = normKey(target);
+    const prefix = key.endsWith(path.sep) ? key : key + path.sep;
+    for (const [id, r] of runners) {
+      const c = state.conversations[id];
+      if (!c || !c.cwd) continue;
+      const ck = normKey(c.cwd);
+      if (ck !== key && !ck.startsWith(prefix)) continue;
+      try { r.kill(); } catch { /* ignore */ }
+      runners.delete(id);
+    }
     try {
       await fsp.rm(target, { recursive: st.isDirectory(), force: false });
-      return json(res, { ok: true, path: target });
+      const removedConversations = await deleteConversationsUnder(target);
+      state.folders = (state.folders || []).filter(f => {
+        if (!f || !f.path) return true;
+        const fk = normKey(f.path);
+        return fk !== key && !fk.startsWith(prefix);
+      });
+      state.createdFolders = (state.createdFolders || []).filter(p => {
+        const pk = normKey(p);
+        return pk !== key && !pk.startsWith(prefix);
+      });
+      saveState();
+      return json(res, { ok: true, path: target, removedConversations });
     } catch (e) {
       return json(res, { error: '删除失败：' + e.message }, 500);
     }

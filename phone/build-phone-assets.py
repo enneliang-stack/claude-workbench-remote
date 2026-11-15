@@ -382,8 +382,9 @@ def build_public():
   setInterval(addHome, 1500);
 })();
 </script>
-<script src="/phone-folder-picker.js"></script>
+<script src="/phone-folder-picker.js?v=__ASSET_TAG__"></script>
 """
+    inject = inject.replace("__ASSET_TAG__", ASSET_TAG)
     for name in ("m.html", "m/index.html"):
         f = dest / name
         if not f.is_file():

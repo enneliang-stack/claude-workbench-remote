@@ -14,7 +14,7 @@
 <link rel="apple-touch-icon" href="/icon-180.png">
 <link rel="icon" href="/icon-192.png" type="image/png">
 <title>Claude Code 工作台</title>
-<link rel="stylesheet" href="/m.css?v=20261114u">
+<link rel="stylesheet" href="/m.css?v=20261115j">
 </head>
 <body>
 <div id="app">
@@ -105,9 +105,50 @@
       </header>
       <div class="sheet-note">选择一个工作文件夹</div>
       <div id="folderList" class="folder-list"></div>
-      <div class="path-row">
-        <input id="pathInput" placeholder="或输入文件夹路径" autocomplete="off" spellcheck="false">
-        <button id="pathGo" class="mini-btn">打开</button>
+      <button id="pickFolderBtn" class="pick-folder-btn" type="button">
+        <span class="pick-folder-plus">+</span>
+        <span class="pick-folder-label">选择其他文件夹</span>
+        <span class="pick-folder-arrow">›</span>
+      </button>
+      <!-- 手机本机页注入的文件夹选择器仍复用这两个节点；远程电脑端不显示 -->
+      <div class="path-row" hidden>
+        <input id="pathInput" autocomplete="off" spellcheck="false">
+        <button id="pathGo" class="mini-btn" type="button">打开</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 选择工作文件夹 -->
+  <div id="folderSheet" class="sheet" hidden>
+    <div class="sheet-card">
+      <header class="sheet-hd">
+        <b>选择工作文件夹</b>
+        <button id="folderSheetClose" class="icon-btn" title="关闭">×</button>
+      </header>
+      <div class="sheet-note">点文件夹进入下一级，选好位置后点底部按钮；长按 APP 新建的文件夹可删除</div>
+      <div class="pc-path">
+        <button id="folderDrives" type="button" class="file-btn">磁盘</button>
+        <button id="folderUp" type="button" class="file-btn">上一级</button>
+        <button id="folderNew" type="button" class="file-btn">新建文件夹</button>
+        <span id="folderPath" class="pc-path-text"></span>
+      </div>
+      <div id="folderBrowser" class="pc-list"></div>
+      <div class="ref-actions">
+        <button id="folderCancel" type="button" class="btn">取消</button>
+        <button id="folderUse" type="button" class="btn primary">在此新建对话</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 新建文件夹 -->
+  <div id="newFolderSheet" class="sheet confirm-sheet" hidden>
+    <div class="confirm-card">
+      <b>新建文件夹</b>
+      <p id="newFolderParent" class="new-folder-parent"></p>
+      <input id="newFolderName" type="text" placeholder="文件夹名称" maxlength="80" autocomplete="off" spellcheck="false" enterkeyhint="done">
+      <div class="confirm-actions">
+        <button id="newFolderCancel" type="button" class="btn">取消</button>
+        <button id="newFolderCreate" type="button" class="btn primary">创建</button>
       </div>
     </div>
   </div>
@@ -222,10 +263,17 @@
     <div class="sheet-card">
       <header class="sheet-hd">
         <b>已下载文件</b>
-        <button id="downloadsClose" class="icon-btn" title="关闭">×</button>
+        <div class="sheet-hd-actions">
+          <button id="downloadsSelect" class="sheet-hd-text-btn" type="button" title="多选">多选</button>
+          <button id="downloadsClose" class="icon-btn" title="关闭">×</button>
+        </div>
       </header>
       <div class="sheet-note" id="downloadsNote">文件保存在手机 App 的下载目录</div>
       <div id="downloadsList" class="downloads-list"></div>
+      <div id="downloadsActions" class="downloads-actions" hidden>
+        <button id="downloadsSelectAll" type="button" class="btn">全选</button>
+        <button id="downloadsDeleteSelected" type="button" class="btn danger-solid" disabled>删除所选</button>
+      </div>
     </div>
   </div>
 
@@ -300,6 +348,6 @@
 </div>
 <script>window.__GUI_TOKEN__ = "__TOKEN__";</script>
 <script src="/ref-digest.js?v=20261112n"></script>
-<script src="/m.js?v=20261114z14"></script>
+<script src="/m.js?v=20261115j"></script>
 </body>
 </html>
