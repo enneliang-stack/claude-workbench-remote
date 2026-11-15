@@ -54,7 +54,7 @@ public final class LocalEngine {
                     + ALPINE_VERSION + "-aarch64.tar.gz"
     };
     private static final int SERVER_PORT = 4712;
-    private static final int ASSET_VERSION = 103;
+    private static final int ASSET_VERSION = 106;
     private static final String GCS_BASE =
             "https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases";
     private static final String FALLBACK_CLAUDE_VERSION = "2.1.319";
@@ -62,6 +62,10 @@ public final class LocalEngine {
     private static final String FALLBACK_CLAUDE_SHA256 =
             "244e1aaedb73cb73571c2d5f2380f7ad251ba7e010d2747a203d631a1e7bd2e8";
     private static final Object LOCK = new Object();
+    private static final Object GUI_TOKEN_LOCK = new Object();
+    private static String cachedGuiToken = "";
+    private static long cachedGuiTokenMtime = -1;
+    private static long cachedGuiTokenLength = -1;
 
     public static final int TS_PROXY_PORT = 4720;
 
@@ -123,12 +127,31 @@ public final class LocalEngine {
 
     /** 读取手机端 Node 服务的访问 token，供悬浮窗停止/插话调用本机 API。 */
     public static String readGuiToken(Context c) {
-        try {
-            File f = new File(new File(phoneDir(c), "data"), "gui-token.json");
-            JSONObject o = new JSONObject(readText(f));
-            return o.optString("token", "");
-        } catch (Exception e) {
-            return "";
+        File f = new File(new File(phoneDir(c), "data"), "gui-token.json");
+        synchronized (GUI_TOKEN_LOCK) {
+            long mtime = f.lastModified();
+            long length = f.length();
+            if (mtime == cachedGuiTokenMtime && length == cachedGuiTokenLength) {
+                return cachedGuiToken;
+            }
+            try {
+                JSONObject o = new JSONObject(readText(f));
+                cachedGuiToken = o.optString("token", "");
+            } catch (Exception e) {
+                cachedGuiToken = "";
+            }
+            cachedGuiTokenMtime = mtime;
+            cachedGuiTokenLength = length;
+            return cachedGuiToken;
+        }
+    }
+
+    /** 清空数据/重装时让 token 缓存下次强制重读。 */
+    public static void invalidateGuiTokenCache() {
+        synchronized (GUI_TOKEN_LOCK) {
+            cachedGuiToken = "";
+            cachedGuiTokenMtime = -1;
+            cachedGuiTokenLength = -1;
         }
     }
 
@@ -264,6 +287,7 @@ public final class LocalEngine {
             stopTailscaleProxy(c);
             try { PhoneControlServer.setEnabled(c, false); } catch (Exception ignored) {
             }
+            invalidateGuiTokenCache();
             deleteTree(baseDir(c));
             File ext = c.getExternalFilesDir(null);
             if (ext != null) deleteTree(ext);
@@ -286,6 +310,7 @@ public final class LocalEngine {
         synchronized (LOCK) {
             if (installing) throw new IllegalStateException("正在安装，请稍候");
             stopServer(c);
+            invalidateGuiTokenCache();
             File base = baseDir(c);
             File backup = new File(base, "reset-backup");
             deleteTree(backup);
@@ -364,7 +389,6 @@ public final class LocalEngine {
                 ensurePackages(c, logListener);
                 installClaude(c, logListener);
                 verify(c, logListener);
-                writeMarker(c, "installed");
                 cleanupBundledAssets(c);
                 progress(logListener, "手机端环境已就绪");
             } catch (Exception e) {
@@ -965,10 +989,6 @@ public final class LocalEngine {
         return tsProxyRunning;
     }
 
-    public static JSONObject tailscaleStatus() {
-        return tsStatus();
-    }
-
     /**
      * 部分国内 5G 会返回 Tailscale 控制面的 IPv6，但实际没有 IPv6 路由。
      * 把控制面的 IPv4 写进 proot 的 /etc/hosts，让 tsnet 优先走 IPv4。
@@ -1115,20 +1135,6 @@ public final class LocalEngine {
         } catch (Exception ignored) {
         }
         return false;
-    }
-
-    private static File ensureTsRoute(Context c) {
-        String iface = activeNetworkInterface(c);
-        File f = new File(phoneDir(c), "ts-route");
-        String content = "Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\tIRTT\n"
-            + iface + "\t00000000\t00000000\t0001\t0\t0\t0\t00000000\t0\t0\t0\n";
-        try {
-            writeFile(f, content);
-            log(c, "内置 Tailscale 默认网卡：" + iface);
-        } catch (Exception e) {
-            log(c, "写 ts-route 失败：" + e);
-        }
-        return f;
     }
 
     /** 当前 peer 是否在线；null 表示状态接口不可用/未知。 */
@@ -1388,11 +1394,6 @@ public final class LocalEngine {
     }
 
     private static List<String> buildCommand(Context c, String shell, boolean serverEnv, String... extraEnv) throws Exception {
-        return buildCommandWithBinds(c, shell, serverEnv, null, extraEnv);
-    }
-
-    private static List<String> buildCommandWithBinds(Context c, String shell, boolean serverEnv,
-                                                       String[] extraBinds, String... extraEnv) throws Exception {
         File alpine = alpineDir(c);
         File phone = phoneDir(c);
         File workspace = workspaceDir(c);
@@ -1415,11 +1416,6 @@ public final class LocalEngine {
         addBind(cmd, phone.getAbsolutePath(), "/opt/workbench");
         addBind(cmd, workspace.getAbsolutePath(), "/workspace");
         addBind(cmd, sdcard.getAbsolutePath(), "/sdcard");
-        if (extraBinds != null) {
-            for (int i = 0; i + 1 < extraBinds.length; i += 2) {
-                addBind(cmd, extraBinds[i], extraBinds[i + 1]);
-            }
-        }
         cmd.add("-w");
         cmd.add("/root");
         cmd.add("/usr/bin/env");
@@ -1847,11 +1843,22 @@ public final class LocalEngine {
         f.delete();
     }
 
+    private static final long LOG_MAX_BYTES = 2L * 1024 * 1024;
+
     public static void log(Context c, String line) {
         try {
             File f = logFile(c);
             File parent = f.getParentFile();
             if (parent != null) parent.mkdirs();
+            // 日志只追加会无限增长；到 2MB 轮转一次，保留上一份给排查。
+            if (parent != null && f.isFile() && f.length() > LOG_MAX_BYTES) {
+                File old = new File(parent, "phone.log.1");
+                try {
+                    if (old.isFile()) old.delete();
+                    f.renameTo(old);
+                } catch (Exception ignored) {
+                }
+            }
             try (FileOutputStream out = new FileOutputStream(f, true)) {
                 out.write(("[" + new java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US)
                         .format(new java.util.Date()) + "] " + line + "\n").getBytes(StandardCharsets.UTF_8));

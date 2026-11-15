@@ -60,7 +60,6 @@ KS_FILE=/path/to/keystore.jks KS_PASS=****** bash build.sh
 ## 注意
 
 - 不要把个人 Tailscale 主机名、局域网 IP、`gui-token.json` 写进源码。
-- 仓库里预编译的 `apk/Claude工作台-通用版-1.0.11.apk` 是用
-  `KS_FILE` 指向个人 keystore 构建的；如果你重新构建并生成新 keystore，
-  签名会不同，需要先卸载旧 App。
+- 仓库不再放预编译通用 APK；请使用 GitHub Releases 的精简包或完整包。
+  重新构建时如果生成新 keystore，签名会不同，需要先卸载旧 App。
 - `apk/` 里不包含 Tailscale 安装包（105 MB），请从官网下载。

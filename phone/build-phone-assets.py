@@ -385,7 +385,7 @@ def build_public():
 <script src="/phone-folder-picker.js?v=__ASSET_TAG__"></script>
 """
     inject = inject.replace("__ASSET_TAG__", ASSET_TAG)
-    for name in ("m.html", "m/index.html"):
+    for name in ("m.html",):
         f = dest / name
         if not f.is_file():
             continue

@@ -1536,6 +1536,24 @@ public class MainActivity extends Activity {
         installPoll = new Runnable() {
             @Override
             public void run() {
+                // 用户关掉弹窗后不再读日志、也不再更新已 detach 的视图；只保留完成检测，
+                // 这样安装完成后仍会自动进入手机端。
+                boolean dialogOpen = installDialog != null && installDialog.isShowing();
+                if (!dialogOpen) {
+                    boolean finished = LocalEngine.isInstalled(MainActivity.this)
+                        && !LocalEngine.isInstalling();
+                    if (finished) {
+                        installDialog = null;
+                        Toast.makeText(MainActivity.this, "手机端环境已安装", Toast.LENGTH_SHORT).show();
+                        refreshHomeStatus();
+                        if (!"pc".equals(mode)) startPhoneMode();
+                        return;
+                    }
+                    if (!LocalEngine.isInstalling() && LocalEngine.lastError() != null
+                        && !LocalEngine.lastError().isEmpty()) return;
+                    handler.postDelayed(this, 2000);
+                    return;
+                }
                 String log = LocalEngine.readLogTail(MainActivity.this, 6000);
                 if (!log.equals(installShown[0])) {
                     View child = scroll.getChildAt(0);
@@ -2180,6 +2198,8 @@ public class MainActivity extends Activity {
                 final String sha = o.optString("sha256", "");
                 final String slimUrl = o.optString("slimApk", "");
                 final String slimSha = o.optString("slimSha256", "");
+                final int fullCode = o.optInt("fullVersionCode", 0);
+                final String fullName = o.optString("fullVersionName", "");
                 final String notes = o.optString("notes", "");
                 final boolean important = o.optBoolean("important", false)
                     || o.optBoolean("importantUpdate", false);
@@ -2202,6 +2222,16 @@ public class MainActivity extends Activity {
                     if (newCode <= oldCode) {
                         showInfoDialog("已是最新版本",
                             "当前版本：" + oldName + "（" + oldCode + "）", "知道了");
+                        return;
+                    }
+                    if (!useSlim && fullCode > 0 && fullCode <= oldCode) {
+                        showInfoDialog("需要完整安装包",
+                            "当前 App 没有安装手机端环境，清单里的完整包是 "
+                                + (fullName.isEmpty() ? String.valueOf(fullCode) : fullName)
+                                + "（" + fullCode + "），低于当前版本 " + oldCode
+                                + "，直接安装会被系统拒绝。\n\n"
+                                + "请到 GitHub Releases 下载最新完整包，或先备份数据后卸载重装。",
+                            "知道了");
                         return;
                     }
                     if (chosenUrl.isEmpty()) {
@@ -2700,23 +2730,51 @@ public class MainActivity extends Activity {
         box.addView(scroll);
 
         final String[] shown = {""};
+        final Dialog[] dlgRef = {null};
+        final java.util.concurrent.atomic.AtomicInteger readSeq =
+            new java.util.concurrent.atomic.AtomicInteger();
+        final boolean[] reading = {false};
+        final boolean[] pendingRead = {false};
         final Runnable[] update = new Runnable[1];
         update[0] = () -> {
-            String full = onlyErrors.isChecked()
-                ? LocalEngine.readLogTail(this, 300000)
-                : LocalEngine.readLog(this);
-            String next = onlyErrors.isChecked() ? filterErrorLog(full) : full;
-            if (next.equals(shown[0])) return;
-            View child = scroll.getChildAt(0);
-            boolean atBottom = child == null || child.getHeight() == 0
-                || child.getBottom() - (scroll.getHeight() + scroll.getScrollY()) < dp(32);
-            int keepY = scroll.getScrollY();
-            shown[0] = next;
-            tv.setText(next);
-            scroll.post(() -> {
-                if (atBottom) scroll.fullScroll(View.FOCUS_DOWN);
-                else scroll.scrollTo(0, keepY);
-            });
+            if (reading[0]) {
+                pendingRead[0] = true;
+                return;
+            }
+            reading[0] = true;
+            final int seq = readSeq.incrementAndGet();
+            final boolean errorsOnly = onlyErrors.isChecked();
+            new Thread(() -> {
+                String next;
+                try {
+                    String full = errorsOnly
+                        ? LocalEngine.readLogTail(this, 300000)
+                        : LocalEngine.readLog(this);
+                    next = errorsOnly ? filterErrorLog(full) : full;
+                } catch (Exception e) {
+                    next = null;
+                }
+                final String result = next;
+                handler.post(() -> {
+                    reading[0] = false;
+                    boolean again = pendingRead[0];
+                    pendingRead[0] = false;
+                    if (result != null && seq == readSeq.get() && dlgRef[0] != null
+                            && dlgRef[0].isShowing() && !result.equals(shown[0])) {
+                        View child = scroll.getChildAt(0);
+                        boolean atBottom = child == null || child.getHeight() == 0
+                            || child.getBottom() - (scroll.getHeight() + scroll.getScrollY()) < dp(32);
+                        int keepY = scroll.getScrollY();
+                        shown[0] = result;
+                        tv.setText(result);
+                        scroll.post(() -> {
+                            if (atBottom) scroll.fullScroll(View.FOCUS_DOWN);
+                            else scroll.scrollTo(0, keepY);
+                        });
+                    }
+                    if (again && dlgRef[0] != null && dlgRef[0].isShowing()) update[0].run();
+                });
+            }, "phone-log-read").start();
         };
 
         final Dialog dlg = showDarkDialog("手机端运行日志", "自动刷新", box,
@@ -2733,8 +2791,10 @@ public class MainActivity extends Activity {
                 Toast.makeText(this, "已清空", Toast.LENGTH_SHORT).show();
                 return false;
             }, MUTED, false, 0);
+        dlgRef[0] = dlg;
         onlyErrors.setOnCheckedChangeListener((b, checked) -> {
             shown[0] = "";
+            readSeq.incrementAndGet();
             update[0].run();
         });
         final Runnable[] refresh = new Runnable[1];
@@ -2744,6 +2804,7 @@ public class MainActivity extends Activity {
             handler.postDelayed(refresh[0], 1000);
         };
         dlg.setOnDismissListener(d -> {
+            readSeq.incrementAndGet();
             handler.removeCallbacks(refresh[0]);
             refreshSettingsDialogStatus();
         });
@@ -2982,14 +3043,9 @@ public class MainActivity extends Activity {
             "return '';})()",
             value -> {
                 if (value != null && !value.equals("null") && !value.equals("\"\"")) return;
-                webView.evaluateJavascript(
-                    "(function(){var l=document.getElementById('listScreen');" +
-                    "return !!(l && !l.hidden && l.offsetParent!==null);})()",
-                    atList -> {
-                        // 不再沿 WebView 历史回退到上一个模式（电脑端/手机端会互相串）。
-                        // 页面内的弹窗/对话返回已由上面的 JS 处理；这里统一回主页。
-                        showHome();
-                    });
+                // 不再沿 WebView 历史回退到上一个模式（电脑端/手机端会互相串）。
+                // 页面内的弹窗/对话返回已由上面的 JS 处理；这里统一回主页。
+                showHome();
             });
     }
 
@@ -3049,6 +3105,10 @@ public class MainActivity extends Activity {
         EngineService.notifyTaskStatusChanged(this);
         maybeAutoEnableAccessibility();
         refreshHomeStatus();
+        if ("home".equals(mode)) {
+            handler.removeCallbacks(homeStatusPoll);
+            handler.postDelayed(homeStatusPoll, 3000);
+        }
         refreshSettingsDialogStatus();
         checkImportantUpdateSilently();
     }
@@ -3056,6 +3116,8 @@ public class MainActivity extends Activity {
     @Override
     protected void onPause() {
         resumed = false;
+        // 回后台后主页状态轮询没有必要继续跑；onResume 会重新排。
+        handler.removeCallbacks(homeStatusPoll);
         PhoneControlServer.setAppForeground(false);
         super.onPause();
     }

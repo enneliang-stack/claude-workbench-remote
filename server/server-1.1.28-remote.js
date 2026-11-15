@@ -2233,6 +2233,7 @@ const sseClients = new Map();
 let runners = new Map(); // convId -> Runner
 
 function broadcast(ev) {
+  if (sseClients.size === 0) return;
   const payload = 'data: ' + JSON.stringify(ev) + '\n\n';
   for (const [res, state] of sseClients) {
     try {
@@ -2397,6 +2398,7 @@ class Runner {
     this.lastCostUsd = 0;
     this.toolByIndex = new Map();
     this.pendingPerms = new Map();
+    this.permTimers = new Map();
     this.turnId = null;
     this.mode = conv.permissionMode;
     this.model = conv.model || '';
@@ -2418,6 +2420,13 @@ class Runner {
     this.askTimers = new Map();
     this.askMeta = new Map();
     this.permMeta = new Map();
+  }
+
+  clearPerms() {
+    for (const t of this.permTimers.values()) clearTimeout(t);
+    this.permTimers.clear();
+    this.pendingPerms.clear();
+    this.permMeta.clear();
   }
 
   clearAsks() {
@@ -2939,7 +2948,8 @@ class Runner {
         });
         // 普通权限 5 分钟无响应就拒绝；方向性交互（如 ExitPlanMode）等 30 分钟，
         // 仍无人处理就安全取消，避免进程一直挂着。
-        setTimeout(() => {
+        const timer = setTimeout(() => {
+          this.permTimers.delete(requestId);
           if (!this.pendingPerms.has(requestId)) return;
           this.respondPermission(
             requestId,
@@ -2949,6 +2959,7 @@ class Runner {
               : undefined
           );
         }, requiresInteraction ? ASK_MAJOR_MS : 5 * 60 * 1000);
+        this.permTimers.set(requestId, timer);
       }
       return;
     }
@@ -3085,6 +3096,11 @@ class Runner {
     if (!this.pendingPerms.has(requestId)) return false;
     const input = this.pendingPerms.get(requestId);
     const meta = this.permMeta.get(requestId) || {};
+    const timer = this.permTimers.get(requestId);
+    if (timer) {
+      clearTimeout(timer);
+      this.permTimers.delete(requestId);
+    }
     this.pendingPerms.delete(requestId);
     this.permMeta.delete(requestId);
     if (this.live && this.live.permission && this.live.permission.requestId === requestId) {
@@ -3207,10 +3223,13 @@ class Runner {
   }
 
   stop() {
-    if (!this.child) return;
+    if (!this.child) {
+      this.clearPerms();
+      this.clearAsks();
+      return;
+    }
     this.stopping = true;
-    this.pendingPerms.clear();
-    this.permMeta.clear();
+    this.clearPerms();
     this.clearAsks();
     try { this.child.kill(); } catch { /* ignore */ }
   }
@@ -3224,7 +3243,7 @@ class Runner {
     this.busy = false;
     this.live = null;
     this.pendingSteers = [];
-    this.permMeta.clear();
+    this.clearPerms();
     this.clearAsks();
     this.clearIdle();
   }
@@ -4214,11 +4233,10 @@ async function handleApi(req, res, url) {
 
     // 手机端分页：默认不传 limit 保持电脑端行为（返回全部）。
     // 手机传 limit + light + compact，只返回最后一页并只带摘要。
+    // 先按原始条数切片，再只压缩当前页；否则 limit=1 的轮询也会为整份历史建对象。
     const light = url.searchParams.get('light') === '1';
     const compact = url.searchParams.get('compact') === '1';
     const limitParam = url.searchParams.get('limit');
-    if (compact) messages = compactMessages(messages);
-    else if (light) messages = lightenMessages(messages);
     const total = messages.length;
     let start = 0;
     let end = total;
@@ -4233,6 +4251,8 @@ async function handleApi(req, res, url) {
       hasMore = start > 0;
       messages = messages.slice(start, end);
     }
+    if (compact) messages = compactMessages(messages);
+    else if (light) messages = lightenMessages(messages);
 
     const s = state.conversations[id];
     const liveRunner = runners.get(id);

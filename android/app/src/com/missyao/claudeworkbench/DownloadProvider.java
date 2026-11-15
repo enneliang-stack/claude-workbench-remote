@@ -172,7 +172,7 @@ public class DownloadProvider extends ContentProvider {
         return mimeOf(name == null ? "" : name);
     }
 
-    private static String mimeOf(String name) {
+    static String mimeOf(String name) {
         if (name == null) name = "";
         int dot = name.lastIndexOf('.');
         String ext = dot >= 0 ? name.substring(dot + 1).toLowerCase() : "";

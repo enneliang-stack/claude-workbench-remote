@@ -7,7 +7,6 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
-import android.content.pm.ServiceInfo;
 import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
@@ -30,8 +29,6 @@ public class EngineService extends Service {
     public static final String ACTION_START = "com.missyao.claudeworkbench.engine.START";
     public static final String ACTION_STOP = "com.missyao.claudeworkbench.engine.STOP";
     public static final String ACTION_INSTALL = "com.missyao.claudeworkbench.engine.INSTALL";
-    private static final String PREFS = "engine";
-    private static final String PREF_ENABLED = "enabled";
 
     private PowerManager.WakeLock wakeLock;
     private Handler statusHandler;
@@ -46,21 +43,18 @@ public class EngineService extends Service {
     }
 
     public static void start(Context c) {
-        c.getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(PREF_ENABLED, true).apply();
         Intent i = new Intent(c, EngineService.class).setAction(ACTION_START);
         if (Build.VERSION.SDK_INT >= 26) c.startForegroundService(i);
         else c.startService(i);
     }
 
     public static void install(Context c) {
-        c.getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(PREF_ENABLED, true).apply();
         Intent i = new Intent(c, EngineService.class).setAction(ACTION_INSTALL);
         if (Build.VERSION.SDK_INT >= 26) c.startForegroundService(i);
         else c.startService(i);
     }
 
     public static void stop(Context c) {
-        c.getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(PREF_ENABLED, false).apply();
         Intent i = new Intent(c, EngineService.class).setAction(ACTION_STOP);
         c.startService(i);
     }

@@ -5,7 +5,6 @@ import android.accessibilityservice.GestureDescription;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
-import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.graphics.Bitmap;
@@ -40,11 +39,11 @@ import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
+import java.util.regex.Pattern;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.Executor;
@@ -60,6 +59,9 @@ public final class PhoneControlServer {
     private static final int MAX_UI_NODES = 600;
     private static final int MAX_TREE = 1800;
     private static final int MAX_BODY = 2 * 1024 * 1024;
+    private static final Pattern SENSITIVE_DIGITS =
+        Pattern.compile("(?<!\\d)(?:\\d[ -]?){12,18}\\d(?!\\d)");
+    private static final Pattern OTP_CODE = Pattern.compile("\\d{4,8}");
     private static final Object LOCK = new Object();
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
     private static final Executor MAIN_EXEC = command -> {
@@ -230,17 +232,6 @@ public final class PhoneControlServer {
 
     public static void onPhoneChatHidden() {
         phoneChatConv = "";
-    }
-
-    /** 用户回到 App 手机页、看到任务结束后，清掉“任务已完成”提示，避免以后再弹。 */
-    public static void markCompletionSeen() {
-        TaskStatus.clearCompleted();
-        if (!claudeRunning) {
-            completionPending = false;
-            completionConv = "";
-            lastText = "";
-            lastActionAt = 0;
-        }
     }
 
     /** 悬浮窗绿色 ✓：只收起「任务已完成」提示，不打开 App。 */
@@ -614,18 +605,24 @@ public final class PhoneControlServer {
 
     private static void handle(Socket socket) {
         Socket s = socket;
+        String action = "";
+        boolean actionStarted = false;
+        boolean actionEnded = false;
         try {
             s.setSoTimeout(15000);
             InputStream in = new BufferedInputStream(s.getInputStream());
             ByteArrayOutputStream headBuf = new ByteArrayOutputStream();
             int b;
+            // 只保留最近 3 个字节判断 \r\n\r\n，避免每读一字节就复制整个 header。
+            int p1 = -1;
+            int p2 = -1;
+            int p3 = -1;
             while ((b = in.read()) >= 0) {
                 headBuf.write(b);
-                if (headBuf.size() >= 4) {
-                    byte[] h = headBuf.toByteArray();
-                    int n = h.length;
-                    if (h[n - 4] == 13 && h[n - 3] == 10 && h[n - 2] == 13 && h[n - 1] == 10) break;
-                }
+                if (p3 == 13 && p2 == 10 && p1 == 13 && b == 10) break;
+                p3 = p2;
+                p2 = p1;
+                p1 = b;
                 if (headBuf.size() > 32768) break;
             }
             if (headBuf.size() == 0) return;
@@ -685,8 +682,9 @@ public final class PhoneControlServer {
                 respond(s.getOutputStream(), 200, error("用户正在悬浮窗插话/暂停，手机操作已暂停"));
                 return;
             }
-            String action = actionTextFor(path, body);
-            if (!"/status".equals(path)) beginAction(action);
+            action = actionTextFor(path, body);
+            actionStarted = !"/status".equals(path);
+            if (actionStarted) beginAction(action);
             switch (path) {
                 case "/status":
                     result = status();
@@ -721,7 +719,10 @@ public final class PhoneControlServer {
                 default:
                     result = error("未知接口：" + path);
             }
-            if (!"/status".equals(path)) endAction(action, result.optBoolean("ok", false));
+            if (actionStarted) {
+                endAction(action, result.optBoolean("ok", false));
+                actionEnded = true;
+            }
             audit(path, body, result);
             respond(s.getOutputStream(), 200, result);
         } catch (Exception e) {
@@ -730,6 +731,8 @@ public final class PhoneControlServer {
             } catch (Exception ignored) {
             }
         } finally {
+            // 工具方法抛异常时也要复位 toolBusy/actionText，否则悬浮窗会一直显示“正在…”。
+            if (actionStarted && !actionEnded) endAction(action, false);
             try {
                 s.close();
             } catch (Exception ignored) {
@@ -861,7 +864,7 @@ public final class PhoneControlServer {
     }
 
     private static void collect(AccessibilityNodeInfo node, JSONArray out, int depth, int[] count, int max) {
-        if (node == null || depth > 24 || count[0] >= MAX_TREE) return;
+        if (node == null || depth > 24 || count[0] >= MAX_TREE || out.length() >= max) return;
         count[0]++;
         Rect rect = new Rect();
         node.getBoundsInScreen(rect);
@@ -904,6 +907,7 @@ public final class PhoneControlServer {
         }
         int n = node.getChildCount();
         for (int i = 0; i < n; i++) {
+            if (out.length() >= max || count[0] >= MAX_TREE) break;
             AccessibilityNodeInfo child = null;
             try {
                 child = node.getChild(i);
@@ -945,7 +949,7 @@ public final class PhoneControlServer {
     /** 银行卡号、身份证号这类 13-19 位长数字不交给模型。 */
     private static String redactSensitiveDigits(String s) {
         if (s == null || s.isEmpty()) return s == null ? "" : s;
-        return s.replaceAll("(?<!\\d)(?:\\d[ -]?){12,18}\\d(?!\\d)", "[数字已隐藏]");
+        return SENSITIVE_DIGITS.matcher(s).replaceAll("[数字已隐藏]");
     }
 
     /** 验证码界面里单独出现的 4-8 位数字也隐藏。 */
@@ -966,10 +970,10 @@ public final class PhoneControlServer {
             JSONObject o = nodes.optJSONObject(i);
             if (o == null) continue;
             try {
-                if (o.optString("text", "").trim().matches("\\d{4,8}")) {
+                if (OTP_CODE.matcher(o.optString("text", "").trim()).matches()) {
                     o.put("text", "[验证码已隐藏]");
                 }
-                if (o.optString("desc", "").trim().matches("\\d{4,8}")) {
+                if (OTP_CODE.matcher(o.optString("desc", "").trim()).matches()) {
                     o.put("desc", "[验证码已隐藏]");
                 }
             } catch (Exception ignored) {

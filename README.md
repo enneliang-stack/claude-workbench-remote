@@ -11,14 +11,15 @@
 电脑端使用方式：安装 1.2.0+ 的统一客户端，侧栏「手机连接」里开启访问并复制地址；
 手机 App 粘贴地址即可。同一 Wi-Fi 不需要 Tailscale 账号。
 
-## 最新 APK（2.4.109 精简 / 2.4.51 完整）
+## 最新 APK（2.4.112 精简 / 2.4.51 完整）
 
 - 完整包（新用户/未装环境）：`ClaudeWorkbench-full.apk`，2.4.51，202,562,281 字节（约 194 MB）
   SHA-256：`3bc07db344928c6b7b3def58f6c6bc80feeffb86e9c95faba1cfb524fe76c8eb`
   下载：`https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.51/ClaudeWorkbench-full.apk`
-- 精简包（已装手机环境）：`ClaudeWorkbench-slim.apk`，2.4.109，8,559,372 字节（约 8.2 MB）
-  SHA-256：`4558401a41cf46326eaa5a3dc408d23fad5711249952cff6e8e04f86456b0abd`
-  下载：`https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.109/ClaudeWorkbench-slim.apk`
+- 精简包（已装手机环境）：`ClaudeWorkbench-slim.apk`，2.4.112，8,559,294 字节（约 8.2 MB）
+  SHA-256：`7003d0061c06831a337e15f61036f38f299392ffbab912c92df6680e68efefd2`
+  下载：`https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.112/ClaudeWorkbench-slim.apk`
+- 2.4.112：手机页上滑加载优化、增量插入、历史过程懒展开、刷新保留已加载历史；APP 增加 GUI token 缓存、日志弹窗后台读取、下载索引恢复、手机控制异常复位、日志轮转和拍照缓存清理。手机页资源版本 106，对应 PC 客户端 1.2.43。
 - 2.4.109：手机本机页新建/删除文件夹改为标题下方的「新建文件夹」「选择此文件夹」按钮；删除改为长按文件夹确认，仅允许删除 APP 新建的文件夹，并级联清理其中的对话；旧版 APP 新建文件夹自动补记；已下载文件支持多选/全选/批量删除。手机页资源版本 103，对应 PC 客户端 1.2.42。
 - 2.4.106：手机页任务结束后的用时自动换算，60 秒以上显示 Xm Ys、60 分钟以上显示 Xh Ym Zs；与 PC 客户端 1.2.39 一致。手机页资源版本 100。
 - 2.4.105：手机页历史分组和 PC 一致，插话产生的中间白字收进过程，插话在收起时显示在过程条上方、展开后回到原位置；已编辑文件按整轮汇总一次。
@@ -126,42 +127,26 @@
 ## 目录
 
 ```
-overlay/claude-gui/        手机页、图标、远程开关（复制到客户端目录）
-server/                    server-1.1.28-remote.js（适配 1.1.28 的远程版服务端）
-patch/                     server-1.1.28-remote.patch（干净版 → 远程版，供维护者参考）
-install/                   一键安装器
+overlay/claude-gui/        手机页、图标（同步源，构建 APK 时复制）
+server/                    server-1.1.28-remote.js（手机本机页服务端基线，仍用于生成 APK 资源）
 android/                   Android 双模式源码（电脑远程 + 手机本地）
 phone/                     手机端资源生成脚本和设计说明（Alpine/proot/Node）
 pc/                        PC 端公网 IPv6 直连、无障碍一次性授权脚本
-apk/                       双模式 APK、通用版 APK、安装说明
+apk/                       双模式 APK 更新清单和安装说明
 ```
 
 ## 安装（其他用户）
 
-前提：已经装好 Claude 工作台客户端 **1.1.28**，并且客户端能正常启动。
+1. 安装 **1.2.0 及以上版本的统一客户端**（客户端更新包已包含手机页、远程接口和 APK 下载入口）。
+   新用户先装最新的全量客户端，再用客户端内「更新」升级到当前版本。
+2. 电脑端侧栏打开「手机连接」，按弹窗提示开启手机访问；同一 Wi-Fi 不需要 Tailscale 账号。
+3. 手机安装本仓库 Releases 里的最新完整包（新用户）或精简包（已装过手机环境）：
+   <https://github.com/enneliang-stack/claude-workbench-remote/releases/latest>
+4. 手机 App 首次打开粘贴电脑端显示的地址；同一 Wi-Fi 或 Tailscale 均可。
+5. 手机本机模式（proot + Alpine）首次安装约 500 MB，需 1.8 GB 空间。
 
-客户端本体（不含远程功能）从这里装：
-
-- 全量一键部署 **1.1.21**（646 MB，包含 Python 3.13、PowerShell 7.6.9、jq、Electron；
-  安装时自动配置环境）：
-  <https://github.com/enneliang-stack/claude-workbench-update/releases/tag/v1.1.21>
-  - 国内加速直链：
-    <https://ghfast.top/https://github.com/enneliang-stack/claude-workbench-update/releases/download/v1.1.21/ClaudeWorkbench-Setup-1.1.21.exe>
-- 装完后用客户端的「更新」按钮升级到 **1.1.28**（或者用 1.1.28 离线更新包）。
-  1.1.28 是客户端增量更新（约 4.5 MB，不含 Python/PowerShell/jq）；
-  新用户就是「1.1.21 全量包 → 1.1.28 更新」。
-- 客户端 1.1.28 装好后再运行下面的远程安装器。
-
-1. 把整个仓库下载/解压到任意目录（不要只拿 `server.js`）。
-2. 双击 `install\一键安装手机远程控制.cmd`。
-   - 安装器会自动找 `E:\AI_Claude\claude-gui`、用户目录下的 `AI_Claude\claude-gui` 等常见位置；
-   - 找不到时会提示输入客户端目录；
-   - 安装前会备份 `server.js` 和会被覆盖的手机页到 `data\backups\remote-install-*`；
-   - 如果客户端版本不是 1.1.28，会拒绝安装（避免把不匹配的服务端换上去）。
-3. 从托盘退出工作台，再双击客户端的 `启动界面.cmd` 重新打开。
-4. 双击客户端的 `远程访问.cmd`，窗口会打印手机地址（带 token）。
-5. 手机安装 `apk\Claude工作台-通用版-1.0.11.apk`；第一次打开把第 4 步的地址粘贴进去。
-   也可以不用 APK：手机 Chrome 打开第 4 步的 HTTPS 地址，菜单里选「安装应用」。
+> 1.1.x 的「一键安装手机远程控制」安装器、通用版 1.0.11 APK 和远程版 server 仅保留作历史参考，
+> 不再适用于当前统一客户端。
 
 关闭远程访问：双击客户端的 `关闭远程访问.cmd`。
 
@@ -196,42 +181,10 @@ pc\开启IPv6直连.cmd
 - 通用版和原来的个人版使用同一个包名/签名时可以直接覆盖安装；如果签名不同，
   需要先卸载旧版。卸载不会删除电脑上的对话记录。
 
-## 和主客户端更新包的关系（重要）
+## 和主客户端更新包的关系（1.2.0+）
 
-- **主客户端核心更新**：只改 `E:\AI_Claude\claude-update-src`（干净更新源），
-  用 `E:\AI_Claude\deploy\update\build-client-update-<版本>.ps1` 打包。
-  更新包里不能出现 `public/m.*`、`tools/remote-control.js`、`/api/remote` 等远程内容。
-- **手机/远程功能**：只改这个仓库。主客户端更新包不包含这里的内容。
-- 主客户端更新包的打包脚本 `pack-update.ps1` 会检查 `server.js`；
-  如果误从已装远程功能的运行目录打包，会自动用
-  `deploy/update/remote-changes.patch` 把远程改动反向剥离，剥离失败就中止。
-- 客户端核心升级后：远程版 `server.js` 是按版本适配的，旧版不能直接套在新版客户端上。
-  要么等待这个仓库更新 `server/server-<新版本>-remote.js`，要么按下面的步骤重新生成。
-
-## 客户端升级后怎么重新适配
-
-1. 从主客户端更新源 `claude-update-src` 取新版本的干净 `server.js`。
-2. 把远程改动重新应用到新 `server.js` 上，得到新的
-   `server/server-<新版本>-remote.js`。
-3. 生成补丁（在仓库根目录执行，Git Bash）：
-
-   ```bash
-   diff -u --label a/claude-gui/server.js --label b/claude-gui/server.js \
-     <干净server.js> <新远程版server.js> > patch/server-<新版本>-remote.patch
-   ```
-
-4. 改 `install/install-remote.ps1` 里的 `$expectedVersion` 和 `$serverFile`。
-5. 如果远程改动和客户端新代码冲突，以客户端新代码为准重新实现；
-   不要为了保留远程功能而改主客户端更新包。
-
-更推荐的做法：给这个仓库建 `remote` 分支，主客户端干净版建 `client` 分支；
-客户端升级时把 `client` 合进 `remote`，冲突在 `remote` 里解决。
-主客户端更新包始终只从 `client` 打包。
-
-## 安全
-
-- `data/gui-token.json` 是访问令牌，等于手机端的登录密码；不要发给别人，
-  也不要提交到这个仓库。
-- 局域网 HTTP 下 token 不加密；只在自己家的 Wi-Fi 或 Tailscale 下开启。
-- Tailscale HTTPS 地址只有同一账号下的设备能访问；仍然不要公开 token。
-- 这个仓库不包含任何人的 `gui-token.json`、个人 Tailscale 主机名或已配置好的 APK。
+- 手机页、远程接口、APK 下载入口都已并入统一客户端；打包客户端更新时必须传
+  `-AllowRemote`，不要再使用 `remote-changes.patch` 反向剥离。
+- 手机本机页服务端由 `phone/build-phone-assets.py` 从
+  `server/server-1.1.28-remote.js` 生成。
+- 旧的 1.1.x「一键安装手机远程控制」安装器和 patch 目录已移除，不要再用。

@@ -1,10 +1,12 @@
 {
-  "versionCode": 150,
-  "versionName": "2.4.109",
+  "versionCode": 153,
+  "versionName": "2.4.112",
   "apk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.51/ClaudeWorkbench-full.apk",
   "sha256": "3bc07db344928c6b7b3def58f6c6bc80feeffb86e9c95faba1cfb524fe76c8eb",
+  "fullVersionCode": 92,
+  "fullVersionName": "2.4.51",
   "slimApk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/latest/download/ClaudeWorkbench-slim.apk",
-  "slimSha256": "4558401a41cf46326eaa5a3dc408d23fad5711249952cff6e8e04f86456b0abd",
+  "slimSha256": "7003d0061c06831a337e15f61036f38f299392ffbab912c92df6680e68efefd2",
   "important": false,
-  "notes": "2.4.109 更新\n\n- 手机本机页「选择手机文件夹」：去掉顶部删除按钮，「新建文件夹」和「选择此文件夹」放到标题下方。\n- 文件夹删除改为长按文件夹弹出确认；仅允许删除通过 APP 新建的文件夹，长按普通文件夹只提示。\n- 删除 APP 新建文件夹时，会同时清理其中的对话和会话记录。\n- 旧版通过 APP 新建但没有记录的文件夹，升级后会自动补记。\n- 「已下载文件」页面新增多选、全选和批量删除。\n- 手机页资源版本 103，对应 PC 客户端 1.2.42。"
+  "notes": "2.4.112 更新\n\n- 手机页上滑加载优化：上滑提前预取、旧消息增量插入、历史过程正文点开才构建、加载更早按钮加载中禁用。\n- 任务结束/回前台刷新时保留已上滑加载的更早消息，不再截回最新 100 条。\n- 手机控制工具异常时复位「正在…」状态；/ui 的 max_nodes 生效并预编译敏感数字/验证码正则。\n- 日志 2MB 轮转；拍照临时文件按时间/数量清理；主页状态轮询在后台暂停。\n- GUI token 缓存、日志弹窗后台读取、精简包/完整包版本校验、下载索引损坏恢复。\n- 手机页资源版本 106，对应 PC 客户端 1.2.43。"
 }

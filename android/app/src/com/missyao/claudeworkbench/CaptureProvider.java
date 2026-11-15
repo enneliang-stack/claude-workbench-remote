@@ -32,8 +32,25 @@ public class CaptureProvider extends ContentProvider {
     }
 
     static File newCaptureFile(Context c) {
+        File d = dir(c);
+        cleanupOld(d);
         String name = "capture_" + System.currentTimeMillis() + ".jpg";
-        return new File(dir(c), name);
+        return new File(d, name);
+    }
+
+    /** 拍照临时文件只在 cache 里，成功上传后原实现不删除；按时间/数量做一次轻量清理。 */
+    private static void cleanupOld(File dir) {
+        File[] files = dir.listFiles();
+        if (files == null || files.length == 0) return;
+        java.util.Arrays.sort(files, (a, b) -> Long.compare(b.lastModified(), a.lastModified()));
+        long cutoff = System.currentTimeMillis() - 24L * 3600 * 1000;
+        for (int i = 0; i < files.length; i++) {
+            File f = files[i];
+            if (!f.isFile()) continue;
+            if (i >= 20 || f.lastModified() < cutoff) {
+                try { f.delete(); } catch (Exception ignored) { /* ignore */ }
+            }
+        }
     }
 
     static Uri uriFor(File file) {

@@ -78,10 +78,6 @@ public final class TaskStatus {
         return pageRunning || localRunning > 0;
     }
 
-    public static synchronized boolean isPageTaskRunning() {
-        return pageRunning;
-    }
-
     public static synchronized boolean isPageTaskRemote() {
         return pageRemote;
     }
@@ -92,10 +88,6 @@ public final class TaskStatus {
 
     public static synchronized String completionConv() {
         return pageConv;
-    }
-
-    public static synchronized String pageTitle() {
-        return pageTitle;
     }
 
     public static synchronized String notificationText() {

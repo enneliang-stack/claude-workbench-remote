@@ -24,6 +24,7 @@
     boot: null,
     convId: null,
     conv: null,
+    loadSeq: 0,             // 快速切换对话时丢弃过期请求
     live: null,
     running: false,
     needsResumeSync: false, // 后台期间可能漏 run_end：回前台/发送前要重新对齐服务器状态
@@ -68,7 +69,6 @@
     liveProcessBody: null,
     liveProcessMeta: null,
     liveProcessState: null,
-    liveProcessCollapse: null,
     conn: false,
     wasDown: false,
     es: null
@@ -583,6 +583,7 @@
       saveDraft(S.convId);
       persistDraftNow(S.convId, true);
     }
+    const seq = ++S.loadSeq;
     stopConvSync();
     if (push) {
       try { history.pushState({ conv: id }, '', '#c=' + encodeURIComponent(id)); } catch { /* ignore */ }
@@ -622,6 +623,7 @@
     updateComposer();
     try {
       const data = await api('/api/conversation?id=' + encodeURIComponent(id) + '&limit=30&light=1&compact=1', { timeout: 30000 });
+      if (seq !== S.loadSeq || S.convId !== id) return;
       renderConversation(data);
       restoreDraft(id);
       try {
@@ -630,12 +632,14 @@
         }
       } catch { /* 非 App 环境 */ }
     } catch (e) {
+      if (seq !== S.loadSeq || S.convId !== id) return;
       toast('打开失败：' + e.message, 'err');
       closeChat(false);
     }
   }
 
   function closeChat(push = true) {
+    S.loadSeq++;
     if (push && history.state && history.state.conv) {
       history.back();
       return;
@@ -648,6 +652,8 @@
     S.convId = null;
     S.conv = null;
     S.live = null;
+    S.liveEls.clear();
+    resetLiveProcess();
     S.running = false;
     stopLivePolling();
     S.pendingPerm = null;
@@ -671,6 +677,11 @@
     renderPendingQuotes();
     renderPendingFiles();
     renderTodoBar();
+    hideSelToolbar();
+    try {
+      const sel = window.getSelection();
+      if (sel) sel.removeAllRanges();
+    } catch { /* ignore */ }
     showChat(false);
     loadBoot().catch(() => {});
   }
@@ -686,7 +697,8 @@
     // 任务已经结束：历史里已经有这条用户消息，本地乐观回声不能再画一次
     if (!S.running) S.pendingEcho = null;
     if (S.running) notifyPageTask(true);
-    S.loadingOlder = false;
+    // 打开/切换对话时才重置；后台同步不能把进行中的“加载更早消息”状态清掉。
+    if (!keepScroll) S.loadingOlder = false;
     S.conv.start = Number.isFinite(data.start) ? data.start : 0;
     S.conv.hasMore = !!data.hasMore;
     S.conv.total = Number.isFinite(data.total) ? data.total : (data.messages || []).length;
@@ -705,6 +717,10 @@
     if (!keepScroll) {
       readingHistory = false;
       lastScrollTop = 0;
+      lastUserScrollAt = 0;
+      olderBoundaryHit = false;
+      scrollVelocity = 0;
+      lastScrollEventAt = 0;
     }
     // 用户正在看历史时，不重建消息 DOM：重建后位置很难完全对上，
     // 等滚回底部（或重新打开对话）再对齐，避免结束时页面跳动
@@ -865,10 +881,10 @@
 
   /** 一轮任务里连续的 assistant 消息合并成一张卡片，过程只留一行；
       最后一次工具调用之后的最终结论全部保留，避免被最后一条覆盖。 */
-  function groupedHistory() {
+  function groupedHistory(list) {
     const out = [];
     let cur = null;
-    for (const m of historyForRender()) {
+    for (const m of (list || historyForRender())) {
       if (m.role === 'assistant') {
         // 主轮已有最终结论才另起一组；主轮停在工具上时，通知续跑并入同一组。
         if (m.breakBefore && cur && groupHasFinalText(cur)) cur = null;
@@ -936,24 +952,6 @@
     return out;
   }
 
-  let olderObserver = null;
-
-  /** 顶部的「加载更早消息」进入视口就自动补一页；保留按钮给不支持观察器的环境。 */
-  function watchOlderButton() {
-    const box = $('#messages');
-    const btn = box && box.querySelector('.load-older');
-    if (olderObserver) {
-      olderObserver.disconnect();
-      olderObserver = null;
-    }
-    if (!btn || !('IntersectionObserver' in window)) return;
-    olderObserver = new IntersectionObserver(entries => {
-      if (document.hidden) return;
-      if (entries.some(e => e.isIntersecting)) loadOlderMessages();
-    }, { root: box, rootMargin: '40px 0px 0px 0px', threshold: 0 });
-    olderObserver.observe(btn);
-  }
-
   function renderMessages(forceBottom = false, anchor = null) {
     const box = $('#messages');
     // 重建 DOM 前记住位置：用户正在往回翻时，不要被新过程块强行拽到底部
@@ -971,7 +969,7 @@
     // 用户正在阅读时，记下视口里第一条消息及它的屏幕位置；
     // 回合结束时整段 DOM 会重建，只恢复 scrollTop 会因上方高度变化而跳位
     let scrollAnchor = null;
-    if (!forceBottom && !wasNear) {
+    if (!anchor && !forceBottom && !wasNear) {
       const boxTop = box.getBoundingClientRect().top;
       const nodes = box.querySelectorAll('[data-mi]');
       for (const node of nodes) {
@@ -985,9 +983,16 @@
     box.innerHTML = '';
 
     if (S.conv && S.conv.hasMore) {
-      const older = el('button', 'load-older', '↑ 加载更早消息');
+      // 加载中途若有实时事件触发重建，新按钮也要保持“正在加载”状态。
+      const older = el('button', 'load-older',
+        S.loadingOlder ? '正在加载更早消息…' : '↑ 加载更早消息');
       older.type = 'button';
-      older.onclick = () => loadOlderMessages();
+      older.disabled = !!S.loadingOlder;
+      older.classList.toggle('loading', !!S.loadingOlder);
+      older.onclick = () => {
+        if (S.loadingOlder) return;
+        loadOlderMessages(true);
+      };
       box.appendChild(older);
     }
 
@@ -1016,27 +1021,34 @@
     live.id = 'liveTurn';
     box.appendChild(live);
     if (S.live) renderLiveTurn();
-    else if (S.pendingEcho) {
-      // 服务器历史里已经有这条用户消息时不再重复画（后台回来/任务刚结束的常见情况）
-      const echo = S.pendingEcho;
-      const msgs = (S.conv && S.conv.messages) || [];
-      let lastUser = null;
-      for (let i = msgs.length - 1; i >= 0; i--) {
-        if (msgs[i] && msgs[i].role === 'user') { lastUser = msgs[i]; break; }
+    else {
+      // 没有运行中的实时区了：旧 liveEls/过程引用指向已脱离文档的节点，顺手释放。
+      S.liveEls.clear();
+      resetLiveProcess();
+      if (S.pendingEcho) {
+        // 服务器历史里已经有这条用户消息时不再重复画（后台回来/任务刚结束的常见情况）
+        const echo = S.pendingEcho;
+        const msgs = (S.conv && S.conv.messages) || [];
+        let lastUser = null;
+        for (let i = msgs.length - 1; i >= 0; i--) {
+          if (msgs[i] && msgs[i].role === 'user') { lastUser = msgs[i]; break; }
+        }
+        let dup = false;
+        if (lastUser && String(lastUser.text || '') === String(echo.text || '') &&
+            !!lastUser.steer === !!echo.steer) {
+          const lt = lastUser.ts ? Date.parse(lastUser.ts) : 0;
+          const et = echo.ts ? Date.parse(echo.ts) : 0;
+          dup = !lt || !et || Math.abs(lt - et) < 120000;
+        }
+        if (!dup) live.appendChild(userNode(echo));
       }
-      let dup = false;
-      if (lastUser && String(lastUser.text || '') === String(echo.text || '') &&
-          !!lastUser.steer === !!echo.steer) {
-        const lt = lastUser.ts ? Date.parse(lastUser.ts) : 0;
-        const et = echo.ts ? Date.parse(echo.ts) : 0;
-        dup = !lt || !et || Math.abs(lt - et) < 120000;
-      }
-      if (!dup) live.appendChild(userNode(echo));
     }
 
     if (anchor) {
       // 往上补了内容：保持当前正在看的那一段不动
-      box.scrollTop = anchor.top + (box.scrollHeight - anchor.h);
+      box.scrollTop = Math.max(0, anchor.top + (box.scrollHeight - anchor.h));
+      readingHistory = true;
+      lastScrollTop = box.scrollTop;
     } else if (forceBottom || wasNear || oldGap < box.clientHeight) {
       // 离底部不足一屏：说明在看当前任务/结论，直接跟到最新内容
       maybeScroll(true);
@@ -1060,7 +1072,91 @@
       readingHistory = true;
       lastScrollTop = box.scrollTop;
     }
-    watchOlderButton();
+    rememberRenderedBase();
+    scheduleProcessCollapseUpdate();
+    // 打开对话/重建后如果已经停在顶部，继续补到有可滚动余量为止。
+    if (S.conv && S.conv.hasMore) scheduleOlderPump(180);
+  }
+
+  // 记录当前 DOM 对应到哪一版消息：后台同步若只换了数组、没来得及重建 DOM，就不能增量插入。
+  let renderedBase = 0;
+  let renderedFirstId = '';
+
+  function messageKey(m) {
+    if (!m) return '';
+    if (m.id) return 'id:' + m.id;
+    return [m.role || '', m.ts || '', String(m.text || '').slice(0, 48)].join('|');
+  }
+
+  function rememberRenderedBase() {
+    const all = (S.conv && S.conv.messages) || [];
+    renderedBase = all.length;
+    renderedFirstId = messageKey(all[0]);
+  }
+
+  /** 普通用户消息/压缩摘要会强制结束上一轮，可作为“新旧分组不会再合并”的硬边界。 */
+  function startsNewTurn(m) {
+    return !!m && m.role !== 'assistant' && !m.steer;
+  }
+
+  function isTurnBoundaryNode(node) {
+    if (node.classList.contains('compact-divider')) return true;
+    if (!node.classList.contains('msg') || node.classList.contains('assistant')) return false;
+    return !node.querySelector(':scope > .steer-tag');
+  }
+
+  /** 只重建新一页和跨页那一轮，其余旧消息节点、展开状态和滚动惯性都保留。 */
+  function prependOlderMessages(box, older, anchor) {
+    const msgs = (S.conv && S.conv.messages) || [];
+    const base = older.length;
+    // 页边界经常落在一轮任务中间：这一轮的编辑/统计卡片需要连同新页一起重算，
+    // 但下一个普通用户消息之后的分组不受前缀影响，可以继续复用旧节点。
+    let cut = base;
+    while (cut < msgs.length && !startsNewTurn(msgs[cut])) cut += 1;
+
+    const frag = document.createDocumentFragment();
+    for (const m of groupedHistory(msgs.slice(0, cut))) {
+      const node = messageNode(m);
+      if (node) frag.appendChild(node);
+    }
+
+    // 旧的跨页轮次节点会被重算的节点替代；边界之后的节点保持原样。
+    const replaced = [];
+    let firstKept = null;
+    for (const node of box.children) {
+      if (!node.matches('.msg, .compact-divider')) continue;
+      if (isTurnBoundaryNode(node)) { firstKept = node; break; }
+      replaced.push(node);
+    }
+    for (const node of replaced) node.remove();
+    const live = document.getElementById('liveTurn');
+    box.insertBefore(frag, firstKept || live || null);
+
+    // 插入后重新编号：data-mi 供滚动锚点使用，data-turnSeq 决定哪些旧图被清理。
+    let mi = 0;
+    let turnOrdinal = 0;
+    for (const node of box.querySelectorAll(':scope > .msg, :scope > .compact-divider')) {
+      if (node.classList.contains('msg') && !node.classList.contains('assistant')
+          && !node.querySelector(':scope > .steer-tag')) {
+        turnOrdinal += 1;
+      }
+      node.dataset.mi = String(mi++);
+      if (turnOrdinal) {
+        for (const card of node.querySelectorAll('.image-view')) {
+          card.dataset.turnSeq = String(turnOrdinal);
+        }
+      }
+    }
+    clearOldImageCards(box, Math.max(1, turnOrdinal - 1));
+
+    // 浏览器可能已经按滚动锚定补齐了位置；已对齐时不再写 scrollTop，避免打断正在进行的惯性。
+    const expected = anchor.top + (box.scrollHeight - anchor.h);
+    if (Math.abs(box.scrollTop - expected) > 1) {
+      box.scrollTop = Math.max(0, expected);
+    }
+    readingHistory = true;
+    lastScrollTop = box.scrollTop;
+    rememberRenderedBase();
     scheduleProcessCollapseUpdate();
   }
 
@@ -1297,14 +1393,6 @@
     layoutMarkdownImages(d);
     enhanceCodeBlocks(d);
     return d;
-  }
-
-  function editedFileOf(b) {
-    if (!b || b.type !== 'tool_use') return '';
-    if (!/^(Write|Edit|MultiEdit|NotebookEdit)$/.test(b.name || '')) return '';
-    const inp = b.input || {};
-    const f = inp.file_path || inp.path || inp.notebook_path;
-    return typeof f === 'string' ? f : '';
   }
 
   function splitLines(s) {
@@ -2588,36 +2676,47 @@
     sum.append(label, meta);
 
     const body = el('div', 'process-body');
-    let si = 0;
-    for (let i = 0; i < blocks.length; i++) {
-      while (si < steers.length && (steers[si].at || 0) <= i) {
+    let built = false;
+    // 历史里的过程默认合上：正文等用户真正展开时再建 DOM，
+    // 避免翻历史时为每条旧命令都生成节点、解析 Markdown 和图片。
+    const buildBody = () => {
+      if (built) return;
+      built = true;
+      let si = 0;
+      for (let i = 0; i < blocks.length; i++) {
+        while (si < steers.length && (steers[si].at || 0) <= i) {
+          body.appendChild(steerInlineNode(steers[si]));
+          si++;
+        }
+        const b = blocks[i];
+        if (b.type === 'text') {
+          const t = el('div', 'txt temp');
+          t.innerHTML = formatText(b.text);
+          enhanceCodeBlocks(t);
+          body.appendChild(t);
+          continue;
+        }
+        const node = b.type === 'thinking'
+          ? thinkingRow(b)
+          : (b.type === 'tool_use' ? toolNode(b) : null);
+        if (node) body.appendChild(node);
+        if (b.type === 'tool_use' && Array.isArray(b.images) && b.images.length) {
+          body.appendChild(imageCardNode(b.images));
+        }
+      }
+      while (si < steers.length) {
         body.appendChild(steerInlineNode(steers[si]));
         si++;
       }
-      const b = blocks[i];
-      if (b.type === 'text') {
-        const t = el('div', 'txt temp');
-        t.innerHTML = formatText(b.text);
-        enhanceCodeBlocks(t);
-        body.appendChild(t);
-        continue;
-      }
-      const node = b.type === 'thinking'
-        ? thinkingRow(b)
-        : (b.type === 'tool_use' ? toolNode(b) : null);
-      if (node) body.appendChild(node);
-      if (b.type === 'tool_use' && Array.isArray(b.images) && b.images.length) {
-        body.appendChild(imageCardNode(b.images));
-      }
-    }
-    while (si < steers.length) {
-      body.appendChild(steerInlineNode(steers[si]));
-      si++;
-    }
+      scheduleProcessCollapseUpdate();
+    };
 
     d.append(sum, body);
     meta.textContent = processMetaText(blocks);
-    d.addEventListener('toggle', scheduleProcessCollapseUpdate);
+    d.addEventListener('toggle', () => {
+      if (d.open) buildBody();
+      scheduleProcessCollapseUpdate();
+    });
     return d;
   }
 
@@ -3376,7 +3475,6 @@
     S.liveProcessBody = null;
     S.liveProcessMeta = null;
     S.liveProcessState = null;
-    S.liveProcessCollapse = null;
     S.liveProcessBlocks = [];
   }
 
@@ -3399,7 +3497,6 @@
     S.liveProcessBody = body;
     S.liveProcessMeta = meta;
     S.liveProcessState = state;
-    S.liveProcessCollapse = null;
     S.liveProcessBlocks = [];
     return d;
   }
@@ -3440,16 +3537,16 @@
       if (b.type === 'thinking') {
         ensureLiveProcess(box);
         const row = thinkingRow(b);
-        S.liveProcessBody.insertBefore(row, S.liveProcessCollapse);
+        S.liveProcessBody.appendChild(row);
         S.liveEls.set(b.key, { thinkingRow: row, textEl: row._textEl, text: b.text || '' });
         bumpLiveProcess(b);
         continue;
       }
       const built = liveBlockNode(b);
       if (!built) continue;
-      if (b.type === 'thinking' || b.type === 'tool_use') {
+      if (b.type === 'tool_use') {
         ensureLiveProcess(box);
-        S.liveProcessBody.insertBefore(built.node, S.liveProcessCollapse);
+        S.liveProcessBody.appendChild(built.node);
         bumpLiveProcess(b);
       } else {
         box.appendChild(built.node);
@@ -3525,7 +3622,7 @@
       if (!box) return;
       ensureLiveProcess(box);
       const row = thinkingRow(b);
-      S.liveProcessBody.insertBefore(row, S.liveProcessCollapse);
+      S.liveProcessBody.appendChild(row);
       S.liveEls.set(ev.key, { thinkingRow: row, textEl: row._textEl, text: b.text || '' });
       bumpLiveProcess(b);
       setRunProgress(progressForThinking(b), 'thinking');
@@ -3538,9 +3635,9 @@
     if (!box) return;
     const built = liveBlockNode(b);
     if (!built) return;
-    if (b.type === 'thinking' || b.type === 'tool_use') {
+    if (b.type === 'tool_use') {
       ensureLiveProcess(box);
-      S.liveProcessBody.insertBefore(built.node, S.liveProcessCollapse);
+      S.liveProcessBody.appendChild(built.node);
       bumpLiveProcess(b);
     } else {
       box.appendChild(built.node);
@@ -3876,15 +3973,40 @@
     }
   }
 
+  /** 刷新只取尾部一页；如果用户已上滑加载更多，保留旧消息前缀，避免被截回 100 条。 */
+  function mergeRefreshedConversation(data) {
+    const old = S.conv;
+    if (!old || !Array.isArray(old.messages) || !Array.isArray(data.messages)) return data;
+    const oldStart = Number.isFinite(old.start) ? old.start : 0;
+    const newStart = Number.isFinite(data.start) ? data.start : 0;
+    if (newStart <= oldStart) return data;
+    const keep = newStart - oldStart;
+    if (keep <= 0 || keep > old.messages.length) return data;
+    // 新旧窗口的边界必须对得上；否则说明转录被压缩/改写，直接整页替换更安全。
+    if (keep < old.messages.length) {
+      const prev = old.messages[keep];
+      const next = data.messages[0];
+      if (!prev || !next || messageKey(prev) !== messageKey(next)) return data;
+    }
+    data.messages = old.messages.slice(0, keep).concat(data.messages);
+    data.start = oldStart;
+    data.hasMore = oldStart > 0;
+    return data;
+  }
+
   let refreshing = false;
   async function refreshConversation() {
-    if (!S.convId || refreshing) return;
+    // 正在补更早消息时不要用最新一页覆盖 S.conv，否则 before 游标和滚动锚点会错位。
+    if (!S.convId || refreshing || S.loadingOlder) return;
+    const id = S.convId;
     refreshing = true;
     try {
       const loaded = S.conv && Array.isArray(S.conv.messages) ? S.conv.messages.length : 30;
       const limit = Math.max(30, Math.min(200, loaded + 10));
-      const data = await api('/api/conversation?id=' + encodeURIComponent(S.convId) +
+      const data = await api('/api/conversation?id=' + encodeURIComponent(id) +
         '&limit=' + limit + '&light=1&compact=1', { timeout: 30000 });
+      if (S.convId !== id || S.loadingOlder) return;
+      mergeRefreshedConversation(data);
       renderConversation(data, true);
     } catch { /* 下次事件再试 */ }
     finally { refreshing = false; }
@@ -3909,6 +4031,8 @@
   async function pollConversationState() {
     if (convSyncBusy || !S.convId || !S.conv || document.hidden) return;
     if (S.loadingOlder || S.sending) return;
+    // 运行中已有 1.8 秒的实时快照轮询兜底，这里不再用同样的接口重复请求。
+    if (S.running && livePollTimer) return;
     // 本地正在跑且 SSE 有事件时，实时区已经够用，不额外拉历史。
     if (S.running && Date.now() - lastSseAt < 4000) return;
     const id = S.convId;
@@ -3935,7 +4059,7 @@
   // S.running/S.live 停在旧任务上，之后发的新消息就被当成插话挂到已完成任务底部。
   let resumeSyncing = false;
   async function resumeSync(force = false) {
-    if (!S.convId || resumeSyncing || document.hidden) return;
+    if (!S.convId || resumeSyncing || S.loadingOlder || document.hidden) return;
     if (!force && Date.now() - (S.lastResumeSyncAt || 0) < 1200) return;
     resumeSyncing = true;
     S.lastResumeSyncAt = Date.now();
@@ -3947,7 +4071,7 @@
       const limit = Math.min(200, Math.max(60, loaded + 40));
       const data = await api('/api/conversation?id=' + encodeURIComponent(id) +
         '&limit=' + limit + '&light=1&compact=1', { timeout: 15000 });
-      if (!S.convId || S.convId !== id) return;
+      if (!S.convId || S.convId !== id || S.loadingOlder) return;
       if (!data.running) {
         S.running = false;
         S.live = null;
@@ -3957,6 +4081,7 @@
         setRunProgress('', '');
         if (wasRunning) notifyPageTask(false);
       }
+      mergeRefreshedConversation(data);
       renderConversation(data, true);
       S.needsResumeSync = false;
     } catch { /* 网络没恢复：保留状态，发送时还有 steer→chat 兜底 */ }
@@ -4043,40 +4168,96 @@
     finally { livePolling = false; }
   }
 
-  /** 上滑到顶部时，按 before 游标补更早的一页 */
-  async function loadOlderMessages() {
-    if (!S.convId || !S.conv || !S.conv.hasMore || S.loadingOlder) return;
-    S.loadingOlder = true;
+  let olderLoadSeq = 0;
+  let olderRetryAt = 0;
+  const OLDER_PAGE_LIMIT = 30;
+
+  /** 加载中统一禁用按钮；自动补页和手动点击都走这里，避免按钮被重建成可点状态。 */
+  function setOlderButtonsLoading(loading) {
     const box = $('#messages');
-    const anchor = { h: box.scrollHeight, top: box.scrollTop };
-    const btn = box.querySelector('.load-older');
-    if (btn) {
-      btn.disabled = true;
-      btn.textContent = '正在加载更早消息…';
+    if (!box) return;
+    for (const btn of box.querySelectorAll('.load-older')) {
+      btn.disabled = !!loading;
+      btn.textContent = loading ? '正在加载更早消息…' : '↑ 加载更早消息';
+      btn.classList.toggle('loading', !!loading);
     }
+  }
+
+  /** 每次从 DOM 现取按钮：加载期间可能有实时事件重建了消息区，旧引用已经脱离文档。 */
+  function resetOlderButton(box, hasMore) {
+    const btn = box.querySelector('.load-older');
+    if (!btn) return;
+    const before = box.scrollHeight;
+    btn.disabled = false;
+    btn.classList.remove('loading');
+    btn.textContent = '↑ 加载更早消息';
+    if (!hasMore) btn.remove();
+    const shrink = before - box.scrollHeight;
+    if (shrink > 0) box.scrollTop = Math.max(0, box.scrollTop - shrink);
+  }
+
+  /** 上滑接近顶部时，按 before 游标补更早的一页；提前一屏开始取，快速滑动时不至于停在顶部等。 */
+  async function loadOlderMessages(manual = false) {
+    if (!S.convId || !S.conv || !S.conv.hasMore || S.loadingOlder
+        || (!manual && Date.now() < olderRetryAt)) return;
+    if (manual) olderBoundaryHit = false;
+    S.loadingOlder = true;
+    const seq = ++olderLoadSeq;
+    const convId = S.convId;
+    const startAt = S.conv.start || 0;
+    const box = $('#messages');
+    const startH = box.scrollHeight;
+    setOlderButtonsLoading(true);
+    // 极窄屏/大字号下提示文字可能换行，按钮变高会把内容顶下去；先把滚动位置补回来。
+    const grown = box.scrollHeight - startH;
+    if (grown > 0) box.scrollTop += grown;
     try {
-      const data = await api('/api/conversation?id=' + encodeURIComponent(S.convId) +
-        '&limit=30&before=' + encodeURIComponent(S.conv.start || 0) + '&light=1&compact=1', { timeout: 30000 });
+      const data = await api('/api/conversation?id=' + encodeURIComponent(convId) +
+        '&limit=' + OLDER_PAGE_LIMIT + '&before=' + encodeURIComponent(startAt) +
+        '&light=1&compact=1', { timeout: 30000 });
+      // 加载期间切了对话、重新打开了同一对话，或已有更新的一次加载：丢弃旧结果，避免串页/重复。
+      if (seq !== olderLoadSeq || S.convId !== convId || !S.conv
+          || (S.conv.start || 0) !== startAt) return;
+      olderRetryAt = 0;
       const older = data.messages || [];
-      if (older.length) {
-        S.conv.messages = older.concat(S.conv.messages || []);
-        S.conv.start = Number.isFinite(data.start)
-          ? data.start
-          : Math.max(0, (S.conv.start || 0) - older.length);
-        S.conv.hasMore = !!data.hasMore;
-        S.conv.total = Number.isFinite(data.total) ? data.total : S.conv.messages.length;
-      } else {
+      if (!older.length) {
+        // 服务端已经到底：把已经失效的按钮收掉，别让用户点一个永远没反应的按钮。
         S.conv.hasMore = false;
+        resetOlderButton(box, false);
+        return;
       }
-      renderMessages(false, anchor);
+      // 这一页出现普通用户消息：积够 1.4 屏之前也先停在上一轮任务边界。
+      olderBoundaryHit = older.some(m => m && m.role === 'user' && !m.steer);
+      const oldMessages = S.conv.messages || [];
+      // DOM 和消息数组对不上（后台同步只换了数组）时退回整段重建，避免增量插入后错位。
+      const domReady = renderedBase === oldMessages.length
+        && renderedFirstId === messageKey(oldMessages[0]);
+      S.conv.messages = older.concat(oldMessages);
+      S.conv.start = Number.isFinite(data.start)
+        ? data.start
+        : Math.max(0, startAt - older.length);
+      S.conv.hasMore = !!data.hasMore;
+      S.conv.total = Number.isFinite(data.total) ? data.total : S.conv.messages.length;
+      // 先把按钮恢复成正常文案：锚点高度要和最终布局一致，避免多算按钮换行的高度。
+      resetOlderButton(box, S.conv.hasMore);
+      // 用“现在”的滚动位置做锚点，而不是请求发出时的位置：
+      // 加载期间用户可能继续上滑，用旧位置会把页面往下拽一小段。
+      const anchor = { h: box.scrollHeight, top: box.scrollTop };
+      if (domReady && box.querySelector(':scope > .msg, :scope > .compact-divider')) {
+        prependOlderMessages(box, older, anchor);
+      } else {
+        renderMessages(false, anchor);
+      }
+      // 仍然停在顶部就继续补下一页，直到可以正常往上滚。
+      scheduleOlderPump(80);
     } catch (e) {
+      if (seq !== olderLoadSeq || S.convId !== convId) return;
+      // 网络差时滚动会持续触发补页，失败后短暂退避，避免每帧都发请求。
+      olderRetryAt = Date.now() + 2500;
       toast('加载更早消息失败：' + e.message, 'err');
-      if (btn) {
-        btn.disabled = false;
-        btn.textContent = '↑ 加载更早消息';
-      }
+      resetOlderButton(box, !!S.conv.hasMore);
     } finally {
-      S.loadingOlder = false;
+      if (seq === olderLoadSeq) S.loadingOlder = false;
     }
   }
 
@@ -4867,18 +5048,17 @@
   // ---------------------------------------------------------------- 发送
 
   async function composeWithRefs(text, refs) {
-    const packs = [];
-    for (const r of refs) {
-      // handoff=1 只取最近一次压缩摘要 + 最近几十条，避免把整份长转录拉过来
+    // handoff=1 只取最近一次压缩摘要 + 最近几十条，避免把整份长转录拉过来；多个引用并行拉取。
+    const packs = await Promise.all(refs.map(async r => {
       const c = await api('/api/conversation?id=' + encodeURIComponent(r.id) + '&handoff=1', { timeout: 30000 });
-      packs.push({
+      return {
         id: r.id,
         title: c.title || r.title,
         cwd: c.cwd || r.cwd,
         updatedAt: r.updatedAt,
         messages: c.messages || []
-      });
-    }
+      };
+    }));
     const digest = window.ClaudeRefDigest;
     if (!digest || typeof digest.buildBlock !== 'function') {
       throw new Error('引用摘要模块未加载');
@@ -5071,14 +5251,64 @@
     }
   }
 
-  function isNearBottom() {
-    const m = $('#messages');
+  function isNearBottom(box) {
+    const m = box || $('#messages');
     return m.scrollHeight - m.scrollTop - m.clientHeight < 100;
+  }
+
+  /** 预取和自动补页的目标距离统一按 1.4 屏算。 */
+  function olderFastDistance(m) {
+    return Math.max(900, Math.round(m.clientHeight * 1.4));
+  }
+
+  /** 快速甩动时提前 1.4 屏预取，慢速阅读时只接近顶部再补。 */
+  function olderPrefetchDistance(m) {
+    if (scrollVelocity > 0.8) return olderFastDistance(m);
+    return Math.max(120, Math.round(m.clientHeight * 0.2));
+  }
+
+  /** 自动补页补到 1.4 屏缓冲；途中先遇到上一轮用户消息就提前停。 */
+  function olderPumpDistance(m) {
+    return olderFastDistance(m);
+  }
+
+  let olderPumpTimer = 0;
+  // 刚加载的页里出现普通用户消息：已经接到上一轮任务，自动续拉停在这里。
+  let olderBoundaryHit = false;
+
+  /** 停在顶部附近时连续补页，直到积够 1.4 屏或遇到上一轮用户消息。 */
+  function pumpOlderMessages() {
+    if (!S.conv || !S.conv.hasMore || S.loadingOlder || document.hidden) return;
+    if (Date.now() < olderRetryAt) return;
+    if (olderBoundaryHit) return;
+    const box = $('#messages');
+    if (!box || box.scrollTop > olderPumpDistance(box)) return;
+    loadOlderMessages();
+  }
+
+  function scheduleOlderPump(delay = 100) {
+    if (olderPumpTimer) return;
+    olderPumpTimer = setTimeout(() => {
+      olderPumpTimer = 0;
+      pumpOlderMessages();
+    }, delay);
+  }
+
+  /** 手指/滚轮明确往上滑但列表已到顶、不再产生 scroll 事件时，也能主动补一页。 */
+  function maybeAutoLoadOlder() {
+    if (!S.conv || !S.conv.hasMore || S.loadingOlder || Date.now() < olderRetryAt) return;
+    const box = $('#messages');
+    if (box && box.scrollTop <= olderPrefetchDistance(box)) {
+      olderBoundaryHit = false;
+      loadOlderMessages();
+    }
   }
 
   let scrollPending = false;
   let scrollHoldUntil = 0;
   let lastScrollTop = 0;
+  let lastScrollEventAt = 0;
+  let scrollVelocity = 0; // 向上滚动的 px/ms，用来区分快速甩动和慢读
   // 用户主动上滑看历史后，状态更新不要把人拽回底部
   let readingHistory = false;
   // 只有手指真正滑动/滚轮时才判断“在看历史”，避免流式内容重排的滚动被误判
@@ -5110,6 +5340,7 @@
       if (!force && (readingHistory || Date.now() < scrollHoldUntil)) return;
       const m = $('#messages');
       m.scrollTop = m.scrollHeight;
+      lastScrollTop = m.scrollTop;
     });
   }
 
@@ -6041,29 +6272,57 @@
       }
     });
 
-    $('#messages').addEventListener('touchstart', holdAutoScroll, { passive: true });
-    $('#messages').addEventListener('touchmove', markUserScroll, { passive: true });
-    $('#messages').addEventListener('wheel', e => {
+    $('#messages').addEventListener('touchstart', () => {
       holdAutoScroll();
       markUserScroll();
     }, { passive: true });
-    $('#messages').addEventListener('scroll', () => {
-      const m = $('#messages');
-      const top = m.scrollTop;
-      if (Date.now() - lastUserScrollAt < 1200) {
-        if (top < lastScrollTop - 3 && !isNearBottom()) readingHistory = true;
-      }
-      if (isNearBottom()) readingHistory = false;
-      lastScrollTop = top;
-      if (S.needsHistoryRender && isNearBottom()) {
-        S.needsHistoryRender = false;
-        renderMessages(true);
-      }
+    $('#messages').addEventListener('touchmove', () => {
+      markUserScroll();
+      // 到顶后继续上滑不会再有 scroll 事件，这里直接触发补页。
+      maybeAutoLoadOlder();
+    }, { passive: true });
+    $('#messages').addEventListener('touchend', () => {
+      maybeAutoLoadOlder();
+    }, { passive: true });
+    $('#messages').addEventListener('wheel', e => {
+      holdAutoScroll();
+      markUserScroll();
+      if (e.deltaY < 0) maybeAutoLoadOlder();
     }, { passive: true });
     $('#messages').addEventListener('scroll', () => {
       scheduleProcessCollapseUpdate();
       const m = $('#messages');
-      if (m.scrollTop < 90 && S.conv && S.conv.hasMore && !S.loadingOlder) {
+      const top = m.scrollTop;
+      const recentUserScroll = Date.now() - lastUserScrollAt < 1200;
+      const movingUp = top < lastScrollTop - 3;
+      const movedUp = top < lastScrollTop;
+      const nearBottom = isNearBottom(m);
+      if (recentUserScroll && movingUp && !nearBottom) {
+        readingHistory = true;
+      }
+      if (nearBottom) readingHistory = false;
+      const now = Date.now();
+      const gap = now - (lastScrollEventAt || now);
+      const dt = Math.max(8, gap);
+      const dy = lastScrollTop - top;
+      lastScrollEventAt = now;
+      if (gap > 200) scrollVelocity = 0;
+      if (dy > 0) {
+        const v = dy / dt;
+        scrollVelocity = scrollVelocity ? scrollVelocity * 0.6 + v * 0.4 : v;
+      } else if (dy < -2) {
+        scrollVelocity = 0;
+      }
+      lastScrollTop = top;
+      if (S.needsHistoryRender && nearBottom) {
+        S.needsHistoryRender = false;
+        renderMessages(true);
+        return;
+      }
+      // 只由真实上滑触发自动补页，打开对话/程序化滚动不会把历史一次拉很多。
+      if (movedUp && (readingHistory || recentUserScroll) && S.conv && S.conv.hasMore
+          && !S.loadingOlder && top <= olderPrefetchDistance(m)) {
+        olderBoundaryHit = false;
         loadOlderMessages();
       }
     }, { passive: true });

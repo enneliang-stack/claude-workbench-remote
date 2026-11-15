@@ -358,10 +358,6 @@ button { -webkit-tap-highlight-color: transparent; }
 }
 @keyframes blink { 50% { opacity: 0; } }
 
-.msg.compact {
-  font-size: 12px; color: var(--muted); border-left: 2px solid var(--line);
-  padding: 4px 0 4px 10px;
-}
 .compact-divider {
   align-self: center; display: flex; align-items: center; gap: 8px;
   width: 100%;
@@ -374,14 +370,6 @@ button { -webkit-tap-highlight-color: transparent; }
   background: currentColor; opacity: .3;
 }
 
-details.think {
-  margin: 2px 0; color: var(--faint); font-size: 12.5px;
-}
-details.think summary { cursor: pointer; list-style: none; color: var(--muted); }
-details.think summary::-webkit-details-marker { display: none; }
-details.think summary::before { content: "▸ "; }
-details.think[open] summary::before { content: "▾ "; }
-details.think .think-text { white-space: pre-wrap; padding: 6px 0 2px 12px; line-height: 1.55; }
 
 /* 过程折叠：思考 + 工具统一收进一行，默认合上 */
 details.process {
@@ -409,13 +397,6 @@ details.process[open] > summary::before { content: "▾"; }
 .process-body { border-top: 1px solid var(--line); padding: 8px 9px 9px; }
 .process-body > details + details { margin-top: 6px; }
 .process-body .txt.temp { color: var(--muted); font-size: 12.5px; margin: 0 0 6px; }
-.process-body details.think { margin: 4px 0; }
-.collapse-btn {
-  display: inline-block; border: 1px solid var(--line); background: #1a1f27;
-  color: var(--muted); border-radius: 8px; padding: 5px 10px;
-  font-size: 12px; cursor: pointer; margin-top: 8px;
-}
-.collapse-btn.small { margin-top: 5px; padding: 3px 9px; font-size: 11px; }
 /* 过程框滚出标题后，固定在左侧的「收起」浮钮 */
 .process-collapse-btn {
   position: fixed;
@@ -443,10 +424,6 @@ details.process[open] > summary::before { content: "▾"; }
   flex: 0 0 auto;
 }
 .msg.assistant > * + * { margin-top: 7px; }
-.edited-files {
-  font-size: 11.5px; color: var(--faint);
-  border-left: 2px solid var(--line); padding: 2px 0 2px 8px;
-}
 
 /* 生成的文件 / 已编辑文件卡片（手机端不带打开按钮） */
 .artifact-card, .edit-card {
@@ -642,7 +619,7 @@ details.process[open] > summary::before { content: "▾"; }
   color: var(--muted); font-size: 12px; padding: 8px 12px;
   cursor: pointer;
 }
-.load-older:disabled { opacity: .5; }
+.load-older:disabled { opacity: .5; pointer-events: none; }
 
 /* ---------- 运行进度行 ---------- */
 .run-progress {

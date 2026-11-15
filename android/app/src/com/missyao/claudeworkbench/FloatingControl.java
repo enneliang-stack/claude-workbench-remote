@@ -457,18 +457,6 @@ public final class FloatingControl {
             && PhoneControlServer.shouldShowOverlay(service);
     }
 
-    /** 当前前台是不是工作台 App 自己（手机页/电脑端页）；是的话不需要悬浮窗。 */
-    private boolean isForegroundApp() {
-        try {
-            android.view.accessibility.AccessibilityNodeInfo root = service.getRootInActiveWindow();
-            if (root == null) return false;
-            CharSequence pkg = root.getPackageName();
-            return pkg != null && service.getPackageName().contentEquals(pkg);
-        } catch (Exception e) {
-            return false;
-        }
-    }
-
     private void show() {
         if (attached) return;
         try {

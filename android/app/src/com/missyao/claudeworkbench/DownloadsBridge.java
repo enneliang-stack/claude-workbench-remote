@@ -19,7 +19,6 @@ import android.provider.MediaStore;
 import android.provider.Settings;
 import android.view.View;
 import android.webkit.JavascriptInterface;
-import android.webkit.MimeTypeMap;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -38,6 +37,8 @@ import java.util.Arrays;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
 import java.util.List;
 
 /**
@@ -46,7 +47,8 @@ import java.util.List;
  */
 public class DownloadsBridge {
     private final MainActivity activity;
-    private final Object lock = new Object();
+    // 索引是全局文件，可能同时存在多个 DownloadsBridge 实例（页面桥和更新下载流程）。
+    private static final Object INDEX_LOCK = new Object();
 
     public DownloadsBridge(MainActivity activity) {
         this.activity = activity;
@@ -155,7 +157,7 @@ public class DownloadsBridge {
         final Uri uri = DownloadProvider.localUri(activity, path);
         if (uri == null) return false;
         String display = name != null && !name.isEmpty() ? name : path;
-        final String mimeType = mimeOf(display);
+        final String mimeType = DownloadProvider.mimeOf(display);
         activity.runOnUiThread(() -> {
             // 优先直接用 WPS/vivo Office/Word 这类文档应用打开，
             // 跳过“在文件管理中显示”这种会转去 Google 的入口。
@@ -389,47 +391,6 @@ public class DownloadsBridge {
         return new File(dir(), "_index.json");
     }
 
-    private String mimeOf(String name) {
-        int dot = name.lastIndexOf('.');
-        String ext = dot >= 0 ? name.substring(dot + 1).toLowerCase() : "";
-        switch (ext) {
-            case "md": case "markdown": return "text/plain";
-            case "txt": case "log": case "ini": case "conf": return "text/plain";
-            case "json": return "text/plain";
-            case "yaml": case "yml": return "text/plain";
-            case "xml": return "text/plain";
-            case "csv": return "text/plain";
-            case "js": case "mjs": return "text/plain";
-            case "ts": return "text/plain";
-            case "py": return "text/plain";
-            case "java": return "text/plain";
-            case "sh": return "text/plain";
-            case "html": case "htm": return "text/html";
-            case "css": return "text/plain";
-            case "zip": return "application/zip";
-            case "7z": return "application/x-7z-compressed";
-            case "rar": return "application/vnd.rar";
-            case "apk": return "application/vnd.android.package-archive";
-            case "pdf": return "application/pdf";
-            case "png": return "image/png";
-            case "jpg": case "jpeg": return "image/jpeg";
-            case "gif": return "image/gif";
-            case "webp": return "image/webp";
-            case "mp4": return "video/mp4";
-            case "mp3": return "audio/mpeg";
-            case "doc": return "application/msword";
-            case "docx": return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-            case "xls": return "application/vnd.ms-excel";
-            case "xlsx": return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-            case "ppt": return "application/vnd.ms-powerpoint";
-            case "pptx": return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
-            case "epub": return "application/epub+zip";
-            default: break;
-        }
-        String mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext);
-        return mime != null ? mime : "application/octet-stream";
-    }
-
     /**
      * Android 10+ 额外导出一份到系统「下载/Claude工作台」。
      * App 私有目录里的 content:// 很多查看器（尤其 Google 系）不肯读，
@@ -441,7 +402,7 @@ public class DownloadsBridge {
         try {
             ContentValues values = new ContentValues();
             values.put(MediaStore.MediaColumns.DISPLAY_NAME, name);
-            values.put(MediaStore.MediaColumns.MIME_TYPE, mimeOf(name));
+            values.put(MediaStore.MediaColumns.MIME_TYPE, DownloadProvider.mimeOf(name));
             values.put(MediaStore.MediaColumns.RELATIVE_PATH,
                 Environment.DIRECTORY_DOWNLOADS + "/Claude工作台");
             values.put(MediaStore.MediaColumns.IS_PENDING, 1);
@@ -476,7 +437,7 @@ public class DownloadsBridge {
     }
 
     private String findPublicByPath(String path) {
-        synchronized (lock) {
+        synchronized (INDEX_LOCK) {
             JSONArray arr = readIndex();
             for (int i = 0; i < arr.length(); i++) {
                 JSONObject o = arr.optJSONObject(i);
@@ -489,7 +450,7 @@ public class DownloadsBridge {
     }
 
     private String findPublicBySource(String source) {
-        synchronized (lock) {
+        synchronized (INDEX_LOCK) {
             JSONArray arr = readIndex();
             for (int i = 0; i < arr.length(); i++) {
                 JSONObject o = arr.optJSONObject(i);
@@ -512,19 +473,74 @@ public class DownloadsBridge {
         }
     }
 
-    private synchronized JSONArray readIndex() {
+    private JSONArray readIndex() {
+        File f = indexFile();
+        if (!f.isFile()) return new JSONArray();
         try {
-            String s = readAll(indexFile());
+            String s = readAll(f);
             return s.isEmpty() ? new JSONArray() : new JSONArray(s);
         } catch (Exception e) {
-            return new JSONArray();
+            // 索引损坏时先留一份坏文件，再从目录恢复；绝不能返回空数组后把原索引覆盖掉。
+            backupCorruptIndex(f);
+            return recoverIndexFromDir(f.getParentFile());
         }
     }
 
-    private synchronized void writeIndex(JSONArray arr) {
-        try (FileOutputStream out = new FileOutputStream(indexFile())) {
-            out.write(arr.toString().getBytes(StandardCharsets.UTF_8));
+    private void backupCorruptIndex(File f) {
+        try {
+            File bad = new File(f.getParentFile(), "_index.json.bad-" + System.currentTimeMillis());
+            //noinspection ResultOfMethodCallIgnored
+            f.renameTo(bad);
         } catch (Exception ignored) {
+        }
+    }
+
+    private JSONArray recoverIndexFromDir(File dir) {
+        JSONArray out = new JSONArray();
+        File[] files = dir == null ? null : dir.listFiles();
+        if (files != null) {
+            Arrays.sort(files, (a, b) -> Long.compare(b.lastModified(), a.lastModified()));
+            for (File f : files) {
+                if (!f.isFile() || f.getName().startsWith("_index.json")) continue;
+                try {
+                    JSONObject o = new JSONObject();
+                    o.put("name", f.getName());
+                    o.put("path", f.getAbsolutePath());
+                    o.put("size", f.length());
+                    o.put("mtime", f.lastModified());
+                    out.put(o);
+                } catch (Exception ignored) {
+                }
+            }
+        }
+        return out;
+    }
+
+    private void writeIndex(JSONArray arr) {
+        File f = indexFile();
+        File tmp = new File(f.getParentFile(), "_index.json.tmp");
+        try (FileOutputStream out = new FileOutputStream(tmp)) {
+            out.write(arr.toString().getBytes(StandardCharsets.UTF_8));
+            try {
+                out.getFD().sync();
+            } catch (Exception ignored) {
+                // 有些文件系统不支持 fsync；数据已写完，继续 rename，不因此丢索引。
+            }
+        } catch (Exception ignored) {
+            //noinspection ResultOfMethodCallIgnored
+            tmp.delete();
+            return;
+        }
+        try {
+            Files.move(tmp.toPath(), f.toPath(),
+                StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+        } catch (Exception e) {
+            try {
+                Files.move(tmp.toPath(), f.toPath(), StandardCopyOption.REPLACE_EXISTING);
+            } catch (Exception ignored) {
+                //noinspection ResultOfMethodCallIgnored
+                tmp.delete();
+            }
         }
     }
 
@@ -534,7 +550,7 @@ public class DownloadsBridge {
 
     @JavascriptInterface
     public String list() {
-        synchronized (lock) {
+        synchronized (INDEX_LOCK) {
             JSONArray arr = readIndex();
             JSONArray out = new JSONArray();
             for (int i = 0; i < arr.length(); i++) {
@@ -621,7 +637,7 @@ public class DownloadsBridge {
             String publicUri = exportToPublic(target, target.getName());
             if (!publicUri.isEmpty()) deletePublic(oldPublic);
 
-            synchronized (lock) {
+            synchronized (INDEX_LOCK) {
                 JSONArray arr = readIndex();
                 JSONArray next = new JSONArray();
                 for (int i = 0; i < arr.length(); i++) {
@@ -655,7 +671,7 @@ public class DownloadsBridge {
         if (!f.exists()) return f;
 
         // 同一个源重复下载：沿用已有文件名，覆盖
-        synchronized (lock) {
+        synchronized (INDEX_LOCK) {
             JSONArray arr = readIndex();
             for (int i = 0; i < arr.length(); i++) {
                 JSONObject o = arr.optJSONObject(i);
@@ -696,7 +712,7 @@ public class DownloadsBridge {
         String name = f.getName();
         int dot = name.lastIndexOf('.');
         String ext = dot >= 0 ? name.substring(dot + 1).toLowerCase() : "";
-        final String mimeType = mimeOf(name);
+        final String mimeType = DownloadProvider.mimeOf(name);
         boolean isApk = "apk".equals(ext);
 
         String publicUri = findPublicByPath(path);
@@ -769,7 +785,7 @@ public class DownloadsBridge {
         boolean ok = f.delete();
         if (ok) {
             deletePublic(publicUri);
-            synchronized (lock) {
+            synchronized (INDEX_LOCK) {
                 JSONArray arr = readIndex();
                 JSONArray next = new JSONArray();
                 for (int i = 0; i < arr.length(); i++) {
