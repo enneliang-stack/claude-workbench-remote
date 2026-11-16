@@ -1216,16 +1216,13 @@
 
   function quoteNode(q) {
     const box = document.createElement('details');
-    box.style.cssText = 'margin:6px 0;padding:6px 8px;border-left:2px solid rgba(229,145,99,.6);border-radius:6px;background:rgba(255,255,255,.06);';
+    box.className = 'quote-node';
     const sum = document.createElement('summary');
-    sum.style.cssText = 'cursor:pointer;list-style:none;';
-    const pre = el('div', '', '“' + quotePreview(q.text) + '”');
-    pre.style.cssText = 'font-size:12px;line-height:1.45;color:#e59563;';
-    const src = el('div', '', quoteSourceText(q));
-    src.style.cssText = 'margin-top:2px;font-size:10.5px;color:rgba(255,255,255,.4);';
+    sum.className = 'quote-head';
+    const pre = el('div', 'quote-preview', '“' + quotePreview(q.text) + '”');
+    const src = el('div', 'quote-source', quoteSourceText(q));
     sum.append(pre, src);
-    const full = el('div', '', q.text);
-    full.style.cssText = 'margin-top:6px;white-space:pre-wrap;font-size:12px;line-height:1.5;color:rgba(255,255,255,.75);';
+    const full = el('div', 'quote-full', q.text);
     box.append(sum, full);
     return box;
   }

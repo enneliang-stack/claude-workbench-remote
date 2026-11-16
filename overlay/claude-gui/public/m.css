@@ -1738,3 +1738,25 @@ html[data-theme="light"] .code-tools button:active,
 html[data-theme="light"] .code-tools button.on { background: #e2d8ca; color: var(--accent); }
 html[data-theme="light"] .msg.assistant .code-wrap pre.code > code { color: #a1502f; }
 
+/* 消息里的展开引用：深色/浅色都保持可读 */
+.quote-node {
+  margin: 6px 0; padding: 6px 8px;
+  border-left: 2px solid rgba(229, 145, 99, .6);
+  border-radius: 6px; background: rgba(255, 255, 255, .06);
+}
+.quote-head { cursor: pointer; list-style: none; }
+.quote-head::-webkit-details-marker { display: none; }
+.quote-preview { font-size: 12px; line-height: 1.45; color: #e59563; }
+.quote-source { margin-top: 2px; font-size: 10.5px; color: rgba(255, 255, 255, .4); }
+.quote-full {
+  margin-top: 6px; white-space: pre-wrap;
+  font-size: 12px; line-height: 1.5; color: rgba(255, 255, 255, .75);
+}
+html[data-theme="light"] .quote-node {
+  background: rgba(196, 100, 67, .07);
+  border-left-color: rgba(196, 100, 67, .55);
+}
+html[data-theme="light"] .quote-preview { color: #a1502f; }
+html[data-theme="light"] .quote-source { color: #8b8378; }
+html[data-theme="light"] .quote-full { color: var(--text); }
+

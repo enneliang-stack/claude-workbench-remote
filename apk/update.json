@@ -1,12 +1,12 @@
 {
-  "versionCode": 168,
-  "versionName": "2.4.127",
+  "versionCode": 171,
+  "versionName": "2.4.130",
   "apk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.51/ClaudeWorkbench-full.apk",
   "sha256": "3bc07db344928c6b7b3def58f6c6bc80feeffb86e9c95faba1cfb524fe76c8eb",
   "fullVersionCode": 92,
   "fullVersionName": "2.4.51",
   "slimApk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/latest/download/ClaudeWorkbench-slim.apk",
-  "slimSha256": "673ff9a207d03251bd990aa168687aeee63413aaeb9e51a967013b1e18ee858d",
+  "slimSha256": "4e53a76c48817dc0126d606a109d1a7b29842a079956b0f090f5deb60dbc8c60",
   "important": false,
-  "notes": "2.4.127 更新\n\n- 默认界面改为浅色；设置与日志 → 外观 → 主题可切换深色/浅色。\n- 原生主页、设置与日志、弹窗和 WebView 手机页同步主题。\n- 浅色代码块顶栏和代码框与电脑客户端样式对齐，去掉内层框。\n- APP 图标保持方框版本。\n- 手机页资源版本 118。"
+  "notes": "2.4.130 更新\n\n- APP 图标底板改为纯白，通知栏应用图标底板同步。\n- 浅色模式引用展开文字改为深色，来源灰色，修复看不清的问题。\n- 浅色模式代码块顶栏和代码框样式与电脑客户端对齐。\n- 默认浅色，设置与日志 → 外观 → 主题可切换深色/浅色。\n- 手机页资源版本 119。"
 }
