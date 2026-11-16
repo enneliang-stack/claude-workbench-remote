@@ -1,12 +1,12 @@
 {
-  "versionCode": 176,
-  "versionName": "2.4.135",
+  "versionCode": 183,
+  "versionName": "2.4.142",
   "apk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.51/ClaudeWorkbench-full.apk",
   "sha256": "3bc07db344928c6b7b3def58f6c6bc80feeffb86e9c95faba1cfb524fe76c8eb",
   "fullVersionCode": 92,
   "fullVersionName": "2.4.51",
   "slimApk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/latest/download/ClaudeWorkbench-slim.apk",
-  "slimSha256": "e36dde1da1001a62ccfe1de40d46e43b4e2e5c59d088f0af17f0ec4fca703b5d",
+  "slimSha256": "ba8371756fd5f4b84ccb0318ced02fa93738aa9d3adec58228f45f9f362462e9",
   "important": false,
-  "notes": "2.4.135 更新\n\n- 手机端「选择手机文件夹」跟随浅色主题，新建文件夹弹窗同步改为浅色。\n- 文件夹选择器按返回键逐级回到上一级文件夹，到打开时的目录再关闭面板。\n- 浅色模式下加载/重连时不再先闪一下深色界面。\n- 远程电脑页（需电脑客户端 1.2.49）文件夹选择器同样支持逐级返回和盘符根目录返回磁盘列表。\n- 手机页资源版本 125。"
+  "notes": "2.4.142 更新\n\n- 任务完成悬浮窗改为紧凑胶囊：星形 logo + 图标按钮，颜色跟随 App 浅色/深色主题。\n- 在聊天页时任务完成不再弹悬浮窗，点 ✓ 立即消失，不再先闪成无文字窄条。\n- 运行状态条增加星形呼吸动画，只显示“任务进行中”，不再拼接对话标题。\n- 插话/停止浮窗默认改为屏幕左侧居中。\n- AI 坐标点按/滑动落在插话/停止浮窗上时临时触摸穿透，避免误触停止自己。\n- 清理运行状态的冗余代码。"
 }

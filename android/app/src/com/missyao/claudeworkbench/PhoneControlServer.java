@@ -67,6 +67,18 @@ public final class PhoneControlServer {
     private static final Executor MAIN_EXEC = command -> {
         MAIN.post(command);
     };
+    private static final AccessibilityService.GestureResultCallback AI_GESTURE_CALLBACK =
+        new AccessibilityService.GestureResultCallback() {
+            @Override
+            public void onCompleted(GestureDescription gestureDescription) {
+                FloatingControl.endAiGesture();
+            }
+
+            @Override
+            public void onCancelled(GestureDescription gestureDescription) {
+                FloatingControl.endAiGesture();
+            }
+        };
 
     private static AccessibilityService service;
     private static Context appContext;
@@ -206,6 +218,11 @@ public final class PhoneControlServer {
         return appForeground && phoneModeVisible && !phoneChatConv.isEmpty();
     }
 
+    /** 手机页当前正在看的对话 id；用于判断完成提示是否已经被用户看到。 */
+    public static String phoneChatConvId() {
+        return phoneChatConv;
+    }
+
     /** App 进前台/退后台。后台时即使 WebView 还停在对话上，也不算“用户正在看”。 */
     public static void setAppForeground(boolean foreground) {
         appForeground = foreground;
@@ -260,16 +277,9 @@ public final class PhoneControlServer {
     public static String overlayStatus() {
         if (paused) return toolBusy ? "手机操作已暂停（等当前步骤收尾）" : "手机操作已暂停";
         if (toolBusy) return "正在" + actionText + "…";
-        if (TaskStatus.isRunning()) {
-            String page = TaskStatus.overlayText();
-            if (!page.isEmpty()) return page;
-            if (claudeRunning) {
-                return lastText.isEmpty() ? "任务进行中，等待下一步…" : lastText + " · 任务进行中";
-            }
-        }
-        if (completionPending && !claudeRunning) return "任务已完成";
-        if (TaskStatus.isCompletionPending()) return "任务已完成";
-        if (claudeRunning) return lastText.isEmpty() ? "任务进行中，等待下一步…" : lastText + " · 任务进行中";
+        // 运行中统一显示通用状态，不再拼接对话标题或上一次动作。
+        if (TaskStatus.isRunning() || claudeRunning) return "任务进行中";
+        if (completionPending || TaskStatus.isCompletionPending()) return "任务已完成";
         if (lastActionAt > 0 && System.currentTimeMillis() - lastActionAt < 12000) return lastText;
         return "";
     }
@@ -1066,24 +1076,57 @@ public final class PhoneControlServer {
     }
 
     private static boolean tapAt(int x, int y) throws Exception {
-        return onMain(() -> {
-            Path p = new Path();
-            p.moveTo(x, y);
-            GestureDescription.StrokeDescription stroke = new GestureDescription.StrokeDescription(p, 0, 40);
-            GestureDescription g = new GestureDescription.Builder().addStroke(stroke).build();
-            return requireService().dispatchGesture(g, null, null);
-        });
+        boolean passThrough = onMain(() -> FloatingControl.beginAiGesture(x, y));
+        if (passThrough) waitOverlayUpdate();
+        try {
+            return onMain(() -> {
+                Path p = new Path();
+                p.moveTo(x, y);
+                GestureDescription.StrokeDescription stroke = new GestureDescription.StrokeDescription(p, 0, 40);
+                GestureDescription g = new GestureDescription.Builder().addStroke(stroke).build();
+                return dispatchGestureNow(g);
+            });
+        } catch (Exception e) {
+            FloatingControl.endAiGesture();
+            throw e;
+        }
     }
 
     private static boolean swipeAt(int x1, int y1, int x2, int y2, int duration) throws Exception {
-        return onMain(() -> {
-            Path p = new Path();
-            p.moveTo(x1, y1);
-            p.lineTo(x2, y2);
-            GestureDescription.StrokeDescription stroke = new GestureDescription.StrokeDescription(p, 0, Math.max(100, Math.min(2000, duration)));
-            GestureDescription g = new GestureDescription.Builder().addStroke(stroke).build();
-            return requireService().dispatchGesture(g, null, null);
-        });
+        boolean passThrough = onMain(() -> FloatingControl.beginAiGesture(x1, y1));
+        if (passThrough) waitOverlayUpdate();
+        try {
+            return onMain(() -> {
+                Path p = new Path();
+                p.moveTo(x1, y1);
+                p.lineTo(x2, y2);
+                GestureDescription.StrokeDescription stroke = new GestureDescription.StrokeDescription(p, 0, Math.max(100, Math.min(2000, duration)));
+                GestureDescription g = new GestureDescription.Builder().addStroke(stroke).build();
+                return dispatchGestureNow(g);
+            });
+        } catch (Exception e) {
+            FloatingControl.endAiGesture();
+            throw e;
+        }
+    }
+
+    /**
+     * 落点压在插话/停止浮窗上时，FloatingControl 已把浮窗改成触摸穿透。
+     * 等一小会让 WindowManager 的窗口标志生效，再派发手势；手势结束
+     * （或 3.5 秒兜底）后恢复浮窗触摸。
+     */
+    private static void waitOverlayUpdate() {
+        try {
+            Thread.sleep(36);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private static boolean dispatchGestureNow(GestureDescription g) throws Exception {
+        boolean ok = requireService().dispatchGesture(g, AI_GESTURE_CALLBACK, null);
+        if (!ok) FloatingControl.endAiGesture();
+        return ok;
     }
 
     private static JSONObject tapText(JSONObject body) throws Exception {

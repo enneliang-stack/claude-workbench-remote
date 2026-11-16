@@ -9,7 +9,6 @@ import org.json.JSONObject;
 public final class TaskStatus {
     private static volatile boolean pageRunning = false;
     private static volatile boolean pageRemote = false;
-    private static volatile String pageTitle = "";
     private static volatile String pageConv = "";
     private static volatile int pageCompleted = 0;
     private static volatile int localRunning = 0;
@@ -22,24 +21,20 @@ public final class TaskStatus {
     public static synchronized void onPageState(JSONObject o) {
         if (o == null) return;
         boolean running = o.optBoolean("running", false);
-        String title = o.optString("title", "");
         String conv = o.optString("id", "");
         boolean remote = o.optBoolean("remote", false);
         if (running) {
             pageRunning = true;
             pageRunningAt = System.currentTimeMillis();
-            pageTitle = title;
             pageConv = conv;
             pageRemote = remote;
         } else if (pageRunning) {
             pageRunning = false;
-            pageTitle = title;
             pageConv = conv;
             pageRemote = remote;
             pageCompleted++;
             lastPageCompletedAt = System.currentTimeMillis();
         } else {
-            pageTitle = title;
             pageConv = conv;
             pageRemote = remote;
         }
@@ -64,7 +59,6 @@ public final class TaskStatus {
             pageRunning = false;
             pageRunningAt = 0;
             pageCompleted++;
-            pageTitle = "";
             pageConv = "";
             pageRemote = false;
         }
@@ -106,14 +100,5 @@ public final class TaskStatus {
         }
         if (pageCompleted > 0) return pageCompleted + " 个任务已完成";
         return "空闲中";
-    }
-
-    public static synchronized String overlayText() {
-        if (pageRunning) {
-            return pageTitle.isEmpty() ? "任务进行中…" : pageTitle + " · 任务进行中";
-        }
-        if (localRunning > 0) return "任务进行中…";
-        if (pageCompleted > 0) return "任务已完成";
-        return "";
     }
 }

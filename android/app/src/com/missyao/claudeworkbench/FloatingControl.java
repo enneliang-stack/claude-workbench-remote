@@ -1,24 +1,33 @@
 package com.missyao.claudeworkbench;
 
 import android.accessibilityservice.AccessibilityService;
+import android.animation.ValueAnimator;
 import android.content.Context;
 import android.content.Intent;
+import android.content.res.ColorStateList;
 import android.graphics.PixelFormat;
-import android.net.Uri;
+import android.graphics.Typeface;
+import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.RippleDrawable;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.Settings;
 import android.text.InputType;
 import android.text.TextUtils;
+import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
 import android.view.inputmethod.InputMethodManager;
+import android.view.animation.AccelerateDecelerateInterpolator;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.ImageButton;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -37,27 +46,44 @@ public final class FloatingControl {
     // 完成/输入用的可点击面板
     private LinearLayout panel;
     private LinearLayout inputRow;
+    private ImageView logo;
     private TextView status;
     private EditText input;
-    private Button messageBtn;
-    private Button doneBtn;
+    private ImageButton messageBtn;
+    private ImageButton doneBtn;
     private Button sendBtn;
     private Button cancelBtn;
     private WindowManager.LayoutParams params;
     private boolean attached;
 
+    // 跟随 App 的浅色/深色主题（设置里切换后 1 秒内同步到悬浮窗）
+    private static final String PREFS = "remote";
+    private static final String PREF_THEME = "app_theme";
+    private boolean lightTheme;
+    private boolean paletteReady;
+    private int colPanel, colStroke, colText, colMuted, colFaint;
+    private int colAccent, colGreen, colBlue, colRed;
+    private int colChip, colInputBg, colInk, colStatusBg, colEdgeBg;
+    private int colMsgBg, colDoneBg, colStopBg, colRipple;
+
     // 运行中的细状态条：不可点击，不拦截任何触摸
-    private TextView statusBar;
+    private LinearLayout statusBar;
+    private ImageView statusLogo;
+    private TextView statusText;
+    private ValueAnimator statusPulse;
     private WindowManager.LayoutParams statusParams;
     private boolean statusAttached;
 
-    // 屏幕右侧的停止/插话小按钮
+    // 屏幕边缘的停止/插话小按钮
     private LinearLayout edge;
+    private TextView grip;
     private Button stopBtn;
     private Button interjectBtn;
     private Button resumeBtn;
     private WindowManager.LayoutParams edgeParams;
     private boolean edgeAttached;
+    private boolean edgeTouchPaused;
+    private final Runnable restoreEdgeTouch = () -> setEdgeTouchPaused(false);
     private float dragDownRawX, dragDownRawY;
     private int dragStartX, dragStartY;
     private boolean draggingEdge;
@@ -109,41 +135,152 @@ public final class FloatingControl {
         return d;
     }
 
-    private Button button(String text, int color, int bg) {
+    private Drawable pressable(int fill, int ripple, int radius) {
+        GradientDrawable bg = rounded(fill, 0x00000000, radius);
+        return new RippleDrawable(ColorStateList.valueOf(ripple), bg, null);
+    }
+
+    private Button button(String text) {
         Button b = new Button(service);
         b.setText(text);
         b.setTextSize(11);
-        b.setTextColor(color);
         b.setAllCaps(false);
         b.setMinHeight(0);
         b.setMinimumHeight(0);
         b.setMinimumWidth(0);
-        b.setPadding(dp(10), dp(4), dp(10), dp(4));
-        b.setBackground(rounded(bg, 0xFF2A323C, 9));
+        b.setPadding(dp(12), dp(5), dp(12), dp(5));
+        b.setStateListAnimator(null);
         return b;
     }
 
+    private ImageButton iconButton(int drawable, String desc) {
+        ImageButton b = new ImageButton(service);
+        b.setImageResource(drawable);
+        b.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
+        b.setPadding(dp(6), dp(6), dp(6), dp(6));
+        b.setMinimumWidth(0);
+        b.setMinimumHeight(0);
+        b.setContentDescription(desc);
+        b.setStateListAnimator(null);
+        return b;
+    }
+
+    private boolean readLightTheme() {
+        return !"dark".equals(service.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getString(PREF_THEME, "light"));
+    }
+
+    /** 读主题色；App 设置里切换浅色/深色后，悬浮窗也跟着换。 */
+    private void syncTheme() {
+        boolean light = readLightTheme();
+        if (paletteReady && light == lightTheme) return;
+        lightTheme = light;
+        paletteReady = true;
+        if (light) {
+            colPanel = 0xFAFFFDFA;
+            colStroke = 0xFFDED8CE;
+            colText = 0xFF201E1B;
+            colMuted = 0xFF4C4741;
+            colFaint = 0xFF9A9186;
+            colAccent = 0xFFC46443;
+            colGreen = 0xFF3F8F68;
+            colBlue = 0xFF4F7FAE;
+            colRed = 0xFFC45A5A;
+            colChip = 0xFFECE7DF;
+            colInputBg = 0xFFF3F0EA;
+            colInk = 0xFFFFFDFA;
+            colStatusBg = 0xF2FFFDFA;
+            colEdgeBg = 0xF2FFFDFA;
+            colMsgBg = 0xFFE9EFF6;
+            colDoneBg = 0xFFE5F1EA;
+            colStopBg = 0xFFF6E9E7;
+            colRipple = 0x244C4741;
+        } else {
+            colPanel = 0xF2151A21;
+            colStroke = 0xFF2A323C;
+            colText = 0xFFE8E6E3;
+            colMuted = 0xFF9AA3AD;
+            colFaint = 0xFF6E7680;
+            colAccent = 0xFFF0A35E;
+            colGreen = 0xFF5DD39E;
+            colBlue = 0xFF8FB8FF;
+            colRed = 0xFFE58A80;
+            colChip = 0xFF232B35;
+            colInputBg = 0xFF0F1318;
+            colInk = 0xFF17202B;
+            colStatusBg = 0xE6151A21;
+            colEdgeBg = 0xE6151A21;
+            colMsgBg = 0xFF1B2530;
+            colDoneBg = 0xFF14261F;
+            colStopBg = 0xFF2A1717;
+            colRipple = 0x33FFFFFF;
+        }
+        styleViews();
+    }
+
+    /** 主题切换时直接改现有控件的颜色，不重建悬浮窗。 */
+    private void styleViews() {
+        if (panel == null) return;
+        panel.setBackground(rounded(colPanel, colStroke, 22));
+        logo.setImageTintList(ColorStateList.valueOf(colAccent));
+        status.setTextColor(colText);
+
+        messageBtn.setImageTintList(ColorStateList.valueOf(colBlue));
+        messageBtn.setBackground(pressable(colMsgBg, colRipple, 14));
+        doneBtn.setImageTintList(ColorStateList.valueOf(colGreen));
+        doneBtn.setBackground(pressable(colDoneBg, colRipple, 14));
+
+        input.setTextColor(colText);
+        input.setHintTextColor(colFaint);
+        input.setBackground(rounded(colInputBg, colStroke, 10));
+        styleTextButton(sendBtn, colInk, colAccent);
+        styleTextButton(cancelBtn, colMuted, colChip);
+
+        statusLogo.setImageTintList(ColorStateList.valueOf(colAccent));
+        statusText.setTextColor(colText);
+        statusBar.setBackground(rounded(colStatusBg, colStroke, 10));
+
+        if (grip != null) {
+            grip.setTextColor((colMuted & 0x00FFFFFF) | 0x99000000);
+        }
+        edge.setBackground(rounded(colEdgeBg, colStroke, 18));
+        styleEdgeButton(resumeBtn, colBlue, colMsgBg);
+        styleEdgeButton(interjectBtn, colAccent, colChip);
+        styleEdgeButton(stopBtn, colRed, colStopBg);
+    }
+
+    private void styleTextButton(Button b, int textColor, int bg) {
+        b.setTextColor(textColor);
+        b.setBackground(rounded(bg, colStroke, 10));
+    }
+
+    private void styleEdgeButton(Button b, int textColor, int bg) {
+        b.setTextColor(textColor);
+        b.setBackground(pressable(bg, colRipple, 15));
+    }
+
     private void build() {
+        syncTheme();
         buildPanel();
         buildStatusBar();
         buildEdge();
+        styleViews();
     }
 
     /** 只在「任务已完成」和输入插话/发消息时出现的可点击面板。 */
     private void buildPanel() {
         panel = new LinearLayout(service);
         panel.setOrientation(LinearLayout.VERTICAL);
-        panel.setPadding(dp(12), dp(8), dp(12), dp(8));
-        panel.setMinimumWidth(dp(200));
-        panel.setBackground(rounded(0xF2151A21, 0xFF2A323C, 14));
+        panel.setPadding(dp(10), dp(6), dp(8), dp(6));
+        panel.setElevation(dp(6));
         panel.setOnClickListener(v -> {
             if (!inputMode && PhoneControlServer.isCompletionPending()) {
-                // 远程电脑页的任务不在本机对话列表里，打开 App 首页即可。
+                // 先移除悬浮窗，再清完成状态/打开 App，避免窗口在移除前重排一下。
                 String conv = PhoneControlServer.isPageTaskRemote()
                     ? "" : PhoneControlServer.completionConvId();
-                openAppAtConversation(conv);
-                PhoneControlServer.dismissCompletion();
                 hideAll();
+                PhoneControlServer.dismissCompletion();
+                openAppAtConversation(conv);
             }
         });
 
@@ -151,32 +288,46 @@ public final class FloatingControl {
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
 
+        // App logo 只取星形本身，不加任何底色或方框。
+        logo = new ImageView(service);
+        logo.setImageResource(R.drawable.ic_notification);
+        logo.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        logo.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(18), dp(18));
+        lp.rightMargin = dp(7);
+        row.addView(logo, lp);
+
         status = new TextView(service);
-        status.setTextColor(0xFFE8E6E3);
-        status.setTextSize(12);
+        status.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f);
+        status.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
         status.setMaxLines(2);
         status.setMaxWidth(dp(190));
         status.setEllipsize(TextUtils.TruncateAt.END);
+        status.setLineSpacing(0, 1.05f);
         LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(
-            0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+            LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         row.addView(status, sp);
 
-        // 任务完成状态：可以直接给这个对话发新消息，或点绿色 ✓ 收起提示。
-        messageBtn = button("发消息", 0xFF6EA8FE, 0xFF17202B);
+        // 完成状态：图标按钮只占 28dp，给状态文字留出更多宽度。
+        messageBtn = iconButton(R.drawable.ic_overlay_message, "发消息");
         messageBtn.setVisibility(View.GONE);
         messageBtn.setOnClickListener(v -> showInput(true));
-        row.addView(messageBtn);
+        LinearLayout.LayoutParams mbp = new LinearLayout.LayoutParams(dp(28), dp(28));
+        mbp.leftMargin = dp(7);
+        row.addView(messageBtn, mbp);
 
-        doneBtn = button("✓", 0xFF5DD39E, 0xFF14261F);
-        doneBtn.setTextSize(15);
+        doneBtn = iconButton(R.drawable.ic_overlay_done, "完成，收起提示");
         doneBtn.setVisibility(View.GONE);
         doneBtn.setOnClickListener(v -> {
+            // 先移除窗口再清状态：不再先 setText("")，避免面板在移除前
+            // 先缩成只有 logo 和两个图标的一条，看起来像“点了没反应”。
+            hideAll();
             PhoneControlServer.dismissCompletion();
             if (inputMode) finishInput(true);
-            status.setText("");
-            hideAll();
         });
-        row.addView(doneBtn);
+        LinearLayout.LayoutParams dbp = new LinearLayout.LayoutParams(dp(28), dp(28));
+        dbp.leftMargin = dp(6);
+        row.addView(doneBtn, dbp);
         panel.addView(row);
 
         inputRow = new LinearLayout(service);
@@ -185,25 +336,28 @@ public final class FloatingControl {
         inputRow.setVisibility(View.GONE);
         LinearLayout.LayoutParams ip = new LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        ip.topMargin = dp(7);
+        ip.topMargin = dp(8);
         input = new EditText(service);
         input.setHint("输入插话内容…");
-        input.setHintTextColor(0xFF6E7680);
-        input.setTextColor(0xFFE8E6E3);
         input.setTextSize(13);
         input.setSingleLine(false);
         input.setMaxLines(3);
         input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
-        input.setBackground(rounded(0xFF0F1318, 0xFF2A323C, 9));
-        input.setPadding(dp(9), dp(6), dp(9), dp(6));
+        input.setPadding(dp(10), dp(7), dp(10), dp(7));
         inputRow.addView(input, new LinearLayout.LayoutParams(0,
             LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-        sendBtn = button("发送", 0xFFF0A35E, 0xFF2A2118);
+        sendBtn = button("发送");
         sendBtn.setOnClickListener(v -> sendInput());
-        cancelBtn = button("取消", 0xFF9AA3AD, 0xFF151A21);
+        cancelBtn = button("取消");
         cancelBtn.setOnClickListener(v -> finishInput(true));
-        inputRow.addView(sendBtn);
-        inputRow.addView(cancelBtn);
+        LinearLayout.LayoutParams sendLp = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        sendLp.leftMargin = dp(7);
+        inputRow.addView(sendBtn, sendLp);
+        LinearLayout.LayoutParams cancelLp = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        cancelLp.leftMargin = dp(6);
+        inputRow.addView(cancelBtn, cancelLp);
         panel.addView(inputRow, ip);
 
         int type = canFocusOverlay()
@@ -224,19 +378,31 @@ public final class FloatingControl {
     }
 
     /**
-     * 运行中的细状态条。FLAG_NOT_TOUCHABLE 是关键：它只显示文字，
+     * 运行中的细状态条（星形 logo + 状态文字）。FLAG_NOT_TOUCHABLE 是关键：
      * 所有触摸都会穿透到下面的 App，Claude 点它覆盖的位置也不会被接住。
      */
     private void buildStatusBar() {
-        statusBar = new TextView(service);
-        statusBar.setTextColor(0xFFE8E6E3);
-        statusBar.setTextSize(11);
-        statusBar.setMaxLines(1);
-        statusBar.setMaxWidth(dp(240));
-        statusBar.setEllipsize(TextUtils.TruncateAt.END);
-        statusBar.setGravity(Gravity.CENTER);
-        statusBar.setPadding(dp(10), dp(3), dp(10), dp(3));
-        statusBar.setBackground(rounded(0xCC151A21, 0xFF2A323C, 9));
+        statusBar = new LinearLayout(service);
+        statusBar.setOrientation(LinearLayout.HORIZONTAL);
+        statusBar.setGravity(Gravity.CENTER_VERTICAL);
+        statusBar.setPadding(dp(11), dp(4), dp(12), dp(4));
+
+        // 星形 logo 用和「过程」头像一样的呼吸循环，表示任务正在跑。
+        statusLogo = new ImageView(service);
+        statusLogo.setImageResource(R.drawable.ic_notification);
+        statusLogo.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        statusLogo.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        LinearLayout.LayoutParams logoLp = new LinearLayout.LayoutParams(dp(16), dp(16));
+        logoLp.rightMargin = dp(6);
+        statusBar.addView(statusLogo, logoLp);
+
+        statusText = new TextView(service);
+        statusText.setTextSize(11);
+        statusText.setMaxLines(1);
+        statusText.setMaxWidth(dp(240));
+        statusText.setEllipsize(TextUtils.TruncateAt.END);
+        statusText.setGravity(Gravity.CENTER);
+        statusBar.addView(statusText);
 
         statusParams = new WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -252,40 +418,37 @@ public final class FloatingControl {
         statusParams.horizontalMargin = dp(8);
     }
 
-    private Button edgeButton(String glyph, int color, int bg, String desc) {
+    private Button edgeButton(String glyph, String desc) {
         Button b = new Button(service);
         b.setText(glyph);
         b.setTextSize(13);
-        b.setTextColor(color);
         b.setAllCaps(false);
         b.setMinHeight(0);
         b.setMinimumHeight(0);
         b.setMinimumWidth(0);
         b.setPadding(0, 0, 0, 0);
-        b.setBackground(rounded(bg, 0x00000000, 15));
         b.setContentDescription(desc);
+        b.setStateListAnimator(null);
         return b;
     }
 
-    /** 右侧小胶囊：继续/插话/停止，可拖动并吸附到左右边缘。 */
+    /** 边缘小胶囊：继续/插话/停止，可拖动并吸附到左右边缘。 */
     private void buildEdge() {
         edge = new LinearLayout(service);
         edge.setOrientation(LinearLayout.VERTICAL);
         edge.setGravity(Gravity.CENTER_HORIZONTAL);
         edge.setPadding(dp(3), dp(3), dp(3), dp(3));
-        edge.setBackground(rounded(0xD9151A21, 0xFF2A323C, 18));
 
-        TextView grip = new TextView(service);
+        grip = new TextView(service);
         grip.setText("⋮");
         grip.setTextSize(11);
-        grip.setTextColor(0x99E8E6E3);
         grip.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams gp = new LinearLayout.LayoutParams(dp(30), dp(12));
         gp.bottomMargin = dp(2);
         edge.addView(grip, gp);
         makeDraggable(grip);
 
-        resumeBtn = edgeButton("▶", 0xFF8FB8FF, 0xFF1B2530, "继续手机操作");
+        resumeBtn = edgeButton("▶", "继续手机操作");
         resumeBtn.setVisibility(View.GONE);
         resumeBtn.setOnClickListener(v -> {
             PhoneControlServer.clearPause();
@@ -293,14 +456,14 @@ public final class FloatingControl {
         });
         makeDraggable(resumeBtn);
 
-        interjectBtn = edgeButton("✎", 0xFFF0B46A, 0xFF2A2118, "插话");
+        interjectBtn = edgeButton("✎", "插话");
         interjectBtn.setOnClickListener(v -> showInput(false));
         makeDraggable(interjectBtn);
 
-        stopBtn = edgeButton("■", 0xFFE58A80, 0xFF2A1717, "停止手机操作");
+        stopBtn = edgeButton("■", "停止手机操作");
         stopBtn.setOnClickListener(v -> {
             PhoneControlServer.stopCurrent();
-            if (statusBar != null) statusBar.setText("正在停止…");
+            if (statusText != null) statusText.setText("正在停止…");
             if (inputMode) finishInput(false);
         });
         makeDraggable(stopBtn);
@@ -322,6 +485,7 @@ public final class FloatingControl {
                 | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT);
         edgeParams.gravity = Gravity.TOP | Gravity.START;
+        applyEdgeTouchFlag();
     }
 
     private int screenW() {
@@ -414,7 +578,7 @@ public final class FloatingControl {
             .apply();
     }
 
-    /** 首次显示时恢复上次拖到的位置；没有记录就默认右侧居中。 */
+    /** 首次显示时恢复上次拖到的位置；没有记录就默认左侧居中。 */
     private void applyEdgePosition() {
         if (!edgeAttached) return;
         int w = edge.getWidth();
@@ -427,7 +591,8 @@ public final class FloatingControl {
         int y = service.getSharedPreferences("floating", Context.MODE_PRIVATE)
             .getInt("edge_y", -1);
         if (x < 0 || y < 0) {
-            x = Math.max(0, sw - w - dp(5));
+            // 默认靠左、竖直居中；用户拖动过则继续恢复上次保存的位置。
+            x = dp(5);
             y = Math.max(0, (sh - h) / 2);
         }
         edgeParams.x = clamp(x, 0, Math.max(0, sw - w));
@@ -450,6 +615,67 @@ public final class FloatingControl {
         }
     }
 
+    /**
+     * AI 要用坐标点按/滑动时调用：如果落点压在插话/停止小浮窗上，
+     * 临时让浮窗不接收触摸，让手势穿透到下面的 App，避免 Claude 把自己点停。
+     * 返回是否临时关了触摸，调用方在手势结束后要调用 endAiGesture()。
+     */
+    public static boolean beginAiGesture(int x, int y) {
+        FloatingControl f = instance;
+        return f != null && f.beginGesturePassThrough(x, y);
+    }
+
+    public static void endAiGesture() {
+        FloatingControl f = instance;
+        if (f == null) return;
+        f.handler.post(() -> f.setEdgeTouchPaused(false));
+    }
+
+    private boolean beginGesturePassThrough(int x, int y) {
+        if (!edgeAttached || edge == null || edgeParams == null) return false;
+        int w = edge.getWidth();
+        int h = edge.getHeight();
+        if (w <= 0) w = dp(36);
+        if (h <= 0) h = dp(120);
+        int margin = dp(8);
+        int left = edgeParams.x - margin;
+        int top = edgeParams.y - margin;
+        int right = edgeParams.x + w + margin;
+        int bottom = edgeParams.y + h + margin;
+        if (x < left || x > right || y < top || y > bottom) return false;
+        setEdgeTouchPaused(true);
+        return true;
+    }
+
+    private void setEdgeTouchPaused(boolean paused) {
+        if (edgeTouchPaused == paused) {
+            if (paused) {
+                handler.removeCallbacks(restoreEdgeTouch);
+                handler.postDelayed(restoreEdgeTouch, 3500);
+            }
+            return;
+        }
+        edgeTouchPaused = paused;
+        handler.removeCallbacks(restoreEdgeTouch);
+        if (paused) handler.postDelayed(restoreEdgeTouch, 3500);
+        applyEdgeTouchFlag();
+    }
+
+    private void applyEdgeTouchFlag() {
+        if (edgeParams == null) return;
+        if (edgeTouchPaused) {
+            edgeParams.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+        } else {
+            edgeParams.flags &= ~WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+        }
+        if (edgeAttached) {
+            try {
+                wm.updateViewLayout(edge, edgeParams);
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
     private boolean shouldRun() {
         return PhoneControlServer.isEnabled(service)
             && PhoneControlServer.isAccessibilityConnected()
@@ -459,6 +685,7 @@ public final class FloatingControl {
 
     private void show() {
         if (attached) return;
+        panel.setVisibility(View.VISIBLE);
         try {
             wm.addView(panel, params);
             attached = true;
@@ -477,6 +704,9 @@ public final class FloatingControl {
 
     private void hide() {
         if (!attached) return;
+        // 先把 View 压成不可见，再移除窗口。窗口移除是异步的，
+        // 这一步能保证点击 ✓ 后不会再多画一帧旧面板。
+        panel.setVisibility(View.GONE);
         try {
             wm.removeView(panel);
         } catch (Exception ignored) {
@@ -489,6 +719,7 @@ public final class FloatingControl {
         try {
             wm.addView(statusBar, statusParams);
             statusAttached = true;
+            startStatusPulse();
         } catch (Exception ignored) {
         }
     }
@@ -500,10 +731,41 @@ public final class FloatingControl {
         } catch (Exception ignored) {
         }
         statusAttached = false;
+        stopStatusPulse();
+    }
+
+    /** 和过程头像一致的星形呼吸循环：缩放 0.92–1、透明度 0.78–1。 */
+    private void startStatusPulse() {
+        if (statusPulse != null && statusPulse.isStarted()) return;
+        statusPulse = ValueAnimator.ofFloat(0f, 1f);
+        // REVERSE 会再花 980ms 回程，一个完整呼吸约 1.96 秒，和页面「过程」头像一致。
+        statusPulse.setDuration(980);
+        statusPulse.setRepeatCount(ValueAnimator.INFINITE);
+        statusPulse.setRepeatMode(ValueAnimator.REVERSE);
+        statusPulse.setInterpolator(new AccelerateDecelerateInterpolator());
+        statusPulse.addUpdateListener(a -> {
+            float t = (float) a.getAnimatedValue();
+            float scale = 0.92f + 0.08f * t;
+            statusLogo.setScaleX(scale);
+            statusLogo.setScaleY(scale);
+            statusLogo.setAlpha(0.78f + 0.22f * t);
+        });
+        statusPulse.start();
+    }
+
+    private void stopStatusPulse() {
+        if (statusPulse == null) return;
+        statusPulse.cancel();
+        statusPulse = null;
+        statusLogo.setScaleX(1f);
+        statusLogo.setScaleY(1f);
+        statusLogo.setAlpha(1f);
     }
 
     private void showEdge() {
         if (edgeAttached) return;
+        // 如果 AI 手势还没结束，新挂上的浮窗也要保持触摸穿透。
+        applyEdgeTouchFlag();
         try {
             wm.addView(edge, edgeParams);
             edgeAttached = true;
@@ -551,7 +813,7 @@ public final class FloatingControl {
             return;
         }
 
-        // 运行中不再使用面板和按钮：只有不可点击的细状态条 + 右侧小按钮。
+        // 运行中不再使用面板和按钮：只有不可点击的细状态条 + 边缘小按钮。
         hide();
         messageBtn.setVisibility(View.GONE);
         doneBtn.setVisibility(View.GONE);
@@ -561,7 +823,7 @@ public final class FloatingControl {
             hideEdge();
             return;
         }
-        statusBar.setText(text);
+        statusText.setText(text);
         showStatusBar();
 
         boolean active = PhoneControlServer.isClaudeRunning()
@@ -585,17 +847,24 @@ public final class FloatingControl {
         @Override
         public void run() {
             try {
+                syncTheme();
                 boolean alive = PhoneControlServer.isEnabled(service)
                     && PhoneControlServer.isAccessibilityConnected()
                     && PhoneControlServer.isRunning();
                 if (!alive) {
                     if (inputMode) finishInput(false);
                     hideAll();
-                } else if (!inputMode && PhoneControlServer.isPhoneChatVisible()
-                        && !PhoneControlServer.isCompletionPending()) {
-                    // 用户已经停在一个对话上（任务结束后的完成提示会由 JS 桥接清除）。
-                    // 任务仍在跑时不遮挡聊天页；完成待确认时保留悬浮窗，直到用户打开对应对话。
+                } else if (!inputMode && PhoneControlServer.isPhoneChatVisible()) {
+                    // 用户已经停在手机端的对话页上：任务完成的回复就在页面里，
+                    // 不再弹完成悬浮窗；正看着同一个对话时把完成状态一并清掉。
                     PhoneControlServer.refreshRunState();
+                    if (PhoneControlServer.isCompletionPending()) {
+                        String doneConv = PhoneControlServer.completionConvId();
+                        String viewing = PhoneControlServer.phoneChatConvId();
+                        if (doneConv.isEmpty() || doneConv.equals(viewing)) {
+                            PhoneControlServer.dismissCompletion();
+                        }
+                    }
                     hideAll();
                 } else {
                     // 即使悬浮窗暂时隐藏也要轮询，才能知道 Claude 是否还在跑。

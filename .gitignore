@@ -47,3 +47,6 @@ __pycache__/
 
 # 本地浏览器测试产物
 .playwright-cli/
+
+# apksigner v4 签名副产物
+apk/*.idsig
