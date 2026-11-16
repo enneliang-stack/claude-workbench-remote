@@ -47,6 +47,7 @@ import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.ScrollView;
@@ -551,14 +552,29 @@ public class MainActivity extends Activity {
         page.setBackgroundColor(BG);
         page.setPadding(dp(22), dp(46), dp(22), dp(26));
 
+        int markSize = dp(30);
+        int markGap = dp(10);
+        LinearLayout titleRow = new LinearLayout(this);
+        titleRow.setOrientation(LinearLayout.HORIZONTAL);
+        titleRow.setGravity(Gravity.CENTER_VERTICAL);
+        ImageView mark = new ImageView(this);
+        mark.setImageResource(R.drawable.ic_star_mark);
+        mark.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        mark.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        titleRow.addView(mark, new LinearLayout.LayoutParams(markSize, markSize));
         TextView title = text("Claude 工作台", 26, FG);
         title.setTypeface(Typeface.DEFAULT_BOLD);
-        page.addView(title);
+        LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        tp.leftMargin = markGap;
+        titleRow.addView(title, tp);
+        page.addView(titleRow);
 
         TextView sub = text("选择在这台手机上工作，或远程连接电脑", 13, MUTED);
         LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         sp.topMargin = dp(6);
+        sp.leftMargin = markSize + markGap;
         page.addView(sub, sp);
 
         homePcStatus = text("", 12, BLUE);

@@ -205,7 +205,7 @@ public class EngineService extends Service {
                 PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= 23 ? PendingIntent.FLAG_IMMUTABLE : 0));
         return b.setContentTitle("Claude 工作台 · 手机端")
                 .setContentText(text)
-                .setSmallIcon(android.R.drawable.stat_sys_download)
+                .setSmallIcon(R.drawable.ic_notification)
                 .setOngoing(true)
                 .setContentIntent(openPi)
                 .addAction(0, "查看日志", logPi)

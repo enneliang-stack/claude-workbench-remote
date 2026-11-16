@@ -952,6 +952,24 @@
     return out;
   }
 
+  /** 新对话没有消息时，显示与客户端一致的空状态。 */
+  function chatEmptyNode() {
+    const cwd = (S.conv && S.conv.cwd) || '';
+    const d = el('div', 'chat-empty');
+    d.innerHTML = `
+      <div class="chat-empty-mark" aria-hidden="true">${PROCESS_STAR_SVG}</div>
+      <div class="chat-empty-title">开始对话</div>
+      <p class="chat-empty-sub">在下面的输入框里写下任务，点「发送」开始。</p>
+      ${cwd ? `<div class="chat-empty-folder">当前文件夹 <code>${escapeHtml(cwd)}</code></div>` : ''}
+      <div class="chat-empty-tips">点左下角回形针添加文件或图片</div>`;
+    return d;
+  }
+
+  function clearChatEmpty() {
+    const e = document.querySelector('#messages .chat-empty');
+    if (e) e.remove();
+  }
+
   function renderMessages(forceBottom = false, anchor = null) {
     const box = $('#messages');
     // 重建 DOM 前记住位置：用户正在往回翻时，不要被新过程块强行拽到底部
@@ -981,6 +999,10 @@
       }
     }
     box.innerHTML = '';
+    const historyMsgs = (S.conv && S.conv.messages) || [];
+    if (!historyMsgs.length && !S.live && !S.running && !S.pendingEcho) {
+      box.appendChild(chatEmptyNode());
+    }
 
     if (S.conv && S.conv.hasMore) {
       // 加载中途或自动补页链未结束时若有实时事件触发重建，新按钮也要保持“正在加载”状态。
@@ -1268,6 +1290,7 @@
   /** 发送成功后先本地画出自己的消息，不依赖 SSE 回显；回显到了再去重。 */
   function appendSentUser(msg) {
     if (!msg || !S.convId) return;
+    clearChatEmpty();
     if (S.running && S.live) {
       if ((S.live.users || []).some(u => sameUserPayload(u, msg))) return;
       S.live.users.push({ ...msg, optimistic: true, afterBlocks: (S.live.blocks || []).length });
@@ -1362,7 +1385,7 @@
         summaries.push(summary);
       }
       const procEl = processNode(processBlocks, steers);
-      wrap.appendChild(procEl);
+      wrap.appendChild(processRowNode(procEl, false));
       const sync = () => {
         for (const n of summaries) n.style.display = procEl.open ? 'none' : '';
       };
@@ -2668,6 +2691,18 @@
     });
   }
 
+  // 过程条前的星形头像：和客户端消息头像同一颗星，运行中单独做动画。
+  const PROCESS_STAR_SVG = '<svg class="spark" viewBox="28 28 200 200"><g transform="rotate(5.0 128 128)"><g stroke="currentColor" stroke-linecap="round"><g class="spark-ray" style="--sray-dur:1.9600s;--sray-delay:-0.4592s;--sray-min:0.9069"><line x1="128" y1="128" x2="178.54" y2="59.19" stroke-width="15.74"/></g><g class="spark-ray" style="--sray-dur:3.9200s;--sray-delay:-3.2805s;--sray-min:0.9007"><line x1="128" y1="128" x2="204.97" y2="103.06" stroke-width="12.83"/></g><g class="spark-ray" style="--sray-dur:3.9200s;--sray-delay:-1.3515s;--sray-min:0.9119"><line x1="128" y1="128" x2="177.20" y2="196.55" stroke-width="17.46"/></g><g class="spark-ray" style="--sray-dur:1.3067s;--sray-delay:-0.7673s;--sray-min:0.8848"><line x1="128" y1="128" x2="127.73" y2="206.38" stroke-width="11.24"/></g><g class="spark-ray" style="--sray-dur:1.3067s;--sray-delay:-0.9930s;--sray-min:0.8885"><line x1="128" y1="128" x2="52.67" y2="105.29" stroke-width="16.54"/></g></g><g class="spark-ray" style="--sray-dur:1.3067s;--sray-delay:-0.7207s;--sray-min:0.9112"><path d="M 136.96 128.15 L 136.95 51.84 Q 129.42 40.14 121.52 51.59 L 119.04 127.85 Z" fill="currentColor"/></g><g class="spark-ray" style="--sray-dur:1.3067s;--sray-delay:-0.7150s;--sray-min:0.9296"><path d="M 127.22 130.43 L 204.75 157.89 Q 213.51 155.39 207.83 148.27 L 128.78 125.57 Z" fill="currentColor"/></g><g class="spark-ray" style="--sray-dur:1.3067s;--sray-delay:-0.1089s;--sray-min:0.8947"><path d="M 120.97 122.95 L 71.98 193.29 Q 71.52 206.62 84.01 201.93 L 135.03 133.05 Z" fill="currentColor"/></g><g class="spark-ray" style="--sray-dur:1.3067s;--sray-delay:-0.0838s;--sray-min:0.8860"><path d="M 127.20 125.56 L 48.20 148.82 Q 42.55 156.00 51.36 158.45 L 128.80 130.44 Z" fill="currentColor"/></g><g class="spark-ray" style="--sray-dur:1.3067s;--sray-delay:-0.2619s;--sray-min:0.8941"><path d="M 131.08 125.77 L 82.16 53.96 Q 71.50 50.00 71.94 61.36 L 124.92 130.23 Z" fill="currentColor"/></g><circle cx="128" cy="128" r="10" fill="currentColor"/></g></svg>';
+
+  function processRowNode(details, live) {
+    const row = el('div', 'process-row' + (live ? ' live' : ''));
+    const avatar = el('span', 'process-avatar');
+    avatar.setAttribute('aria-hidden', 'true');
+    avatar.innerHTML = PROCESS_STAR_SVG;
+    row.append(avatar, details);
+    return row;
+  }
+
   /** 历史消息里的「过程」：思考、工具、中间结论和插话按原顺序折叠，默认合上 */
   function processNode(blocks, steers = []) {
     const d = el('details', 'process');
@@ -3492,7 +3527,7 @@
     const body = el('div', 'process-body');
     d.append(sum, body);
     d.addEventListener('toggle', scheduleProcessCollapseUpdate);
-    box.appendChild(d);
+    box.appendChild(processRowNode(d, true));
 
     S.liveProcessEl = d;
     S.liveProcessBody = body;
