@@ -105,16 +105,68 @@ public class MainActivity extends Activity {
     private static final int REQ_STORAGE = 1003;
     private static final int REQ_CAPTURE = 1004;
 
-    private static final int BG = Color.rgb(11, 13, 16);
-    private static final int CARD = Color.rgb(21, 26, 33);
-    private static final int STROKE = Color.rgb(38, 46, 56);
-    private static final int FG = Color.rgb(232, 230, 227);
-    private static final int MUTED = Color.rgb(154, 163, 173);
-    private static final int FAINT = Color.rgb(111, 120, 131);
-    private static final int ORANGE = Color.rgb(240, 163, 94);
-    private static final int GREEN = Color.rgb(76, 195, 138);
-    private static final int RED = Color.rgb(224, 118, 107);
-    private static final int BLUE = Color.rgb(110, 168, 254);
+    // 颜色由 applyPalette() 根据主题设置，Activity 重建后生效。
+    private static int BG;
+    private static int CARD;
+    private static int STROKE;
+    private static int FG;
+    private static int MUTED;
+    private static int FAINT;
+    private static int ORANGE;
+    private static int GREEN;
+    private static int RED;
+    private static int BLUE;
+    private static int CHIP_BG;
+    private static int SUBTLE_BG;
+    private static int LOG_BG;
+    private static int LOG_TEXT;
+    private static int BODY_TEXT;
+    private static int PRIMARY_INK;
+    private static boolean pendingOpenSettings;
+    private static final String PREF_THEME = "app_theme";
+
+    private static boolean isLightTheme(Context c) {
+        return !"dark".equals(c.getSharedPreferences(PREFS, MODE_PRIVATE)
+            .getString(PREF_THEME, "light"));
+    }
+
+    private static void applyPalette(boolean light) {
+        if (light) {
+            BG = Color.rgb(247, 245, 240);
+            CARD = Color.rgb(255, 253, 250);
+            STROKE = Color.rgb(222, 216, 206);
+            FG = Color.rgb(32, 30, 27);
+            MUTED = Color.rgb(76, 71, 65);
+            FAINT = Color.rgb(154, 145, 134);
+            ORANGE = Color.rgb(196, 100, 67);
+            GREEN = Color.rgb(63, 143, 104);
+            RED = Color.rgb(196, 90, 90);
+            BLUE = Color.rgb(79, 127, 174);
+            CHIP_BG = 0xFFECE7DF;
+            SUBTLE_BG = 0xFFF1EDE6;
+            LOG_BG = 0xFFF3F0EA;
+            LOG_TEXT = Color.rgb(60, 55, 49);
+            BODY_TEXT = Color.rgb(60, 55, 49);
+            PRIMARY_INK = Color.rgb(255, 253, 250);
+        } else {
+            BG = Color.rgb(11, 13, 16);
+            CARD = Color.rgb(21, 26, 33);
+            STROKE = Color.rgb(38, 46, 56);
+            FG = Color.rgb(232, 230, 227);
+            MUTED = Color.rgb(154, 163, 173);
+            FAINT = Color.rgb(111, 120, 131);
+            ORANGE = Color.rgb(240, 163, 94);
+            GREEN = Color.rgb(76, 195, 138);
+            RED = Color.rgb(224, 118, 107);
+            BLUE = Color.rgb(110, 168, 254);
+            CHIP_BG = 0xFF1B2028;
+            SUBTLE_BG = 0xFF1A1F27;
+            LOG_BG = 0xFF161A20;
+            LOG_TEXT = Color.rgb(180, 186, 194);
+            BODY_TEXT = Color.rgb(200, 205, 212);
+            PRIMARY_INK = Color.rgb(27, 18, 12);
+        }
+    }
 
     WebView webView;
     private ProgressBar progress;
@@ -171,14 +223,25 @@ public class MainActivity extends Activity {
     private Runnable loadTimeout;
     private Runnable installPoll;
 
+    private String pageThemeJs() {
+        String theme = isLightTheme(this) ? "light" : "dark";
+        return "(function(){try{document.documentElement.dataset.theme='" + theme
+            + "';}catch(e){}})()";
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         requestWindowFeature(Window.FEATURE_NO_TITLE);
+        applyPalette(isLightTheme(this));
         installCrashHandler();
         try {
             createUi();
             maybePrewarmTailscale();
+            if (pendingOpenSettings) {
+                pendingOpenSettings = false;
+                handler.postDelayed(this::showPhoneSettings, 250);
+            }
         } catch (Throwable t) {
             showCrash(t);
         }
@@ -188,6 +251,10 @@ public class MainActivity extends Activity {
         getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         getWindow().setStatusBarColor(BG);
         getWindow().setNavigationBarColor(BG);
+        int ui = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+        if (Build.VERSION.SDK_INT >= 26) ui |= View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+        getWindow().getDecorView().setSystemUiVisibility(
+            isLightTheme(this) ? ui : (View.SYSTEM_UI_FLAG_VISIBLE));
 
         FrameLayout root = new FrameLayout(this);
         root.setBackgroundColor(BG);
@@ -238,6 +305,7 @@ public class MainActivity extends Activity {
             @Override
             public void onPageFinished(WebView view, String url) {
                 view.evaluateJavascript(HIDE_TIPS_JS, null);
+                view.evaluateJavascript(pageThemeJs(), null);
                 view.evaluateJavascript(RECONNECT_JS, null);
                 view.evaluateJavascript(
                     "(function(){return !!(document.getElementById('listScreen')||document.getElementById('chatScreen')||document.getElementById('app')||document.querySelector('input[name=token]'));})()",
@@ -588,7 +656,7 @@ public class MainActivity extends Activity {
         page.addView(buildHomeSettingsCard(), marginTop(dp(18)));
 
         TextView tip = text("手机端不依赖电脑；电脑端需要电脑开机并运行「远程访问」。\n"
-            + "手机端首次安装约 500 MB，需要 1.8 GB 以上空间。", 11, Color.rgb(110, 118, 128));
+            + "手机端首次安装约 500 MB，需要 1.8 GB 以上空间。", 11, FAINT);
         tip.setLineSpacing(dp(3), 1f);
         page.addView(tip, marginTop(dp(18)));
 
@@ -607,7 +675,7 @@ public class MainActivity extends Activity {
     private TextView homeChip() {
         TextView t = text("", 10, MUTED);
         t.setPadding(dp(6), dp(3), dp(6), dp(3));
-        t.setBackground(rounded(0xFF1B2028, STROKE, 999));
+        t.setBackground(rounded(CHIP_BG, STROKE, 999));
         return t;
     }
 
@@ -638,7 +706,7 @@ public class MainActivity extends Activity {
         top.setGravity(Gravity.CENTER_VERTICAL);
         TextView icon = text("⚙", 18, MUTED);
         icon.setGravity(Gravity.CENTER);
-        icon.setBackground(rounded(0xFF1B2028, STROKE, 12));
+        icon.setBackground(rounded(CHIP_BG, STROKE, 12));
         top.addView(icon, new LinearLayout.LayoutParams(dp(38), dp(38)));
 
         LinearLayout main = new LinearLayout(this);
@@ -1242,6 +1310,8 @@ public class MainActivity extends Activity {
         input.setSingleLine(false);
         input.setMinLines(4);
         input.setGravity(Gravity.TOP | Gravity.START);
+        input.setTextColor(FG);
+        input.setHintTextColor(FAINT);
         input.setHint("每行一个地址，例如：\n"
             + "http://192.168.x.x:4711/m/index.html?token=...\n"
             + "http://100.x.x.x:4711/m/index.html?token=...");
@@ -1511,12 +1581,12 @@ public class MainActivity extends Activity {
         ensureNotificationPermission();
         LocalEngine.log(this, "===== 开始安装手机端 =====");
 
-        TextView logView = text("", 10, Color.rgb(180, 186, 194));
+        TextView logView = text("", 10, LOG_TEXT);
         logView.setTypeface(Typeface.MONOSPACE);
         logView.setTextIsSelectable(true);
         ScrollView scroll = new ScrollView(this);
         scroll.setPadding(dp(10), dp(6), dp(10), dp(6));
-        scroll.setBackground(rounded(0xFF161A20, STROKE, 10));
+        scroll.setBackground(rounded(LOG_BG, STROKE, 10));
         scroll.addView(logView);
         int h = dp(220);
         scroll.setLayoutParams(new LinearLayout.LayoutParams(
@@ -1636,7 +1706,7 @@ public class MainActivity extends Activity {
 
     private StateListDrawable rowPressBg() {
         StateListDrawable d = new StateListDrawable();
-        d.addState(new int[]{android.R.attr.state_pressed}, rounded(0xFF1B2028, Color.TRANSPARENT, 12));
+        d.addState(new int[]{android.R.attr.state_pressed}, rounded(CHIP_BG, Color.TRANSPARENT, 12));
         d.addState(new int[]{}, rounded(Color.TRANSPARENT, Color.TRANSPARENT, 12));
         return d;
     }
@@ -1723,7 +1793,7 @@ public class MainActivity extends Activity {
         w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
         w.setGravity(Gravity.CENTER);
         w.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
-        w.setDimAmount(0.62f);
+        w.setDimAmount(isLightTheme(this) ? 0.35f : 0.62f);
         w.setWindowAnimations(R.style.WorkbenchDialogAnimation);
         w.setLayout(width, height);
     }
@@ -1739,6 +1809,15 @@ public class MainActivity extends Activity {
         if (settingsDialog != null && settingsDialog.isShowing() && settingsRefresh != null) {
             settingsRefresh.run();
         }
+    }
+
+    private void toggleTheme() {
+        boolean light = isLightTheme(this);
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+            .putString(PREF_THEME, light ? "dark" : "light").apply();
+        pendingOpenSettings = true;
+        dismissSettingsDialog();
+        recreate();
     }
 
     private void showPhoneSettings() {
@@ -1794,6 +1873,13 @@ public class MainActivity extends Activity {
         scroll.addView(content);
         root.addView(scroll, new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
+
+        content.addView(settingsGroupLabel("外观"));
+        LinearLayout g0 = settingsGroup();
+        boolean lightTheme = isLightTheme(this);
+        g0.addView(settingsRow("主题", "深色 / 浅色切换", lightTheme ? "浅色" : "深色",
+            lightTheme ? ORANGE : MUTED, this::toggleTheme));
+        content.addView(g0);
 
         content.addView(settingsGroupLabel("连接与模型"));
         LinearLayout g1 = settingsGroup();
@@ -1877,7 +1963,7 @@ public class MainActivity extends Activity {
         TextView close = text("关闭", 14, FG);
         close.setGravity(Gravity.CENTER);
         close.setPadding(0, dp(12), 0, dp(12));
-        close.setBackground(rounded(0xFF1A1F27, STROKE, 12));
+        close.setBackground(rounded(SUBTLE_BG, STROKE, 12));
         LinearLayout.LayoutParams closeLp = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         closeLp.topMargin = dp(14);
@@ -2019,7 +2105,7 @@ public class MainActivity extends Activity {
         alp.topMargin = dp(14);
 
         if (primaryLabel != null && primary != null) {
-            TextView primaryBtn = text(primaryLabel, 14, Color.rgb(27, 18, 12));
+            TextView primaryBtn = text(primaryLabel, 14, PRIMARY_INK);
             primaryBtn.setTypeface(Typeface.DEFAULT_BOLD);
             primaryBtn.setGravity(Gravity.CENTER);
             primaryBtn.setPadding(0, dp(12), 0, dp(12));
@@ -2036,7 +2122,7 @@ public class MainActivity extends Activity {
             TextView secondaryBtn = text(secondaryLabel, 14, FG);
             secondaryBtn.setGravity(Gravity.CENTER);
             secondaryBtn.setPadding(0, dp(12), 0, dp(12));
-            secondaryBtn.setBackground(rounded(0xFF1A1F27, STROKE, 12));
+            secondaryBtn.setBackground(rounded(SUBTLE_BG, STROKE, 12));
             secondaryBtn.setOnClickListener(v -> {
                 if (secondary.run(dialog)) dialog.dismiss();
             });
@@ -2060,7 +2146,7 @@ public class MainActivity extends Activity {
                                    String secondaryLabel, DarkAction secondary,
                                    String tertiaryLabel, DarkAction tertiary, int tertiaryColor,
                                    boolean dangerPrimary) {
-        TextView body = text(message, 13f, Color.rgb(200, 205, 212));
+        TextView body = text(message, 13f, BODY_TEXT);
         body.setLineSpacing(dp(4), 1f);
         body.setPadding(dp(2), 0, dp(2), 0);
         return showDarkDialog(title, subtitle, body, primaryLabel, primary,
@@ -2086,7 +2172,7 @@ public class MainActivity extends Activity {
         TextView close = text(buttonLabel, 14, FG);
         close.setGravity(Gravity.CENTER);
         close.setPadding(0, dp(12), 0, dp(12));
-        close.setBackground(rounded(0xFF1A1F27, STROKE, 12));
+        close.setBackground(rounded(SUBTLE_BG, STROKE, 12));
         LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         clp.topMargin = dp(16);
@@ -2127,8 +2213,9 @@ public class MainActivity extends Activity {
         if (important) {
             TextView imp = text("重要", 10, ORANGE);
             imp.setPadding(dp(8), dp(3), dp(8), dp(3));
-            imp.setBackground(rounded(Color.argb(20, 240, 163, 94),
-                Color.argb(100, 240, 163, 94), 999));
+            imp.setBackground(rounded(
+                Color.argb(20, Color.red(ORANGE), Color.green(ORANGE), Color.blue(ORANGE)),
+                Color.argb(100, Color.red(ORANGE), Color.green(ORANGE), Color.blue(ORANGE)), 999));
             head.addView(imp);
         }
         TextView closeX = text("×", 22, MUTED);
@@ -2172,9 +2259,9 @@ public class MainActivity extends Activity {
         TextView later = text("稍后", 14, MUTED);
         later.setGravity(Gravity.CENTER);
         later.setPadding(0, dp(12), 0, dp(12));
-        later.setBackground(rounded(0xFF1A1F27, STROKE, 12));
+        later.setBackground(rounded(SUBTLE_BG, STROKE, 12));
         later.setOnClickListener(v -> dialog.dismiss());
-        TextView download = text("下载并安装", 14, Color.rgb(27, 18, 12));
+        TextView download = text("下载并安装", 14, PRIMARY_INK);
         download.setTypeface(Typeface.DEFAULT_BOLD);
         download.setGravity(Gravity.CENTER);
         download.setPadding(0, dp(12), 0, dp(12));
@@ -2339,7 +2426,7 @@ public class MainActivity extends Activity {
         TextView cancel = text("取消下载", 13, FG);
         cancel.setGravity(Gravity.CENTER);
         cancel.setPadding(0, dp(10), 0, dp(10));
-        cancel.setBackground(rounded(0xFF1A1F27, STROKE, 10));
+        cancel.setBackground(rounded(SUBTLE_BG, STROKE, 10));
         LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         clp.topMargin = dp(14);
@@ -2724,13 +2811,14 @@ public class MainActivity extends Activity {
     private void showLogDialog() {
         final CheckBox onlyErrors = new CheckBox(this);
         onlyErrors.setText("只看报错");
-        onlyErrors.setTextColor(Color.rgb(220, 220, 220));
+        onlyErrors.setTextColor(FG);
+        onlyErrors.setButtonTintList(ColorStateList.valueOf(ORANGE));
         onlyErrors.setChecked(true);
 
         TextView hint = text("默认只显示报错，复制时也只复制这些；取消勾选可查看全部日志。", 11, MUTED);
         hint.setPadding(dp(4), 0, dp(4), dp(6));
 
-        TextView tv = text("", 10, Color.rgb(220, 220, 220));
+        TextView tv = text("", 10, FG);
         tv.setTypeface(Typeface.MONOSPACE);
         tv.setTextIsSelectable(true);
         ScrollView scroll = new ScrollView(this);
@@ -2992,6 +3080,7 @@ public class MainActivity extends Activity {
 
         Button retry = new Button(this);
         retry.setText("重试");
+        stylePlainButton(retry);
         retry.setOnClickListener(v -> {
             if ("phone".equals(mode)) startPhoneMode();
             else openPcMode();
@@ -3003,6 +3092,7 @@ public class MainActivity extends Activity {
 
         Button setup = new Button(this);
         setup.setText("配置");
+        stylePlainButton(setup);
         setup.setOnClickListener(v -> {
             if ("phone".equals(mode)) showPhoneConfigDialog(false);
             else showSetupDialog();
@@ -3012,6 +3102,7 @@ public class MainActivity extends Activity {
         Button tailscale = new Button(this);
         errorTailscaleBtn = tailscale;
         tailscale.setText("打开 Tailscale");
+        stylePlainButton(tailscale);
         tailscale.setOnClickListener(v -> {
             try {
                 Intent i = getPackageManager().getLaunchIntentForPackage("com.tailscale.ipn");
@@ -3029,6 +3120,7 @@ public class MainActivity extends Activity {
 
         Button home = new Button(this);
         home.setText("返回主页");
+        stylePlainButton(home);
         home.setOnClickListener(v -> showHome());
         box.addView(home, bp);
 
@@ -3259,9 +3351,16 @@ public class MainActivity extends Activity {
         return t;
     }
 
+    private void stylePlainButton(Button b) {
+        b.setTextColor(FG);
+        b.setBackgroundTintList(ColorStateList.valueOf(SUBTLE_BG));
+    }
+
     private EditText edit(String hint, String value, boolean password) {
         EditText e = new EditText(this);
         e.setHint(hint);
+        e.setTextColor(FG);
+        e.setHintTextColor(FAINT);
         e.setSingleLine(true);
         e.setText(value == null ? "" : value);
         e.setInputType(InputType.TYPE_CLASS_TEXT
@@ -3323,7 +3422,7 @@ public class MainActivity extends Activity {
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(40), dp(70), dp(40), dp(70));
 
-        TextView title = text("Claude 工作台启动失败", 20, Color.rgb(224, 118, 107));
+        TextView title = text("Claude 工作台启动失败", 20, RED);
         box.addView(title);
 
         TextView tv = text(sw.toString(), 11, FG);
@@ -3336,6 +3435,7 @@ public class MainActivity extends Activity {
 
         Button close = new Button(this);
         close.setText("关闭");
+        stylePlainButton(close);
         close.setOnClickListener(v -> finish());
         box.addView(close, marginTop(dp(24)));
 

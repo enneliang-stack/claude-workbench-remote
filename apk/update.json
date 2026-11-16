@@ -1,12 +1,12 @@
 {
-  "versionCode": 163,
-  "versionName": "2.4.122",
+  "versionCode": 168,
+  "versionName": "2.4.127",
   "apk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.51/ClaudeWorkbench-full.apk",
   "sha256": "3bc07db344928c6b7b3def58f6c6bc80feeffb86e9c95faba1cfb524fe76c8eb",
   "fullVersionCode": 92,
   "fullVersionName": "2.4.51",
   "slimApk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/latest/download/ClaudeWorkbench-slim.apk",
-  "slimSha256": "f2b15e9dfe8585113e12e34e8f77ebe45fee26c7755d8b110aac7cb60f56c88f",
+  "slimSha256": "673ff9a207d03251bd990aa168687aeee63413aaeb9e51a967013b1e18ee858d",
   "important": false,
-  "notes": "2.4.122 更新\n\n- 通知栏移除右侧重复的应用大图标，只保留左侧小星。\n- 手机页过程条前新增星形头像；运行中每根射线独立缩短并做透明度呼吸，历史过程保持静态。\n- 用户消息气泡左边与过程框对齐，窄屏下不再越过过程框。\n- 新对话页显示空状态：星标、当前文件夹、点发送和回形针提示；文字不可选中。\n- 手机页选中文字高亮改为低饱和浅蓝，文字保持白色。\n- 手机页资源版本 114，对应 PC 客户端 1.2.45。"
+  "notes": "2.4.127 更新\n\n- 默认界面改为浅色；设置与日志 → 外观 → 主题可切换深色/浅色。\n- 原生主页、设置与日志、弹窗和 WebView 手机页同步主题。\n- 浅色代码块顶栏和代码框与电脑客户端样式对齐，去掉内层框。\n- APP 图标保持方框版本。\n- 手机页资源版本 118。"
 }

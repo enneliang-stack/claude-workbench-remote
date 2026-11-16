@@ -1,13 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <style name="AppTheme" parent="android:Theme.Material.NoActionBar">
-        <item name="android:windowBackground">#0b0d10</item>
-        <item name="android:colorBackground">#0b0d10</item>
-        <item name="android:statusBarColor">#0b0d10</item>
-        <item name="android:navigationBarColor">#0b0d10</item>
+        <item name="android:windowBackground">#f7f5f0</item>
+        <item name="android:colorBackground">#f7f5f0</item>
+        <item name="android:statusBarColor">#f7f5f0</item>
+        <item name="android:navigationBarColor">#f7f5f0</item>
         <item name="android:windowActionBar">false</item>
         <item name="android:windowNoTitle">true</item>
-        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
     </style>
 
     <style name="WorkbenchDialogAnimation">
