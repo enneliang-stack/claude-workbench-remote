@@ -11,6 +11,7 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
+import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
@@ -36,6 +37,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
 import android.view.WindowManager;
+import android.webkit.CookieManager;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
@@ -229,6 +231,18 @@ public class MainActivity extends Activity {
             + "';}catch(e){}})()";
     }
 
+    /** 页面首屏解析时就能读到主题，避免加载/重连时先按默认深色闪一下。 */
+    private void applyPageThemeCookie(String url) {
+        try {
+            CookieManager cm = CookieManager.getInstance();
+            cm.setAcceptCookie(true);
+            cm.setCookie(url, "wb_theme=" + (isLightTheme(this) ? "light" : "dark")
+                + "; path=/; max-age=31536000; SameSite=Lax");
+            cm.flush();
+        } catch (Exception ignored) {
+        }
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -300,6 +314,12 @@ public class MainActivity extends Activity {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 return handleUrl(request.getUrl());
+            }
+
+            @Override
+            public void onPageStarted(WebView view, String url, Bitmap favicon) {
+                // 页面一开始加载就设主题，尽量赶在首屏绘制前。
+                view.evaluateJavascript(pageThemeJs(), null);
             }
 
             @Override
@@ -2980,6 +3000,7 @@ public class MainActivity extends Activity {
             } catch (Exception ignored) {
             }
         }
+        applyPageThemeCookie(url);
         webView.loadUrl(url);
         startLoadTimeout();
     }
@@ -3141,8 +3162,15 @@ public class MainActivity extends Activity {
         }
         webView.evaluateJavascript(
             "(function(){" +
+            // 手机文件夹选择器不是页面里的 .sheet，先单独处理，避免返回键先关掉底下的新建对话面板。
+            "var nf=document.getElementById('phoneFolderNewSheet');" +
+            "if(nf&&nf.parentNode){nf.parentNode.removeChild(nf);return 'handled';}" +
+            "try{if(window.__phoneFolderBack&&window.__phoneFolderBack())return 'handled';}catch(e){}" +
+            "var pf=document.getElementById('phoneFolderPicker');" +
+            "if(pf&&!pf.hidden){pf.hidden=true;pf.style.display='none';" +
+            "var pt=document.getElementById('phoneFolderToast');if(pt)pt.hidden=true;return 'handled';}" +
             "try{if(window.__workbenchBack){var r=window.__workbenchBack();if(r)return r;}}catch(e){}" +
-            "var ids=['imgViewer','confirmStop','confirmDelete','attachSheet','refSheet','chatSettings','sheet','downloadsSheet','pcFileSheet','phoneFolderPicker','optionSheet','quoteTargetSheet','diffSheet'];" +
+            "var ids=['imgViewer','confirmStop','confirmDelete','attachSheet','refSheet','chatSettings','sheet','downloadsSheet','pcFileSheet','optionSheet','quoteTargetSheet','diffSheet'];" +
             "for(var i=0;i<ids.length;i++){var e=document.getElementById(ids[i]);if(e&&!e.hidden){e.hidden=true;" +
             "if(ids[i]==='imgViewer'){var im=document.getElementById('imgViewerImg');if(im)im.src='';}" +
             "return 'handled';}}" +

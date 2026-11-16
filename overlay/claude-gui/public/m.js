@@ -5438,6 +5438,13 @@
     $('#sheet').hidden = true;
   }
 
+  /** 目录选择器里「上一级」的目标：盘符根目录再往上就是磁盘列表（空路径）。 */
+  function folderPickerParent() {
+    if (S.pickParent) return S.pickParent;
+    if (S.pickPath && /^[A-Za-z]:[\\/]?$/.test(S.pickPath)) return '';
+    return null;
+  }
+
   function openFolderPicker() {
     S.pickPath = '';
     S.pickParent = null;
@@ -5524,7 +5531,7 @@
 
   function renderFolderPicker() {
     $('#folderPath').textContent = S.pickPath || '此电脑（选择磁盘）';
-    $('#folderUp').disabled = !S.pickParent;
+    $('#folderUp').disabled = folderPickerParent() === null;
     $('#folderNew').disabled = !S.pickPath;
     $('#folderUse').disabled = !S.pickPath;
 
@@ -6142,8 +6149,9 @@
       if (e.target === $('#newFolderSheet')) closeNewFolderDialog();
     });
     $('#folderUp').onclick = () => {
-      if (!S.pickParent) return;
-      loadFolderPickerDir(S.pickParent)
+      const parent = folderPickerParent();
+      if (parent === null) return;
+      loadFolderPickerDir(parent)
         .catch(e => toast('读取失败：' + e.message, 'err'));
     };
     $('#folderUse').onclick = usePickedFolder;
@@ -6592,6 +6600,16 @@
 
   /** App 原生返回键统一入口：先关最上面的弹层，再退对话，最后才退页面。 */
   window.__workbenchBack = () => {
+    // 电脑端目录选择器：返回先回上一级文件夹，到磁盘列表再关面板。
+    const folderSheet = document.getElementById('folderSheet');
+    if (folderSheet && !folderSheet.hidden
+        && sheetStack[sheetStack.length - 1] === folderSheet) {
+      const parent = folderPickerParent();
+      if (parent !== null) {
+        loadFolderPickerDir(parent).catch(err => toast('读取失败：' + err.message, 'err'));
+        return 'handled';
+      }
+    }
     if (sheetStack.length) {
       closeTopSheetFromHistory();
       return 'handled';

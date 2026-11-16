@@ -6,6 +6,8 @@
 
   var TOKEN = window.__GUI_TOKEN__ || '';
   var current = '/sdcard';
+  var pathHistory = [];
+  var loadSeq = 0;
   var ui = null;
   var toastEl = null;
   var toastTimer = 0;
@@ -16,14 +18,31 @@
       .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
 
+  // 选择器全部用内联样式，颜色跟随手机页的深/浅主题变量。
+  function injectStyle() {
+    if (document.getElementById('phoneFolderPickerStyle')) return;
+    var st = document.createElement('style');
+    st.id = 'phoneFolderPickerStyle';
+    st.textContent = '#phoneFolderPicker,#phoneFolderNewSheet{'
+      + '--pfp-accent-soft:rgba(240,163,94,.12);--pfp-accent-line:#4a3324;'
+      + '--pfp-mask:rgba(0,0,0,.58);--pfp-shadow:0 18px 50px rgba(0,0,0,.55);}'
+      + '#phoneFolderToast{--pfp-shadow:0 10px 30px rgba(0,0,0,.5);}'
+      + 'html[data-theme="light"] #phoneFolderPicker,'
+      + 'html[data-theme="light"] #phoneFolderNewSheet{'
+      + '--pfp-accent-soft:rgba(217,119,87,.10);--pfp-accent-line:#e3c3b1;'
+      + '--pfp-mask:rgba(45,40,34,.32);--pfp-shadow:0 18px 50px rgba(70,60,45,.22);}'
+      + 'html[data-theme="light"] #phoneFolderToast{--pfp-shadow:0 10px 30px rgba(70,60,45,.18);}';
+    (document.head || document.documentElement).appendChild(st);
+  }
+
   function toast(msg) {
     if (!toastEl) {
       toastEl = document.createElement('div');
       toastEl.id = 'phoneFolderToast';
       toastEl.style.cssText = 'position:fixed;left:50%;bottom:88px;transform:translateX(-50%);'
         + 'z-index:10002;width:max-content;max-width:86vw;padding:9px 14px;border-radius:11px;'
-        + 'background:#222932;color:#e8e6e3;font-size:12.5px;text-align:center;'
-        + 'box-shadow:0 10px 30px rgba(0,0,0,.5);pointer-events:none;';
+        + 'background:var(--panel,#222932);color:var(--text,#e8e6e3);font-size:12.5px;text-align:center;'
+        + 'box-shadow:var(--pfp-shadow,0 10px 30px rgba(0,0,0,.5));pointer-events:none;';
       document.body.appendChild(toastEl);
     }
     toastEl.textContent = msg;
@@ -40,10 +59,11 @@
 
   function ensureUi() {
     if (ui) return ui;
+    injectStyle();
     var box = document.createElement('div');
     box.id = 'phoneFolderPicker';
     box.hidden = true;
-    box.style.cssText = 'position:fixed;inset:0;z-index:10000;background:rgba(11,13,16,.98);'
+    box.style.cssText = 'position:fixed;inset:0;z-index:10000;background:var(--bg,#0b0d10);'
       + 'display:flex;flex-direction:column;overflow:hidden;';
 
     var hd = document.createElement('div');
@@ -51,33 +71,34 @@
     var close = document.createElement('button');
     close.type = 'button';
     close.textContent = '×';
-    close.style.cssText = 'width:36px;height:36px;border-radius:18px;border:1px solid #2a323c;'
-      + 'background:#151a21;color:#e8e6e3;font-size:20px;';
+    close.style.cssText = 'width:36px;height:36px;border-radius:18px;border:1px solid var(--line,#2a323c);'
+      + 'background:var(--panel,#151a21);color:var(--text,#e8e6e3);font-size:20px;';
     close.onclick = function () { closePicker(); };
     var title = document.createElement('b');
     title.textContent = '选择手机文件夹';
-    title.style.cssText = 'flex:1;color:#e8e6e3;font-size:17px;white-space:nowrap;';
+    title.style.cssText = 'flex:1;color:var(--text,#e8e6e3);font-size:17px;white-space:nowrap;';
     hd.appendChild(close); hd.appendChild(title);
 
     var actions = document.createElement('div');
     actions.style.cssText = 'display:flex;gap:10px;padding:0 16px 12px;'
-      + 'border-bottom:1px solid #262e38;flex:none;';
+      + 'border-bottom:1px solid var(--line,#262e38);flex:none;';
     var newFolder = document.createElement('button');
     newFolder.type = 'button';
     newFolder.textContent = '＋ 新建文件夹';
-    newFolder.style.cssText = 'flex:1;padding:10px 12px;border-radius:10px;border:1px solid #4a3324;'
-      + 'background:#2a2118;color:#f0a35e;font-size:13px;font-weight:600;';
+    newFolder.style.cssText = 'flex:1;padding:10px 12px;border-radius:10px;'
+      + 'border:1px solid var(--pfp-accent-line,#4a3324);'
+      + 'background:var(--pfp-accent-soft,#2a2118);color:var(--accent,#f0a35e);font-size:13px;font-weight:600;';
     newFolder.onclick = function () { openCreateFolder(); };
     var choose = document.createElement('button');
     choose.type = 'button';
     choose.textContent = '选择此文件夹';
-    choose.style.cssText = 'flex:1;padding:10px 12px;border-radius:10px;border:1px solid #f0a35e;'
-      + 'background:#2a2118;color:#f0a35e;font-size:13px;font-weight:600;';
+    choose.style.cssText = 'flex:1;padding:10px 12px;border-radius:10px;border:1px solid var(--accent,#f0a35e);'
+      + 'background:var(--pfp-accent-soft,#2a2118);color:var(--accent,#f0a35e);font-size:13px;font-weight:600;';
     choose.onclick = function () { chooseCurrent(); };
     actions.appendChild(newFolder); actions.appendChild(choose);
 
     var path = document.createElement('div');
-    path.style.cssText = 'padding:8px 16px 4px;color:#9aa3ad;font-size:12px;'
+    path.style.cssText = 'padding:8px 16px 4px;color:var(--muted,#9aa3ad);font-size:12px;'
       + 'word-break:break-all;flex:none;';
 
     var quick = document.createElement('div');
@@ -87,21 +108,21 @@
         var b = document.createElement('button');
         b.type = 'button';
         b.textContent = q[0];
-        b.style.cssText = 'padding:6px 10px;border-radius:8px;border:1px solid #2a323c;'
-          + 'background:#151a21;color:#9aa3ad;font-size:12px;';
+        b.style.cssText = 'padding:6px 10px;border-radius:8px;border:1px solid var(--line,#2a323c);'
+          + 'background:var(--panel,#151a21);color:var(--muted,#9aa3ad);font-size:12px;';
         b.onclick = function () { load(q[1]); };
         quick.appendChild(b);
       });
 
     var hint = document.createElement('div');
-    hint.style.cssText = 'padding:0 16px 8px;color:#6e7680;font-size:11px;flex:none;';
+    hint.style.cssText = 'padding:0 16px 8px;color:var(--faint,#6e7680);font-size:11px;flex:none;';
     hint.textContent = '长按 APP 新建的文件夹可删除';
 
     var list = document.createElement('div');
     list.style.cssText = 'flex:1;overflow:auto;padding:0 16px 24px;-webkit-overflow-scrolling:touch;';
 
     var note = document.createElement('div');
-    note.style.cssText = 'padding:8px 16px 14px;color:#6e7680;font-size:11px;line-height:1.5;flex:none;';
+    note.style.cssText = 'padding:8px 16px 14px;color:var(--faint,#6e7680);font-size:11px;line-height:1.5;flex:none;';
     note.textContent = '看不到手机公共文件夹？回主页 →「设置与日志」→「手机存储：授权全盘访问」，授权后重新启动手机端。';
 
     box.appendChild(hd); box.appendChild(actions); box.appendChild(path); box.appendChild(quick);
@@ -117,9 +138,9 @@
     if (created) attrs += ' data-created="1"';
     return '<div data-path="' + esc(path) + '"' + attrs
       + ' style="display:flex;align-items:center;justify-content:space-between;'
-      + 'padding:13px 4px;border-bottom:1px solid #20262e;color:#e8e6e3;font-size:15px;'
+      + 'padding:13px 4px;border-bottom:1px solid var(--line,#20262e);color:var(--text,#e8e6e3);font-size:15px;'
       + 'cursor:pointer;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;">'
-      + '<span>' + esc(name) + '</span><span style="color:#6e7680;font-size:12px;">'
+      + '<span>' + esc(name) + '</span><span style="color:var(--faint,#6e7680);font-size:12px;">'
       + esc(extra || '') + '</span></div>';
   }
 
@@ -167,18 +188,29 @@
     });
   }
 
-  function load(path) {
+  function load(path, fromBack) {
     var u = ensureUi();
+    var fresh = u.box.hidden;
+    var seq = ++loadSeq;
     u.box.hidden = false;
     u.box.style.display = 'flex';
-    u.list.innerHTML = '<div style="padding:24px;color:#9aa3ad;">读取中…</div>';
+    u.list.innerHTML = '<div style="padding:24px;color:var(--muted,#9aa3ad);">读取中…</div>';
     apiFs(path).then(function (d) {
+      if (seq !== loadSeq) return;
       if (!d || d.error) {
-        u.list.innerHTML = '<div style="padding:24px;color:#e0766b;">读取失败：'
+        u.list.innerHTML = '<div style="padding:24px;color:var(--red,#e0766b);">读取失败：'
           + esc((d && d.error) || '未知错误') + '</div>';
         return;
       }
       current = d.path || path;
+      if (fresh) {
+        pathHistory = [current];
+      } else if (fromBack) {
+        if (pathHistory.length > 1) pathHistory.pop();
+        pathHistory[pathHistory.length - 1] = current;
+      } else if (pathHistory[pathHistory.length - 1] !== current) {
+        pathHistory.push(current);
+      }
       u.path.textContent = current;
       var html = '';
       if (d.parent) html += row('⬆ 上一级', d.parent, '', false, false);
@@ -186,7 +218,7 @@
         if (e && e.isDir) html += row(e.name, e.path, '', !!e.created, true);
       });
       if (!(d.entries || []).some(function (e) { return e && e.isDir; })) {
-        html += '<div style="padding:20px;color:#6e7680;">这个文件夹没有子文件夹</div>';
+        html += '<div style="padding:20px;color:var(--faint,#6e7680);">这个文件夹没有子文件夹</div>';
       }
       u.list.innerHTML = html;
       Array.prototype.forEach.call(u.list.querySelectorAll('[data-path]'), function (el) {
@@ -198,7 +230,8 @@
         );
       });
     }).catch(function (e) {
-      u.list.innerHTML = '<div style="padding:24px;color:#e0766b;">读取失败：'
+      if (seq !== loadSeq) return;
+      u.list.innerHTML = '<div style="padding:24px;color:var(--red,#e0766b);">读取失败：'
         + esc(e && e.message) + '</div>';
     });
   }
@@ -209,6 +242,23 @@
     ui.box.style.display = 'none';
     if (toastEl) toastEl.hidden = true;
   }
+
+  // App 实体返回键：先关新建文件夹弹窗；选择器里先逐级回上级文件夹，到入口目录再关闭。
+  window.__phoneFolderBack = function () {
+    if (document.getElementById('phoneFolderNewSheet')) {
+      closeCreateFolder();
+      return true;
+    }
+    if (ui && !ui.box.hidden) {
+      if (pathHistory.length > 1) {
+        load(pathHistory[pathHistory.length - 2], true);
+      } else {
+        closePicker();
+      }
+      return true;
+    }
+    return false;
+  };
 
   function askDeleteFolder(folderPath, created) {
     if (!created) {
@@ -247,24 +297,28 @@
     closeCreateFolder();
     var mask = document.createElement('div');
     mask.id = 'phoneFolderNewSheet';
-    mask.style.cssText = 'position:fixed;inset:0;z-index:10001;background:rgba(0,0,0,.58);'
+    mask.style.cssText = 'position:fixed;inset:0;z-index:10001;background:var(--pfp-mask,rgba(0,0,0,.58));'
       + 'display:flex;align-items:center;justify-content:center;padding:24px;';
     var card = document.createElement('div');
-    card.style.cssText = 'width:100%;max-width:360px;background:#151a21;border:1px solid #2a323c;'
-      + 'border-radius:16px;padding:18px;box-shadow:0 18px 50px rgba(0,0,0,.55);';
-    card.innerHTML = '<b style="font-size:16px;color:#e8e6e3;">新建文件夹</b>'
-      + '<div style="margin:8px 0 14px;color:#9aa3ad;font-size:11.5px;'
+    card.style.cssText = 'width:100%;max-width:360px;background:var(--panel,#151a21);'
+      + 'border:1px solid var(--line,#2a323c);'
+      + 'border-radius:16px;padding:18px;box-shadow:var(--pfp-shadow,0 18px 50px rgba(0,0,0,.55));';
+    card.innerHTML = '<b style="font-size:16px;color:var(--text,#e8e6e3);">新建文件夹</b>'
+      + '<div style="margin:8px 0 14px;color:var(--muted,#9aa3ad);font-size:11.5px;'
       + 'word-break:break-all;font-family:ui-monospace,Consolas,monospace;">' + esc(current) + '</div>'
       + '<input id="phoneNewFolderName" type="text" placeholder="文件夹名称" maxlength="80"'
       + ' autocomplete="off" spellcheck="false" enterkeyhint="done"'
-      + ' style="width:100%;box-sizing:border-box;border:1px solid #2a323c;background:#0b0d10;'
-      + 'border-radius:10px;padding:10px 12px;color:#e8e6e3;font-size:16px;outline:none;">'
-      + '<div id="phoneNewFolderErr" style="display:none;color:#e0766b;font-size:11.5px;margin-top:8px;"></div>'
+      + ' style="width:100%;box-sizing:border-box;border:1px solid var(--line,#2a323c);'
+      + 'background:var(--bg,#0b0d10);'
+      + 'border-radius:10px;padding:10px 12px;color:var(--text,#e8e6e3);font-size:16px;outline:none;">'
+      + '<div id="phoneNewFolderErr" style="display:none;color:var(--red,#e0766b);font-size:11.5px;margin-top:8px;"></div>'
       + '<div style="display:flex;gap:10px;margin-top:14px;">'
       + '<button id="phoneNewFolderCancel" type="button" style="flex:1;padding:11px;border-radius:10px;'
-      + 'border:1px solid #2a323c;background:#1a1f27;color:#e8e6e3;font-size:14px;font-weight:600;">取消</button>'
+      + 'border:1px solid var(--line,#2a323c);background:var(--panel-2,#1a1f27);'
+      + 'color:var(--text,#e8e6e3);font-size:14px;font-weight:600;">取消</button>'
       + '<button id="phoneNewFolderOk" type="button" style="flex:1;padding:11px;border-radius:10px;'
-      + 'border:1px solid #f0a35e;background:#2a2118;color:#f0a35e;font-size:14px;font-weight:600;">创建</button>'
+      + 'border:1px solid var(--accent,#f0a35e);background:var(--pfp-accent-soft,#2a2118);'
+      + 'color:var(--accent,#f0a35e);font-size:14px;font-weight:600;">创建</button>'
       + '</div>';
     mask.appendChild(card);
     document.body.appendChild(mask);
