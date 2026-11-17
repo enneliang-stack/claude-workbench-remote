@@ -22,7 +22,8 @@ echo 正在授权无障碍自动保持...
 "%ADB%" shell dumpsys deviceidle whitelist +com.missyao.claudeworkbench >nul
 
 echo.
-echo 完成。以后系统关闭无障碍后，打开 Claude 工作台会自动重新开启；
-echo 开机时也会自动恢复。现在可以拔掉数据线。
+echo 授权完成。请打开 Claude 工作台 - 设置与日志 - 手机控制 - 开启。
+echo 手机控制开启后，系统关闭无障碍时会自动恢复（打开 App 或开机时）；
+echo 手机控制关闭时不会自动开启无障碍。现在可以拔掉数据线。
 echo.
 pause

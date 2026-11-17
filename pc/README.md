@@ -57,6 +57,9 @@ adb shell appops set com.missyao.claudeworkbench ACCESS_RESTRICTED_SETTINGS allo
 adb shell dumpsys deviceidle whitelist +com.missyao.claudeworkbench
 ```
 
-授权后如果系统仍把无障碍开关置灰，再到 系统设置 → 应用 → Claude 工作台 →
-右上角 ⋮ → 允许受限设置。覆盖安装新 APK 后，Android 仍会关闭一次无障碍，
-但打开 App 时会被自动恢复。
+授权后还需要在 App 里打开「设置与日志 → 手机控制」；自动保持只在这个开关
+打开时生效（关闭手机控制时不会去开无障碍）。之后系统关闭无障碍或覆盖安装
+新 APK 时，打开 App 会自动恢复。
+
+如果系统仍把无障碍开关置灰，再到 系统设置 → 应用 → Claude 工作台 →
+右上角 ⋮ → 允许受限设置。

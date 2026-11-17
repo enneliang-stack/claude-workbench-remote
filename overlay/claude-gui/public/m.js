@@ -4368,6 +4368,20 @@
     d.appendChild(el('div', 'panel-ttl', 'Claude 想确认一下'));
     if (!S.askSel || S.askSel.length !== ev.questions.length) initAskState();
 
+    const actions = el('div', 'panel-actions');
+    const skip = el('button', 'btn', '跳过');
+    const ok = el('button', 'btn primary', '提交');
+    skip.type = 'button';
+    ok.type = 'button';
+    // 每个问题都要有选项或自定义答案，「提交」才可点；没选完保持灰色禁用。
+    const syncAskSubmit = () => {
+      ok.disabled = !ev.questions.every((q, i) => {
+        const sel = S.askSel && S.askSel[i];
+        const other = ((S.askOther && S.askOther[i]) || '').trim();
+        return (sel && sel.size > 0) || !!other;
+      });
+    };
+
     ev.questions.forEach((q, qi) => {
       const qd = el('div', 'q');
       qd.appendChild(el('div', 'q-title', q.question || ''));
@@ -4391,6 +4405,7 @@
           [...opts.children].forEach((child, ci) => {
             child.classList.toggle('sel', S.askSel[qi].has((list[ci] || {}).label));
           });
+          syncAskSubmit();
         };
         opts.appendChild(b);
       });
@@ -4399,7 +4414,10 @@
       const other = el('input', 'q-other');
       other.placeholder = '其他答案（可选，也可以直接输入）';
       other.value = (S.askOther && S.askOther[qi]) || '';
-      other.oninput = () => { S.askOther[qi] = other.value; };
+      other.oninput = () => {
+        S.askOther[qi] = other.value;
+        syncAskSubmit();
+      };
       qd.appendChild(other);
       d.appendChild(qd);
     });
@@ -4408,15 +4426,11 @@
     note.id = 'askCountdown';
     d.appendChild(note);
 
-    const actions = el('div', 'panel-actions');
-    const skip = el('button', 'btn', '跳过');
-    const ok = el('button', 'btn primary', '提交');
-    skip.type = 'button';
-    ok.type = 'button';
     skip.onclick = () => submitAsk(true);
     ok.onclick = () => submitAsk(false);
     actions.append(skip, ok);
     d.appendChild(actions);
+    syncAskSubmit();
 
     startAskCountdown(ev, note);
     return d;

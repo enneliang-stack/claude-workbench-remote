@@ -11,6 +11,7 @@
   --green: #4cc38a;
   --red: #e0766b;
   --user-bubble: #2a3038;
+  --scroll-thumb: rgba(224, 138, 95, .45);
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
 }
@@ -700,7 +701,15 @@ details.process[open] > summary::before { content: "▾"; }
 @keyframes runPulse { 0%, 100% { opacity: .6; } 50% { opacity: 1; } }
 
 /* ---------- 提问 / 权限面板 ---------- */
-.panels { flex: 0 0 auto; max-height: 52vh; overflow-y: auto; padding: 0 12px; }
+.panels {
+  flex: 0 0 auto; max-height: 52vh; overflow-y: auto; padding: 0 12px;
+  overscroll-behavior: contain;
+  scrollbar-width: thin; scrollbar-color: var(--scroll-thumb) transparent;
+}
+/* 手机 WebView 默认不显示滚动条，长问题会被误以为没有更多选项/提交按钮 */
+.panels::-webkit-scrollbar { width: 5px; }
+.panels::-webkit-scrollbar-track { background: transparent; }
+.panels::-webkit-scrollbar-thumb { background: var(--scroll-thumb); border-radius: 999px; }
 .panels:empty { display: none; }
 .panel {
   background: var(--panel); border: 1px solid var(--line);
@@ -723,6 +732,11 @@ details.process[open] > summary::before { content: "▾"; }
 .panel-actions .btn.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
 .panel-actions .btn.danger { color: var(--red); }
 .panel-actions .btn:disabled { opacity: .5; }
+/* 没选完时提交按钮显示为灰色禁用，和可点击的橙色状态区分开 */
+.panel-actions .btn.primary:disabled {
+  background: var(--panel-2); color: var(--faint);
+  border-color: var(--line); opacity: 1;
+}
 
 .q { margin-bottom: 12px; }
 .q:last-child { margin-bottom: 4px; }
@@ -1626,6 +1640,8 @@ html[data-theme="light"] {
   --green: #3f8f68;
   --red: #c45a5a;
   --user-bubble: #e9e4dc;
+  --scroll-thumb: rgba(196, 100, 67, .45);
+  --accent-soft: rgba(217, 119, 87, .14);
 }
 html[data-theme="light"] ::selection { background: rgba(95, 135, 175, .28); color: #1d2733; }
 html[data-theme="light"] .hd { background: rgba(247, 245, 240, .96); }
@@ -1667,12 +1683,12 @@ html[data-theme="light"] .process-collapse-btn {
   box-shadow: 0 4px 14px rgba(70, 60, 45, .16);
 }
 html[data-theme="light"] .file-btn,
-html[data-theme="light"] .panel-actions .btn,
-html[data-theme="light"] .ref-actions .btn,
-html[data-theme="light"] .downloads-actions .btn,
+html[data-theme="light"] .panel-actions .btn:not(.primary),
+html[data-theme="light"] .ref-actions .btn:not(.primary),
+html[data-theme="light"] .downloads-actions .btn:not(.danger-solid),
 html[data-theme="light"] .mini-btn,
-html[data-theme="light"] .btn.wide,
-html[data-theme="light"] .confirm-actions .btn { background: var(--panel-2); }
+html[data-theme="light"] .btn.wide:not(.primary),
+html[data-theme="light"] .confirm-actions .btn:not(.primary):not(.danger-solid) { background: var(--panel-2); }
 html[data-theme="light"] .file-btn.primary { border-color: var(--accent-line); }
 html[data-theme="light"] .edit-more:active { background: var(--panel-2); }
 html[data-theme="light"] .pc-row.sel,

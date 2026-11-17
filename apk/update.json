@@ -1,12 +1,12 @@
 {
-  "versionCode": 184,
-  "versionName": "2.4.143",
+  "versionCode": 186,
+  "versionName": "2.4.145",
   "apk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.51/ClaudeWorkbench-full.apk",
   "sha256": "3bc07db344928c6b7b3def58f6c6bc80feeffb86e9c95faba1cfb524fe76c8eb",
   "fullVersionCode": 92,
   "fullVersionName": "2.4.51",
   "slimApk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/latest/download/ClaudeWorkbench-slim.apk",
-  "slimSha256": "f4ed8f683bffd97f89d11493433aa6e2acceda77b9b8edc927d4fdd01dcb25ef",
+  "slimSha256": "5ab44f5c4887ec899b6a38d9f9289bac6980c15c03821df90e6a6a41a9a22c97",
   "important": false,
-  "notes": "2.4.143 更新\n\n- 手机页过程头像动画：射线缩短时同步加宽 15%（宽度与长度同一节奏）；整体缩短幅度略减。\n- 操控手机时顶部运行状态条的星形 logo 同步为同款逐根缩短 + 加宽动画。\n- 同步 PC 客户端最新过程头像动画参数。"
+  "notes": "2.4.145 更新\n\n- 提问/确认弹窗：没选完时「提交」灰色禁用，全部问题有选项或自定义答案后才变橙色可点；浅色主题下不再误显示成灰色。\n- 问题内容超过一屏时，弹窗右侧显示细滚动条，提示还有更多选项和提交按钮；普通页面不加。\n- 浅色主题下选中项补充浅橙底色。\n- 手机页资源版本 128。"
 }
