@@ -1,7 +1,6 @@
 package com.missyao.claudeworkbench;
 
 import android.accessibilityservice.AccessibilityService;
-import android.animation.ValueAnimator;
 import android.content.Context;
 import android.content.Intent;
 import android.content.res.ColorStateList;
@@ -23,7 +22,6 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
 import android.view.inputmethod.InputMethodManager;
-import android.view.animation.AccelerateDecelerateInterpolator;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.ImageButton;
@@ -68,9 +66,8 @@ public final class FloatingControl {
 
     // 运行中的细状态条：不可点击，不拦截任何触摸
     private LinearLayout statusBar;
-    private ImageView statusLogo;
+    private ProcessStarView statusLogo;
     private TextView statusText;
-    private ValueAnimator statusPulse;
     private WindowManager.LayoutParams statusParams;
     private boolean statusAttached;
 
@@ -236,7 +233,7 @@ public final class FloatingControl {
         styleTextButton(sendBtn, colInk, colAccent);
         styleTextButton(cancelBtn, colMuted, colChip);
 
-        statusLogo.setImageTintList(ColorStateList.valueOf(colAccent));
+        statusLogo.setColor(colAccent);
         statusText.setTextColor(colText);
         statusBar.setBackground(rounded(colStatusBg, colStroke, 10));
 
@@ -387,11 +384,8 @@ public final class FloatingControl {
         statusBar.setGravity(Gravity.CENTER_VERTICAL);
         statusBar.setPadding(dp(11), dp(4), dp(12), dp(4));
 
-        // 星形 logo 用和「过程」头像一样的呼吸循环，表示任务正在跑。
-        statusLogo = new ImageView(service);
-        statusLogo.setImageResource(R.drawable.ic_notification);
-        statusLogo.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        statusLogo.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        // 星形 logo 和网页「过程」头像使用同一套逐根缩短 + 加宽 + 呼吸动画。
+        statusLogo = new ProcessStarView(service);
         LinearLayout.LayoutParams logoLp = new LinearLayout.LayoutParams(dp(16), dp(16));
         logoLp.rightMargin = dp(6);
         statusBar.addView(statusLogo, logoLp);
@@ -734,32 +728,13 @@ public final class FloatingControl {
         stopStatusPulse();
     }
 
-    /** 和过程头像一致的星形呼吸循环：缩放 0.92–1、透明度 0.78–1。 */
+    /** 星形逐根纯缩短 + 1.96s 呼吸（70%–100%），和网页过程头像一致。 */
     private void startStatusPulse() {
-        if (statusPulse != null && statusPulse.isStarted()) return;
-        statusPulse = ValueAnimator.ofFloat(0f, 1f);
-        // REVERSE 会再花 980ms 回程，一个完整呼吸约 1.96 秒，和页面「过程」头像一致。
-        statusPulse.setDuration(980);
-        statusPulse.setRepeatCount(ValueAnimator.INFINITE);
-        statusPulse.setRepeatMode(ValueAnimator.REVERSE);
-        statusPulse.setInterpolator(new AccelerateDecelerateInterpolator());
-        statusPulse.addUpdateListener(a -> {
-            float t = (float) a.getAnimatedValue();
-            float scale = 0.92f + 0.08f * t;
-            statusLogo.setScaleX(scale);
-            statusLogo.setScaleY(scale);
-            statusLogo.setAlpha(0.78f + 0.22f * t);
-        });
-        statusPulse.start();
+        if (statusLogo != null) statusLogo.start();
     }
 
     private void stopStatusPulse() {
-        if (statusPulse == null) return;
-        statusPulse.cancel();
-        statusPulse = null;
-        statusLogo.setScaleX(1f);
-        statusLogo.setScaleY(1f);
-        statusLogo.setAlpha(1f);
+        if (statusLogo != null) statusLogo.stop();
     }
 
     private void showEdge() {

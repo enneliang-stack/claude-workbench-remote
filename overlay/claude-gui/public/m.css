@@ -423,7 +423,7 @@ details.process[open] > summary::before { content: "▾"; }
 .process-body > details + details { margin-top: 6px; }
 .process-body .txt.temp { color: var(--muted); font-size: 12.5px; margin: 0 0 6px; }
 
-/* 过程条前的星形头像：历史静态，运行中每根光线独立缩短 + 整星 80–100% 呼吸 */
+/* 过程条前的星形头像：历史静态，运行中每根光线独立缩短/加宽 + 整星 70–100% 呼吸 */
 .process-row { display: flex; align-items: flex-start; gap: 8px; }
 .process-row > details.process { flex: 1 1 auto; min-width: 0; }
 .process-avatar {
@@ -432,7 +432,7 @@ details.process[open] > summary::before { content: "▾"; }
 }
 .process-avatar svg { width: 24px; height: 24px; display: block; }
 .process-row.live .process-avatar .spark-ray {
-  transform-box: view-box; transform-origin: 50% 50%;
+  transform-box: view-box; transform-origin: 128px 128px;
   animation: processSparkRay var(--sray-dur, 1.96s) ease-in-out infinite;
   animation-delay: var(--sray-delay, 0s);
 }
@@ -440,12 +440,12 @@ details.process[open] > summary::before { content: "▾"; }
   animation: processSparkBreath 1.96s ease-in-out infinite;
 }
 @keyframes processSparkRay {
-  0%, 100% { transform: scale(1); }
-  50% { transform: scale(var(--sray-min, .92)); }
+  0%, 100% { transform: rotate(var(--sray-ang)) scale(1, 1) rotate(calc(-1 * var(--sray-ang))); }
+  50% { transform: rotate(var(--sray-ang)) scale(var(--sray-min, .92), var(--sray-wide, 1.15)) rotate(calc(-1 * var(--sray-ang))); }
 }
 @keyframes processSparkBreath {
   0%, 100% { opacity: 1; }
-  50% { opacity: .80; }
+  50% { opacity: .70; }
 }
 /* 过程框滚出标题后，固定在左侧的「收起」浮钮 */
 .process-collapse-btn {
