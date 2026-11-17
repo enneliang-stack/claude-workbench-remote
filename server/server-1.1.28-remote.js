@@ -3017,18 +3017,46 @@ class Runner {
       autoAt: meta.autoAt,
       cancelAt: meta.cancelAt
     });
+    this.scheduleAskTimeout(meta);
+  }
+
+  /** 重置提问的自动继续/自动暂停计时（用户正在操作弹窗时调用） */
+  scheduleAskTimeout(meta) {
+    const old = this.askTimers.get(meta.requestId);
+    if (old) clearTimeout(old);
     const timer = setTimeout(() => {
-      if (!this.pendingPerms.has(requestId)) return;
-      if (major) {
+      if (!this.pendingPerms.has(meta.requestId)) return;
+      if (meta.major) {
         // 大方向问题等很久也没人回答：安全取消并让模型收尾，不永久占用进程
-        this.respondAsk(requestId, null, { cancel: true, timeout: true });
+        this.respondAsk(meta.requestId, null, { cancel: true, timeout: true });
       } else {
-        const answers = this.askAutoAnswers(questions);
-        if (answers) this.respondAsk(requestId, answers, { auto: true });
+        const answers = this.askAutoAnswers(meta.questions || []);
+        if (answers) this.respondAsk(meta.requestId, answers, { auto: true });
       }
-    }, major ? ASK_MAJOR_MS : ASK_AUTO_MS);
+    }, meta.major ? ASK_MAJOR_MS : ASK_AUTO_MS);
     timer.unref?.();
-    this.askTimers.set(requestId, timer);
+    this.askTimers.set(meta.requestId, timer);
+  }
+
+  extendAsk(requestId) {
+    const meta = this.askMeta.get(requestId);
+    if (!meta || !this.pendingPerms.has(requestId)) return null;
+    const now = Date.now();
+    if (meta.major) meta.cancelAt = now + ASK_MAJOR_MS;
+    else meta.autoAt = now + ASK_AUTO_MS;
+    if (this.live && this.live.ask && this.live.ask.requestId === requestId) {
+      this.live.ask.autoAt = meta.autoAt;
+      this.live.ask.cancelAt = meta.cancelAt;
+    }
+    this.scheduleAskTimeout(meta);
+    const info = {
+      autoAt: meta.autoAt,
+      cancelAt: meta.cancelAt,
+      autoInMs: meta.major ? null : ASK_AUTO_MS,
+      cancelInMs: meta.major ? ASK_MAJOR_MS : null
+    };
+    this.emit({ t: 'ask_extend', requestId, ...info });
+    return info;
   }
 
   respondAsk(requestId, answers, opts = {}) {
@@ -4455,6 +4483,15 @@ async function handleApi(req, res, url) {
     const message = typeof body.message === 'string' ? body.message.slice(0, 500) : '';
     const ok = r.respondPermission(String(body.requestId || ''), !!body.allow, message);
     return json(res, { ok });
+  }
+
+  if (p === '/api/ask/extend' && req.method === 'POST') {
+    const body = await readJson(req);
+    const r = runners.get(String(body.id || ''));
+    if (!r) return json(res, { error: '会话未运行' }, 400);
+    const info = r.extendAsk(String(body.requestId || ''));
+    if (!info) return json(res, { error: '问题已经结束' }, 409);
+    return json(res, { ok: true, ...info });
   }
 
   if (p === '/api/ask' && req.method === 'POST') {

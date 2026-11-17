@@ -703,8 +703,12 @@
     S.conv.hasMore = !!data.hasMore;
     S.conv.total = Number.isFinite(data.total) ? data.total : (data.messages || []).length;
     S.pendingPerm = (S.live && S.live.permission) || null;
+    const prevAskId = S.pendingAsk && S.pendingAsk.requestId;
     S.pendingAsk = (S.live && S.live.ask) || null;
-    if (S.pendingAsk) initAskState();
+    // 还是同一条提问就保留已填内容；重连/回到前台刷新不能把用户正在输入的字清掉
+    if (S.pendingAsk && S.pendingAsk.requestId !== prevAskId) initAskState();
+    else if (!S.pendingAsk) { S.askSel = null; S.askOther = null; }
+    if (S.pendingAsk) syncAskDeadline();
 
     $('#chatTitle').textContent = data.title || '未命名对话';
     try {
@@ -2700,6 +2704,36 @@
     return row;
   }
 
+  // 实时轮询会重建过程行；把星形头像的动画进度接回去，避免每次刷新从头转/呼吸。
+  function liveAvatarAnims(root) {
+    const avatar = root && root.querySelector('.process-row.live .process-avatar');
+    if (!avatar) return null;
+    const time = el => {
+      if (!el || typeof el.getAnimations !== 'function') return null;
+      const a = el.getAnimations()[0];
+      return a ? a.currentTime : null;
+    };
+    return {
+      spin: time(avatar.querySelector('.spark-spin')),
+      breath: time(avatar.querySelector('svg.spark')),
+      rays: Array.from(avatar.querySelectorAll('.spark-ray')).map(time)
+    };
+  }
+
+  function restoreLiveAvatarAnims(root, state) {
+    if (!state) return;
+    const avatar = root && root.querySelector('.process-row.live .process-avatar');
+    if (!avatar) return;
+    const set = (el, t) => {
+      if (!el || t == null || typeof el.getAnimations !== 'function') return;
+      const a = el.getAnimations()[0];
+      if (a) a.currentTime = t;
+    };
+    set(avatar.querySelector('.spark-spin'), state.spin);
+    set(avatar.querySelector('svg.spark'), state.breath);
+    Array.from(avatar.querySelectorAll('.spark-ray')).forEach((el, i) => set(el, state.rays[i]));
+  }
+
   /** 历史消息里的「过程」：思考、工具、中间结论和插话按原顺序折叠，默认合上 */
   function processNode(blocks, steers = []) {
     const d = el('details', 'process');
@@ -3550,6 +3584,7 @@
   function renderLiveTurn() {
     const box = $('#liveTurn');
     if (!box || !S.live) return;
+    const avatarState = liveAvatarAnims(box);
     box.innerHTML = '';
     S.liveEls.clear();
     resetLiveProcess();
@@ -3598,6 +3633,7 @@
       setLiveProcessState(last.result != null ? (last.isError ? '失败' : '完成') : '运行中…');
     }
     syncLiveCursor(box);
+    restoreLiveAvatarAnims(box, avatarState);
     // 过程框刚出现时也要贴底，否则只有等下一段白字总结才会被顶上来。
     maybeScroll();
   }
@@ -3921,13 +3957,23 @@
         setRunProgress('正在继续…', 'thinking');
         break;
 
-      case 'ask':
+      case 'ask': {
+        const sameAsk = S.pendingAsk && S.pendingAsk.requestId === ev.requestId;
         S.pendingAsk = ev;
-        initAskState();
+        if (!sameAsk) initAskState();
         renderPanels();
         setRunProgress('等待你的回答…', 'wait');
         maybeScroll();
         break;
+      }
+
+      case 'ask_extend': {
+        // 其他端（或本端请求成功后的广播）重置了倒计时
+        if (!S.pendingAsk || S.pendingAsk.requestId !== ev.requestId) break;
+        const inMs = Number(S.pendingAsk.major ? ev.cancelInMs : ev.autoInMs);
+        if (Number.isFinite(inMs) && inMs > 0) askDeadline = Date.now() + inMs;
+        break;
+      }
 
       case 'ask_resolved':
         S.pendingAsk = null;
@@ -4179,13 +4225,18 @@
       S.pendingAsk = live.ask || null;
       if (data.contextTokens > 0 && S.conv) S.conv.contextTokens = data.contextTokens;
 
-      const changed = JSON.stringify(oldPerm) !== JSON.stringify(S.pendingPerm) ||
-        JSON.stringify(oldAsk) !== JSON.stringify(S.pendingAsk);
-      if (changed) {
+      // 只按 requestId 判断有没有变化：SSE 事件和轮询快照的字段不完全一样，
+      // 整对象比较会永远“不相等”，导致每秒重建弹窗、输入框失焦、输入法被收起。
+      const oldPermId = oldPerm && oldPerm.requestId;
+      const newPermId = S.pendingPerm && S.pendingPerm.requestId;
+      const oldAskId = oldAsk && oldAsk.requestId;
+      const newAskId = S.pendingAsk && S.pendingAsk.requestId;
+      const askChanged = oldAskId !== newAskId;
+      if (askChanged) {
         if (S.pendingAsk) initAskState();
         else { S.askSel = null; S.askOther = null; }
-        renderPanels();
       }
+      if (oldPermId !== newPermId || askChanged) renderPanels();
       const oldProc = document.querySelector('#liveTurn details.process');
       const procOpen = oldProc ? oldProc.open : null;
       renderLiveTurn();
@@ -4316,12 +4367,27 @@
 
   // ---------------------------------------------------------------- 面板
 
+  // 同一条提问/权限被重复推送（实时快照、断线重连、回到前台）时不要重建面板：
+  // 重建会移除正在输入的输入框，手机系统输入法随之收起，下一次点击很容易误触
+  // 「跳过/提交」。只有 requestId 变了（新问题）才重新渲染。
+  let panelsKey = '';
+
   function renderPanels() {
     const box = $('#panels');
+    const perm = S.pendingPerm;
+    const ask = S.pendingAsk;
+    const key = (perm ? 'p:' + (perm.requestId || '') : '') + '|' +
+      (ask ? 'a:' + (ask.requestId || '') : '');
+    if ((perm || ask) && key === panelsKey && box.childElementCount) {
+      updateHeader();
+      return;
+    }
+    panelsKey = key;
     box.innerHTML = '';
     clearAskTimer();
-    if (S.pendingPerm) box.appendChild(permPanel(S.pendingPerm));
-    if (S.pendingAsk) box.appendChild(askPanel(S.pendingAsk));
+    if (!ask) askDeadline = 0;
+    if (perm) box.appendChild(permPanel(perm));
+    if (ask) box.appendChild(askPanel(ask));
     updateHeader();
   }
 
@@ -4353,7 +4419,41 @@
     return d;
   }
 
+  // 用户操作提问面板（点击、输入、滑动）时，自动继续/自动暂停倒计时重置。
+  // 倒计时实际由服务端计时，这里同时调用 /api/ask/extend 让服务端重新计时。
+  let askDeadline = 0;
+  let askExtendAt = 0;
+  let askExtendBusy = false;
+
+  function noteAskActivity() {
+    if (!S.pendingAsk || !S.convId) return;
+    const ev = S.pendingAsk;
+    const now = Date.now();
+    // 由服务端确认后重置倒计时；请求做节流，避免连续打字每个键都发一次。
+    if (askExtendBusy || now - askExtendAt < 1200) return;
+    askExtendAt = now;
+    askExtendBusy = true;
+    api('/api/ask/extend', {
+      method: 'POST',
+      body: JSON.stringify({ id: S.convId, requestId: ev.requestId }),
+      timeout: 6000
+    }).then(data => {
+      if (!S.pendingAsk || S.pendingAsk.requestId !== ev.requestId) return;
+      const inMs = Number(ev.major ? data.cancelInMs : data.autoInMs);
+      if (Number.isFinite(inMs) && inMs > 0) askDeadline = Date.now() + inMs;
+    }).catch(() => { /* 下次操作再试 */ })
+      .finally(() => { askExtendBusy = false; });
+  }
+
+  /** 重连/刷新拿到服务端快照时，只在服务端时间更晚时延长，避免把刚重置的倒计时改回去。 */
+  function syncAskDeadline() {
+    if (!S.pendingAsk) { askDeadline = 0; return; }
+    const deadline = S.pendingAsk.major ? S.pendingAsk.cancelAt : S.pendingAsk.autoAt;
+    if (deadline && deadline > askDeadline) askDeadline = deadline;
+  }
+
   function initAskState() {
+    askDeadline = 0;
     if (!S.pendingAsk) {
       S.askSel = null;
       S.askOther = null;
@@ -4399,6 +4499,9 @@
           if (q.multiSelect) {
             if (S.askSel[qi].has(opt.label)) S.askSel[qi].delete(opt.label);
             else S.askSel[qi].add(opt.label);
+          } else if (S.askSel[qi].has(opt.label)) {
+            // 再点一次已选项＝取消；这样才能清掉预设项后直接输入自己的答案
+            S.askSel[qi].delete(opt.label);
           } else {
             S.askSel[qi] = new Set([opt.label]);
           }
@@ -4432,6 +4535,12 @@
     d.appendChild(actions);
     syncAskSubmit();
 
+    // 点击选项/按钮、输入文字、滑动问题面板都算正在操作，重置倒计时
+    const onAct = () => noteAskActivity();
+    d.addEventListener('pointerdown', onAct, { passive: true });
+    d.addEventListener('input', onAct);
+    d.addEventListener('keydown', onAct);
+
     startAskCountdown(ev, note);
     return d;
   }
@@ -4445,13 +4554,13 @@
 
   function startAskCountdown(ev, node) {
     clearAskTimer();
-    const deadline = ev.major ? ev.cancelAt : ev.autoAt;
-    if (!deadline) {
+    askDeadline = ev.major ? ev.cancelAt : ev.autoAt;
+    if (!askDeadline) {
       node.textContent = '';
       return;
     }
     const tick = () => {
-      const left = Math.max(0, Math.round((deadline - Date.now()) / 1000));
+      const left = Math.max(0, Math.round((askDeadline - Date.now()) / 1000));
       node.innerHTML = ev.major
         ? `若 <b>${left}</b> 秒内无人回答，这一轮会自动暂停`
         : `约 <b>${left}</b> 秒后自动按推荐选项继续`;
@@ -6549,6 +6658,9 @@
       return;
     }
     bind();
+    // 问题很长时用户会滑动面板看选项；滑动也算在操作，重置自动继续倒计时
+    const panelsBox = $('#panels');
+    if (panelsBox) panelsBox.addEventListener('scroll', () => noteAskActivity(), { passive: true });
     ensureModeBadge();
     loadFolderCollapsed();
     loadFontScale();
