@@ -14,7 +14,7 @@ import android.view.animation.PathInterpolator;
  * 和手机页 / PC 过程头像保持同一套动画：
  * - 每根射线独立周期、独立相位；
  * - 沿射线方向缩短，同时在最短时加宽 15%（宽度与长度同一节奏）；
- * - 整颗星 1.96s 呼吸，透明度 70%–100%。
+ * - 整颗星 3.2s 呼吸，透明度 75%–100%；整体逆时针 52 秒一圈。
  *
  * 这里直接按 SVG viewBox 28 28 200 200 的几何自绘，避免用静态 PNG + 整颗缩放
  * 导致缩短时宽度一起变细。
@@ -24,8 +24,9 @@ public final class ProcessStarView extends View {
     private static final float VB_SIZE = 200f;
     private static final float CX = 128f;
     private static final float CY = 128f;
-    private static final float BREATH_SECONDS = 1.96f;
-    private static final float BREATH_MIN_ALPHA = 0.70f;
+    private static final float BREATH_SECONDS = 4.5f;
+    private static final float BREATH_MIN_ALPHA = 0.75f;
+    private static final float SPIN_SECONDS = 52f;
     private static final float WIDTH_GAIN = 0.15f;
 
     private static final PathInterpolator EASE =
@@ -137,6 +138,8 @@ public final class ProcessStarView extends View {
         float scale = size / VB_SIZE;
         canvas.scale(scale, scale);
         canvas.translate(-VB_MIN, -VB_MIN);
+        // 整体逆时针旋转：52 秒一圈
+        canvas.rotate(-(t % SPIN_SECONDS) / SPIN_SECONDS * 360f, CX, CY);
         // SVG 外层 group 的 rotate(5 128 128)
         canvas.rotate(5f, CX, CY);
 

@@ -11,14 +11,15 @@
 电脑端使用方式：安装 1.2.0+ 的统一客户端，侧栏「手机连接」里开启访问并复制地址；
 手机 App 粘贴地址即可。同一 Wi-Fi 不需要 Tailscale 账号。
 
-## 最新 APK（2.4.145 精简 / 2.4.51 完整）
+## 最新 APK（2.4.146 精简 / 2.4.51 完整）
 
 - 完整包（新用户/未装环境）：`ClaudeWorkbench-full.apk`，2.4.51，202,562,281 字节（约 194 MB）
   SHA-256：`3bc07db344928c6b7b3def58f6c6bc80feeffb86e9c95faba1cfb524fe76c8eb`
   下载：`https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.51/ClaudeWorkbench-full.apk`
-- 精简包（已装手机环境）：`ClaudeWorkbench-slim.apk`，2.4.145，8,805,366 字节（约 8.4 MB）
-  SHA-256：`5ab44f5c4887ec899b6a38d9f9289bac6980c15c03821df90e6a6a41a9a22c97`
-  下载：`https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.145/ClaudeWorkbench-slim.apk`
+- 精简包（已装手机环境）：`ClaudeWorkbench-slim.apk`，2.4.146，8,805,366 字节（约 8.4 MB）
+  SHA-256：`b941b60012d6a9bc75667d8c841fa116e50580db42ba9ce9eb1cdfd22a69f5d6`
+  下载：`https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.146/ClaudeWorkbench-slim.apk`
+- 2.4.146：过程头像动画在缩短 + 15% 加宽的基础上增加整体逆时针旋转，52 秒一圈；透明度呼吸改为 75–100%，周期放慢到 4.5 秒。操控手机时顶部运行状态条同步旋转与呼吸参数。手机页资源版本 129，对应 PC 客户端 1.2.52。
 - 2.4.145：提问/确认弹窗的「提交」改为按回答完整度启用：没选完时灰色禁用，全部问题有选项或自定义答案后才变橙色可点；浅色主题下不再误显示成灰色。问题内容超过一屏时弹窗右侧显示细滚动条，普通页面不加。浅色主题选中项补充浅橙底色。手机页资源版本 128，对应 PC 客户端 1.2.51。
 - 2.4.143：手机页过程头像动画改为缩短时同步加宽 15%（宽度与长度同一节奏），整体缩短幅度略减；操控手机时顶部运行状态条的星形 logo 同步为同款逐根缩短 + 加宽动画；同步 PC 客户端最新动画参数。手机页资源版本 126。
 - 2.4.142：完成悬浮窗改为紧凑胶囊（星形 logo + 图标按钮），跟随 App 浅/深色主题；在聊天页时完成不再弹悬浮窗，点 ✓ 立即消失；运行状态条增加星形呼吸动画，只显示“任务进行中”；插话/停止浮窗默认改为左侧居中，AI 点按落在浮窗上时临时触摸穿透，避免误触停止自己。
