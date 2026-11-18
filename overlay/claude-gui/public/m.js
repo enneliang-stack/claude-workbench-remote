@@ -308,12 +308,13 @@
         `<div class="empty-title">没有匹配的对话</div>` +
         `<div class="empty-sub">换个关键词，或清空搜索</div></div>`;
     }
+    const logo = `<div class="empty-art logo" aria-hidden="true">${PROCESS_STAR_SVG}</div>`;
     if (S.filter !== 'all') {
-      return `<div class="empty-state"><div class="empty-art logo" aria-hidden="true">${PROCESS_STAR_SVG}</div>` +
+      return `<div class="empty-state">${logo}` +
         `<div class="empty-title">这个筛选下没有对话</div>` +
         `<button type="button" class="empty-act" data-empty-act="all">看全部对话</button></div>`;
     }
-    return `<div class="empty-state"><div class="empty-art">✦</div>` +
+    return `<div class="empty-state">${logo}` +
       `<div class="empty-title">还没有对话</div>` +
       `<div class="empty-sub">选一个工作文件夹，让 Claude 开始干活</div>` +
       `<button type="button" class="empty-act primary" data-empty-act="new">新建对话</button></div>`;
