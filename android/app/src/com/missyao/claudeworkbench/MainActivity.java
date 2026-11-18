@@ -31,6 +31,10 @@ import android.os.Looper;
 import android.provider.MediaStore;
 import android.provider.Settings;
 import android.text.InputType;
+import android.text.SpannableString;
+import android.text.Spanned;
+import android.text.style.ForegroundColorSpan;
+import android.text.style.UnderlineSpan;
 import android.util.Log;
 import android.view.Gravity;
 import android.view.View;
@@ -1342,15 +1346,17 @@ public class MainActivity extends Activity {
 
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
-        TextView intro = text("把电脑「远程访问.cmd」窗口里的地址整段粘贴进来，可以带多行和说明文字；"
-            + "App 会提取所有 http/https 地址并自动尝试。\n\n"
-            + "建议家里 Wi-Fi 和 Tailscale 各放一条，换网络时不用重新填。", 11.5f, MUTED);
+        TextView intro = text("在电脑客户端点左上角的手机图标，再点「复制连接地址」，"
+            + "把复制的内容整段粘贴到这里；可以带多行和说明文字，App 会提取所有 http/https 地址并自动尝试。\n\n"
+            + "配置了 Tailscale 会复制两条：同一 Wi-Fi 一条、出门一条，换网络时不用重新填。", 11.5f, MUTED);
         intro.setLineSpacing(dp(3), 1f);
         box.addView(intro);
         LinearLayout.LayoutParams ilp = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         ilp.topMargin = dp(10);
         box.addView(wrap, ilp);
+        box.addView(linkLine("还没有电脑客户端？GitHub：",
+            "https://github.com/enneliang-stack/claude-workbench-update", 8));
 
         Dialog dialog = showDarkDialog("连接电脑端", "可填多条地址，自动尝试", box,
             "连接", d -> {
@@ -1555,6 +1561,9 @@ public class MainActivity extends Activity {
         box.addView(label("API Key"));
         box.addView(key, marginTop(dp(5)));
 
+        box.addView(linkLine("还没有 API Key？点此获取：",
+            "https://platform.deepseek.com/sign_in", 6));
+
         EditText base = edit("Base URL", LocalConfig.baseUrl(this), false);
         base.setText(LocalConfig.baseUrl(this));
         box.addView(label("Base URL"));
@@ -1565,10 +1574,6 @@ public class MainActivity extends Activity {
         box.addView(label("模型"));
         box.addView(model, marginTop(dp(5)));
 
-        EditText effort = edit("推理档位（留空或 low/medium/high/xhigh/max）", LocalConfig.effort(this), false);
-        effort.setText(LocalConfig.effort(this));
-        box.addView(label("推理档位"));
-        box.addView(effort, marginTop(dp(5)));
         box.addView(text("默认接 DeepSeek 的 Anthropic 兼容接口；模型名可填 deepseek-flash[1m]。",
             11, MUTED), marginTop(dp(8)));
 
@@ -1580,7 +1585,7 @@ public class MainActivity extends Activity {
                     return false;
                 }
                 LocalConfig.save(this, k, base.getText().toString(), model.getText().toString(),
-                    effort.getText().toString());
+                    LocalConfig.effort(this));
                 refreshHomeStatus();
                 if (thenInstall) {
                     handler.post(this::showInstallDialog);
@@ -3376,6 +3381,25 @@ public class MainActivity extends Activity {
     private TextView label(String s) {
         TextView t = text(s, 12, MUTED);
         t.setPadding(0, dp(10), 0, 0);
+        return t;
+    }
+
+    /** 可点击的链接行：前缀用次要色，网址用蓝色下划线，点击交给系统浏览器。 */
+    private TextView linkLine(String prefix, String url, int topDp) {
+        SpannableString s = new SpannableString(prefix + url);
+        s.setSpan(new ForegroundColorSpan(BLUE), prefix.length(), s.length(),
+            Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        s.setSpan(new UnderlineSpan(), prefix.length(), s.length(),
+            Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        TextView t = text("", 11, MUTED);
+        t.setText(s);
+        t.setPadding(0, dp(topDp), 0, 0);
+        t.setOnClickListener(v -> {
+            try {
+                startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+            } catch (Exception ignored) {
+            }
+        });
         return t;
     }
 

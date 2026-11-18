@@ -1124,6 +1124,11 @@ body { line-height: 1.58; }
   color: var(--accent); font-size: 24px;
   background: rgba(224, 138, 95, .09); border: 1px solid #34271e;
 }
+/* 筛选空状态直接用星形 logo，不要背景方框 */
+.empty-art.logo {
+  background: none; border: 0;
+}
+.empty-art.logo svg { width: 54px; height: 54px; display: block; }
 .empty-title { font-size: 16px; font-weight: 650; color: var(--text); }
 .empty-sub { margin-top: 5px; font-size: 12.5px; color: var(--faint); line-height: 1.6; }
 .empty-act {

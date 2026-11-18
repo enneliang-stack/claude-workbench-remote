@@ -309,7 +309,7 @@
         `<div class="empty-sub">换个关键词，或清空搜索</div></div>`;
     }
     if (S.filter !== 'all') {
-      return `<div class="empty-state"><div class="empty-art">◎</div>` +
+      return `<div class="empty-state"><div class="empty-art logo" aria-hidden="true">${PROCESS_STAR_SVG}</div>` +
         `<div class="empty-title">这个筛选下没有对话</div>` +
         `<button type="button" class="empty-act" data-empty-act="all">看全部对话</button></div>`;
     }
