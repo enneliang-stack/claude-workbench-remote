@@ -4,6 +4,8 @@ import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.Path;
+import android.graphics.RadialGradient;
+import android.graphics.Shader;
 import android.os.SystemClock;
 import android.view.View;
 import android.view.animation.PathInterpolator;
@@ -14,7 +16,7 @@ import android.view.animation.PathInterpolator;
  * 和手机页 / PC 过程头像保持同一套动画：
  * - 每根射线独立周期、独立相位；
  * - 沿射线方向缩短，同时在最短时加宽 15%（宽度与长度同一节奏）；
- * - 整颗星 3.2s 呼吸，透明度 75%–100%；整体逆时针 52 秒一圈。
+ * - 整颗星 4.5s 呼吸，透明度 75%–100%；整体逆时针 35 秒一圈。
  *
  * 这里直接按 SVG viewBox 28 28 200 200 的几何自绘，避免用静态 PNG + 整颗缩放
  * 导致缩短时宽度一起变细。
@@ -26,8 +28,8 @@ public final class ProcessStarView extends View {
     private static final float CY = 128f;
     private static final float BREATH_SECONDS = 4.5f;
     private static final float BREATH_MIN_ALPHA = 0.75f;
-    private static final float SPIN_SECONDS = 52f;
-    private static final float WIDTH_GAIN = 0.15f;
+    private static final float BREATH_SCALE_DROP = 0.05f;
+    private static final float SPIN_SECONDS = 35f;
 
     private static final PathInterpolator EASE =
             new PathInterpolator(0.42f, 0f, 0.58f, 1f);
@@ -36,10 +38,10 @@ public final class ProcessStarView extends View {
         final boolean line;
         final float x2, y2, strokeWidth;
         final Path path;
-        final float angle, dur, delay, min;
+        final float angle, dur, delay, min, gain;
 
         Ray(boolean line, float x2, float y2, float strokeWidth,
-            Path path, float angle, float dur, float delay, float min) {
+            Path path, float angle, float dur, float delay, float min, float gain) {
             this.line = line;
             this.x2 = x2;
             this.y2 = y2;
@@ -49,21 +51,24 @@ public final class ProcessStarView extends View {
             this.dur = dur;
             this.delay = delay;
             this.min = min;
+            this.gain = gain;
         }
     }
 
-    // 和 m.js PROCESS_STAR_SVG / app.js avatarSpark 的十根参数一一对应。
+    // 和 m.js PROCESS_STAR_SVG / app.js avatarSpark 的十二根参数一一对应。
     private static final Ray[] RAYS = new Ray[]{
-            new Ray(true, 178.54f, 59.19f, 15.74f, null, -53.70f, 2.700f, -1.003f, 0.8647f),
-            new Ray(true, 204.97f, 103.06f, 12.83f, null, -17.95f, 3.020f, -2.231f, 0.8557f),
-            new Ray(true, 177.20f, 196.55f, 17.46f, null, 54.33f, 3.300f, -1.138f, 0.8700f),
-            new Ray(true, 127.73f, 206.38f, 11.24f, null, 90.20f, 2.420f, -1.885f, 0.8508f),
-            new Ray(true, 52.67f, 105.29f, 16.54f, null, -163.22f, 2.000f, -1.520f, 0.8672f),
-            new Ray(false, 0, 0, 0, petal6(), -89.07f, 2.880f, -2.421f, 0.8592f),
-            new Ray(false, 0, 0, 0, petal7(), 17.76f, 2.180f, -1.022f, 0.8380f),
-            new Ray(false, 0, 0, 0, petal8(), 125.69f, 3.150f, -2.048f, 0.8585f),
-            new Ray(false, 0, 0, 0, petal9(), 161.85f, 2.480f, -0.032f, 0.8381f),
-            new Ray(false, 0, 0, 0, petal10(), -125.92f, 2.340f, -0.477f, 0.8447f)
+            new Ray(true, 192.71f, 129.69f, 12.83f, null, 1.50f, 2.916f, -0.222f, 1.2080f, 0.15f),
+            new Ray(true, 127.72f, 203.44f, 11.24f, null, 90.21f, 3.332f, -1.711f, 1.0780f, 0.07f),
+            new Ray(true, 69.54f, 75.34f, 16.54f, null, 222.02f, 2.001f, -0.521f, 0.9090f, 0.07f),
+            new Ray(false, 0, 0, 0, taperL1(), -35.62f, 3.407f, -2.229f, 0.8241f, 0.15f),
+            new Ray(false, 0, 0, 0, taperL3(), 52.93f, 3.420f, -2.530f, 0.8310f, 0.15f),
+            new Ray(false, 0, 0, 0, taperL6(), 173.74f, 2.576f, -1.484f, 1.0780f, 0.07f),
+            new Ray(false, 0, 0, 0, petal6(), -74.22f, 2.546f, -2.086f, 1.0260f, 0.07f),
+            new Ray(false, 0, 0, 0, petal7(), 21.00f, 2.217f, -0.717f, 1.1200f, 0.07f),
+            new Ray(false, 0, 0, 0, petal8(), 122.69f, 3.233f, -1.337f, 0.8960f, 0.07f),
+            new Ray(false, 0, 0, 0, petal9(), 149.85f, 4.123f, -0.663f, 0.7895f, 0.15f),
+            new Ray(false, 0, 0, 0, petal10(), 255.56f, 2.669f, -2.480f, 0.8000f, 0.07f),
+            new Ray(false, 0, 0, 0, petal11(), 191.24f, 3.416f, -3.368f, 1.2340f, 0.12f),
     };
 
     private final Paint strokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -88,6 +93,12 @@ public final class ProcessStarView extends View {
         strokePaint.setStrokeCap(Paint.Cap.ROUND);
         strokePaint.setStrokeJoin(Paint.Join.ROUND);
         fillPaint.setStyle(Paint.Style.FILL);
+        // 中心亮渐变，和客户端/任务栏图标一致
+        Shader sparkShader = new RadialGradient(128f, 128f, 108f,
+                new int[]{0xFFEA9876, 0xFFDD7F5F, 0xFFCF6D4B},
+                new float[]{0f, 0.46f, 1f}, Shader.TileMode.CLAMP);
+        strokePaint.setShader(sparkShader);
+        fillPaint.setShader(sparkShader);
         setColor(color);
     }
 
@@ -127,10 +138,12 @@ public final class ProcessStarView extends View {
 
         float t = running ? (SystemClock.uptimeMillis() - startUptime) / 1000f : 0f;
 
-        // 整颗星 1.96s 呼吸，和网页 sparkBreath 的 70%–100% 一致。
+        // 整颗星 4.5s 呼吸，和网页 sparkBreath 的 75%–100% 一致；最低点同时缩到 0.90。
         float bf = (t % BREATH_SECONDS) / BREATH_SECONDS;
         float bp = bf < 0.5f ? bf * 2f : (1f - bf) * 2f;
-        int alpha = Math.round(255f * (1f - (1f - BREATH_MIN_ALPHA) * EASE.getInterpolation(bp)));
+        float breathEase = EASE.getInterpolation(bp);
+        float breathScale = 1f - BREATH_SCALE_DROP * breathEase;
+        int alpha = Math.round(255f * (1f - (1f - BREATH_MIN_ALPHA) * breathEase));
         strokePaint.setAlpha(alpha);
         fillPaint.setAlpha(alpha);
 
@@ -138,7 +151,10 @@ public final class ProcessStarView extends View {
         float scale = size / VB_SIZE;
         canvas.scale(scale, scale);
         canvas.translate(-VB_MIN, -VB_MIN);
-        // 整体逆时针旋转：52 秒一圈
+        canvas.translate(CX, CY);
+        canvas.scale(breathScale, breathScale);
+        canvas.translate(-CX, -CY);
+        // 整体逆时针旋转：35 秒一圈
         canvas.rotate(-(t % SPIN_SECONDS) / SPIN_SECONDS * 360f, CX, CY);
         // SVG 外层 group 的 rotate(5 128 128)
         canvas.rotate(5f, CX, CY);
@@ -150,7 +166,7 @@ public final class ProcessStarView extends View {
             float prog = p < 0.5f ? p * 2f : (1f - p) * 2f;
             float ease = EASE.getInterpolation(prog);
             float s = 1f - (1f - r.min) * ease;
-            float w = 1f + WIDTH_GAIN * ease;
+            float w = 1f + r.gain * ease;
 
             canvas.save();
             // 沿径向缩长度，同时把宽度放大：rotate(angle) scale(s, w) rotate(-angle)。
@@ -174,52 +190,92 @@ public final class ProcessStarView extends View {
         canvas.restore();
     }
 
+    private static Path taperL1() {
+        Path p = new Path();
+        p.moveTo(134.42f, 136.96f);
+        p.lineTo(201.99f, 84.67f);
+        p.quadTo(203.80f, 73.69f, 192.82f, 71.88f);
+        p.lineTo(121.58f, 119.04f);
+        p.close();
+        return p;
+    }
+
+    private static Path taperL3() {
+        Path p = new Path();
+        p.moveTo(119.64f, 134.32f);
+        p.lineTo(171.90f, 200.59f);
+        p.quadTo(184.12f, 202.29f, 185.83f, 190.06f);
+        p.lineTo(136.36f, 121.68f);
+        p.close();
+        return p;
+    }
+
+    private static Path taperL6() {
+        Path p = new Path();
+        p.moveTo(127.08f, 119.62f);
+        p.lineTo(49.47f, 130.96f);
+        p.quadTo(44.50f, 137.16f, 50.70f, 142.13f);
+        p.lineTo(128.92f, 136.38f);
+        p.close();
+        return p;
+    }
+
     private static Path petal6() {
         Path p = new Path();
-        p.moveTo(136.96f, 128.15f);
-        p.lineTo(136.95f, 51.84f);
-        p.quadTo(129.42f, 40.14f, 121.52f, 51.59f);
-        p.lineTo(119.04f, 127.85f);
+        p.moveTo(138.78f, 131.05f);
+        p.lineTo(154.43f, 62.80f);
+        p.quadTo(149.89f, 50.48f, 139.58f, 58.60f);
+        p.lineTo(117.22f, 124.95f);
         p.close();
         return p;
     }
 
     private static Path petal7() {
         Path p = new Path();
-        p.moveTo(127.22f, 130.43f);
-        p.lineTo(204.75f, 157.89f);
-        p.quadTo(213.51f, 155.39f, 207.83f, 148.27f);
-        p.lineTo(128.78f, 125.57f);
+        p.moveTo(127.09f, 130.39f);
+        p.lineTo(202.94f, 162.18f);
+        p.quadTo(211.82f, 160.17f, 206.55f, 152.74f);
+        p.lineTo(128.91f, 125.61f);
         p.close();
         return p;
     }
 
     private static Path petal8() {
         Path p = new Path();
-        p.moveTo(120.97f, 122.95f);
-        p.lineTo(71.98f, 193.29f);
-        p.quadTo(71.52f, 206.62f, 84.01f, 201.93f);
-        p.lineTo(135.03f, 133.05f);
+        p.moveTo(118.90f, 122.16f);
+        p.lineTo(75.48f, 196.13f);
+        p.quadTo(75.71f, 209.48f, 87.94f, 204.13f);
+        p.lineTo(137.10f, 133.84f);
         p.close();
         return p;
     }
 
     private static Path petal9() {
         Path p = new Path();
-        p.moveTo(127.20f, 125.56f);
-        p.lineTo(48.20f, 148.82f);
-        p.quadTo(42.55f, 156.00f, 51.36f, 158.45f);
-        p.lineTo(128.80f, 130.44f);
+        p.moveTo(126.71f, 125.79f);
+        p.lineTo(54.28f, 164.95f);
+        p.quadTo(50.24f, 173.15f, 59.37f, 173.72f);
+        p.lineTo(129.29f, 130.21f);
         p.close();
         return p;
     }
 
     private static Path petal10() {
         Path p = new Path();
-        p.moveTo(131.08f, 125.77f);
-        p.lineTo(82.16f, 53.96f);
-        p.quadTo(71.50f, 50.00f, 71.94f, 61.36f);
-        p.lineTo(124.92f, 130.23f);
+        p.moveTo(131.67f, 127.05f);
+        p.lineTo(112.46f, 42.32f);
+        p.quadTo(103.98f, 34.73f, 100.24f, 45.46f);
+        p.lineTo(124.33f, 128.95f);
+        p.close();
+        return p;
+    }
+
+    private static Path petal11() {
+        Path p = new Path();
+        p.moveTo(128.40f, 125.98f);
+        p.lineTo(68.24f, 111.98f);
+        p.quadTo(61.85f, 114.84f, 66.66f, 119.93f);
+        p.lineTo(127.60f, 130.02f);
         p.close();
         return p;
     }

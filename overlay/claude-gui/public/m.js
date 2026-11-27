@@ -2694,7 +2694,7 @@
   }
 
   // 过程条前的星形头像：和客户端消息头像同一颗星，运行中单独做动画。
-  const PROCESS_STAR_SVG = '<svg class="spark" viewBox="28 28 200 200"><g class="spark-spin"><g transform="rotate(5.0 128 128)"><g stroke="currentColor" stroke-linecap="round"><g class="spark-ray" style="--sray-dur:2.7000s;--sray-delay:-1.0030s;--sray-min:0.8647;--sray-ang:-53.70deg"><line x1="128" y1="128" x2="178.54" y2="59.19" stroke-width="15.74"/></g><g class="spark-ray" style="--sray-dur:3.0200s;--sray-delay:-2.2310s;--sray-min:0.8557;--sray-ang:-17.95deg"><line x1="128" y1="128" x2="204.97" y2="103.06" stroke-width="12.83"/></g><g class="spark-ray" style="--sray-dur:3.3000s;--sray-delay:-1.1380s;--sray-min:0.8700;--sray-ang:54.33deg"><line x1="128" y1="128" x2="177.20" y2="196.55" stroke-width="17.46"/></g><g class="spark-ray" style="--sray-dur:2.4200s;--sray-delay:-1.8850s;--sray-min:0.8508;--sray-ang:90.20deg"><line x1="128" y1="128" x2="127.73" y2="206.38" stroke-width="11.24"/></g><g class="spark-ray" style="--sray-dur:2.0000s;--sray-delay:-1.5200s;--sray-min:0.8672;--sray-ang:-163.22deg"><line x1="128" y1="128" x2="52.67" y2="105.29" stroke-width="16.54"/></g></g><g class="spark-ray" style="--sray-dur:2.8800s;--sray-delay:-2.4210s;--sray-min:0.8592;--sray-ang:-89.07deg"><path d="M 136.96 128.15 L 136.95 51.84 Q 129.42 40.14 121.52 51.59 L 119.04 127.85 Z" fill="currentColor"/></g><g class="spark-ray" style="--sray-dur:2.1800s;--sray-delay:-1.0220s;--sray-min:0.8380;--sray-ang:17.76deg"><path d="M 127.22 130.43 L 204.75 157.89 Q 213.51 155.39 207.83 148.27 L 128.78 125.57 Z" fill="currentColor"/></g><g class="spark-ray" style="--sray-dur:3.1500s;--sray-delay:-2.0480s;--sray-min:0.8585;--sray-ang:125.69deg"><path d="M 120.97 122.95 L 71.98 193.29 Q 71.52 206.62 84.01 201.93 L 135.03 133.05 Z" fill="currentColor"/></g><g class="spark-ray" style="--sray-dur:2.4800s;--sray-delay:-0.0320s;--sray-min:0.8381;--sray-ang:161.85deg"><path d="M 127.20 125.56 L 48.20 148.82 Q 42.55 156.00 51.36 158.45 L 128.80 130.44 Z" fill="currentColor"/></g><g class="spark-ray" style="--sray-dur:2.3400s;--sray-delay:-0.4770s;--sray-min:0.8447;--sray-ang:-125.92deg"><path d="M 131.08 125.77 L 82.16 53.96 Q 71.50 50.00 71.94 61.36 L 124.92 130.23 Z" fill="currentColor"/></g><circle cx="128" cy="128" r="10" fill="currentColor"/></g></g></svg>';
+  const PROCESS_STAR_SVG = '<svg class="spark" viewBox="28 28 200 200"><g class="spark-spin"><g transform="rotate(5.0 128 128)"><g stroke="url(#sparkGrad)" stroke-linecap="round"><g class="spark-ray" style="--sray-dur:2.9156s;--sray-delay:-0.2221s;--sray-min:1.2080;--sray-ang:1.50deg"><line x1="128" y1="128" x2="192.71" y2="129.69" stroke-width="12.83"/></g><g class="spark-ray" style="--sray-dur:3.3325s;--sray-delay:-1.7115s;--sray-min:1.0780;--sray-ang:90.21deg;--sray-wide:1.0700"><line x1="128" y1="128" x2="127.72" y2="203.44" stroke-width="11.24"/></g><g class="spark-ray" style="--sray-dur:2.0014s;--sray-delay:-0.5206s;--sray-min:0.9090;--sray-ang:222.02deg;--sray-wide:1.0700"><line x1="128" y1="128" x2="69.54" y2="75.34" stroke-width="16.54"/></g></g><g class="spark-ray" style="--sray-dur:2.5461s;--sray-delay:-2.0861s;--sray-min:1.0260;--sray-ang:-74.22deg;--sray-wide:1.0700"><path d="M 138.78 131.05 L 154.43 62.80 Q 149.89 50.48 139.58 58.60 L 117.22 124.95 Z" fill="url(#sparkGrad)"/></g><g class="spark-ray" style="--sray-dur:3.4067s;--sray-delay:-2.2289s;--sray-min:0.8241;--sray-ang:-35.62deg"><path d="M 134.42 136.96 L 201.99 84.67 Q 203.80 73.69 192.82 71.88 L 121.58 119.04 Z" fill="url(#sparkGrad)"/></g><g class="spark-ray" style="--sray-dur:2.2174s;--sray-delay:-0.7170s;--sray-min:1.1200;--sray-ang:21.00deg;--sray-wide:1.0700"><path d="M 127.09 130.39 L 202.94 162.18 Q 211.82 160.17 206.55 152.74 L 128.91 125.61 Z" fill="url(#sparkGrad)"/></g><g class="spark-ray" style="--sray-dur:3.4198s;--sray-delay:-2.5302s;--sray-min:0.8310;--sray-ang:52.93deg"><path d="M 119.64 134.32 L 171.90 200.59 Q 184.12 202.29 185.83 190.06 L 136.36 121.68 Z" fill="url(#sparkGrad)"/></g><g class="spark-ray" style="--sray-dur:3.2329s;--sray-delay:-1.3367s;--sray-min:0.8960;--sray-ang:122.69deg;--sray-wide:1.0700"><path d="M 118.90 122.16 L 75.48 196.13 Q 75.71 209.48 87.94 204.13 L 137.10 133.84 Z" fill="url(#sparkGrad)"/></g><g class="spark-ray" style="--sray-dur:4.1229s;--sray-delay:-0.6627s;--sray-min:0.7895;--sray-ang:149.85deg"><path d="M 126.71 125.79 L 54.28 164.95 Q 50.24 173.15 59.37 173.72 L 129.29 130.21 Z" fill="url(#sparkGrad)"/></g><g class="spark-ray" style="--sray-dur:2.5755s;--sray-delay:-1.4845s;--sray-min:1.0780;--sray-ang:173.74deg;--sray-wide:1.0700"><path d="M 127.08 119.62 L 49.47 130.96 Q 44.50 137.16 50.70 142.13 L 128.92 136.38 Z" fill="url(#sparkGrad)"/></g><g class="spark-ray" style="--sray-dur:3.4158s;--sray-delay:-3.3684s;--sray-min:1.2340;--sray-ang:191.24deg;--sray-wide:1.1200"><path d="M 128.40 125.98 L 68.24 111.98 Q 61.85 114.84 66.66 119.93 L 127.60 130.02 Z" fill="url(#sparkGrad)"/></g><g class="spark-ray" style="--sray-dur:2.6686s;--sray-delay:-2.4796s;--sray-min:0.8000;--sray-ang:255.56deg;--sray-wide:1.0700"><path d="M 131.67 127.05 L 112.46 42.32 Q 103.98 34.73 100.24 45.46 L 124.33 128.95 Z" fill="url(#sparkGrad)"/></g><circle cx="128" cy="128" r="10" fill="url(#sparkGrad)"/></g></g></svg>';
 
   function processRowNode(details, live) {
     const row = el('div', 'process-row' + (live ? ' live' : ''));
@@ -6653,7 +6653,36 @@
     }
   }
 
+  function ensureSparkGradient() {
+    if (document.getElementById('sparkGrad')) return;
+    const ns = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(ns, 'svg');
+    svg.setAttribute('width', '0');
+    svg.setAttribute('height', '0');
+    svg.setAttribute('aria-hidden', 'true');
+    svg.style.position = 'absolute';
+    svg.style.width = '0';
+    svg.style.height = '0';
+    const defs = document.createElementNS(ns, 'defs');
+    const grad = document.createElementNS(ns, 'radialGradient');
+    grad.setAttribute('id', 'sparkGrad');
+    grad.setAttribute('gradientUnits', 'userSpaceOnUse');
+    grad.setAttribute('cx', '128');
+    grad.setAttribute('cy', '128');
+    grad.setAttribute('r', '108');
+    [['0', '#ea9876'], ['.46', '#dd7f5f'], ['1', '#cf6d4b']].forEach(([offset, color]) => {
+      const stop = document.createElementNS(ns, 'stop');
+      stop.setAttribute('offset', offset);
+      stop.setAttribute('stop-color', color);
+      grad.appendChild(stop);
+    });
+    defs.appendChild(grad);
+    svg.appendChild(defs);
+    document.body.appendChild(svg);
+  }
+
   async function init() {
+    ensureSparkGradient();
     if (!TOKEN) {
       document.body.innerHTML = '<div style="padding:40px;color:#e8e6e3;font:15px system-ui">缺少访问令牌，请重新用带 token 的地址打开。</div>';
       return;

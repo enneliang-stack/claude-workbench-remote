@@ -439,9 +439,10 @@ details.process[open] > summary::before { content: "▾"; }
 }
 .process-row.live .process-avatar .spark-spin {
   transform-box: view-box; transform-origin: 128px 128px;
-  animation: processSparkSpin 52s linear infinite;
+  animation: processSparkSpin 35s linear infinite;
 }
 .process-row.live .process-avatar svg.spark {
+  transform-box: view-box; transform-origin: 50% 50%;
   animation: processSparkBreath 4.5s ease-in-out infinite;
 }
 @keyframes processSparkRay {
@@ -450,8 +451,8 @@ details.process[open] > summary::before { content: "▾"; }
 }
 @keyframes processSparkSpin { to { transform: rotate(-360deg); } }
 @keyframes processSparkBreath {
-  0%, 100% { opacity: 1; }
-  50% { opacity: .75; }
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: .75; transform: scale(.95); }
 }
 /* 过程框滚出标题后，固定在左侧的「收起」浮钮 */
 .process-collapse-btn {

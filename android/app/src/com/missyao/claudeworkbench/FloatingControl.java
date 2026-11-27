@@ -219,7 +219,6 @@ public final class FloatingControl {
     private void styleViews() {
         if (panel == null) return;
         panel.setBackground(rounded(colPanel, colStroke, 22));
-        logo.setImageTintList(ColorStateList.valueOf(colAccent));
         status.setTextColor(colText);
 
         messageBtn.setImageTintList(ColorStateList.valueOf(colBlue));
@@ -287,7 +286,7 @@ public final class FloatingControl {
 
         // App logo 只取星形本身，不加任何底色或方框。
         logo = new ImageView(service);
-        logo.setImageResource(R.drawable.ic_notification);
+        logo.setImageResource(R.drawable.ic_star_mark);
         logo.setScaleType(ImageView.ScaleType.FIT_CENTER);
         logo.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(18), dp(18));

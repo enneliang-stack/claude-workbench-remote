@@ -7,6 +7,7 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
+import android.graphics.BitmapFactory;
 import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
@@ -206,6 +207,7 @@ public class EngineService extends Service {
         return b.setContentTitle("Claude 工作台 · 手机端")
                 .setContentText(text)
                 .setSmallIcon(R.drawable.ic_notification)
+                .setLargeIcon(BitmapFactory.decodeResource(getResources(), R.drawable.ic_star_mark))
                 .setOngoing(true)
                 .setContentIntent(openPi)
                 .addAction(0, "查看日志", logPi)
