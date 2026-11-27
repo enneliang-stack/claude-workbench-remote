@@ -73,7 +73,6 @@ public final class ProcessStarView extends View {
 
     private final Paint strokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint fillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint centerPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private boolean running;
     private long startUptime;
     private int color = 0xFFE05A3F;
@@ -94,8 +93,6 @@ public final class ProcessStarView extends View {
         strokePaint.setStrokeCap(Paint.Cap.ROUND);
         strokePaint.setStrokeJoin(Paint.Join.ROUND);
         fillPaint.setStyle(Paint.Style.FILL);
-        centerPaint.setStyle(Paint.Style.FILL);
-        centerPaint.setColor(0xFFDD7F5F);
         // 中心亮渐变，和客户端/任务栏图标一致
         Shader sparkShader = new RadialGradient(128f, 128f, 108f,
                 new int[]{0xFFEA9876, 0xFFDD7F5F, 0xFFCF6D4B},
@@ -149,7 +146,6 @@ public final class ProcessStarView extends View {
         int alpha = Math.round(255f * (1f - (1f - BREATH_MIN_ALPHA) * breathEase));
         strokePaint.setAlpha(alpha);
         fillPaint.setAlpha(alpha);
-        centerPaint.setAlpha(alpha);
 
         canvas.save();
         float scale = size / VB_SIZE;
@@ -189,9 +185,6 @@ public final class ProcessStarView extends View {
             canvas.restore();
         }
 
-        // 中心圆不参与逐根收缩，但跟随整颗星呼吸。
-        // 用实心中间色，避免小尺寸下渐变中心看起来像小白点。
-        canvas.drawCircle(CX, CY, 10f, centerPaint);
         canvas.restore();
     }
 
