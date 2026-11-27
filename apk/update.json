@@ -1,12 +1,12 @@
 {
-  "versionCode": 192,
-  "versionName": "2.4.151",
+  "versionCode": 193,
+  "versionName": "2.4.152",
   "apk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.150/ClaudeWorkbench-full.apk",
   "sha256": "86a6e52c2f2b571a1d1fedd3f20e1a553578c828964ea605c38a8eca84d6695a",
   "fullVersionCode": 191,
   "fullVersionName": "2.4.150",
   "slimApk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/latest/download/ClaudeWorkbench-slim.apk",
-  "slimSha256": "de6ee0674ef0ab83fb8c959c67d3d0255f41c430f38302606f5b9087bcee7931",
+  "slimSha256": "ff4389f0cab84fbe957b6d5bbe40b7fd69aa857bf98ef993b71b341b1e567eb1",
   "important": false,
-  "notes": "2.4.151 更新（精简包）\n\n- 星形 logo 改为新版 12 条线与渐变呼吸动画。\n- 悬浮状态星标、通知大图标、桌面图标同步更新。\n- 手机页同步客户端 1.2.60 的星形动画与布局修复。\n- 手机页资源版本 150，对应 PC 客户端 1.2.60。\n- 已装环境的用户走精简更新，不需要重装环境。"
+  "notes": "2.4.152 更新（精简包）\n\n- 星形 logo 调整：3 点方向的细线与 4 点方向的粗花瓣互换位置。\n- 图标、悬浮状态星标、通知大图标、手机页同步更新。\n- 手机页资源版本 152，对应 PC 客户端 1.2.62。\n- 已装环境的用户走精简更新，不需要重装环境。"
 }
