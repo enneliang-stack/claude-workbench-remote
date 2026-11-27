@@ -101,17 +101,18 @@ def build_server():
     )
     text = rep(
         text,
-        "state = loadState();",
-        "state = loadState();\n"
-        "if (IS_PHONE) {\n"
-        "  state.settings.defaultEffort = 'low';\n"
-        "  if (!state.phoneEffortMigrated) {\n"
-        "    for (const c of Object.values(state.conversations || {})) {\n"
-        "      if (!c.effort || c.effort === 'max') c.effort = 'low';\n"
+        "  state = await loadState();",
+        "  state = await loadState();\n"
+        "  if (IS_PHONE) {\n"
+        "    state.settings.defaultEffort = 'low';\n"
+        "    if (!state.phoneEffortMigrated) {\n"
+        "      for (const c of Object.values(state.conversations || {})) {\n"
+        "        if (c && typeof c === 'object' && !Array.isArray(c) && (!c.effort || c.effort === 'max')) c.effort = 'low';\n"
+        "      }\n"
+        "      state.phoneEffortMigrated = true;\n"
+        "      saveState(false);\n"
         "    }\n"
-        "    state.phoneEffortMigrated = true;\n"
-        "  }\n"
-        "}",
+        "  }",
         "phone default effort state",
     )
 
@@ -155,8 +156,8 @@ def build_server():
 
     text = rep(
         text,
-        "async function buildBootstrap() {\n  const folderMap",
-        "async function buildBootstrap() {\n"
+        "async function scanBootstrap(nextIndex) {\n  const folderMap",
+        "async function scanBootstrap(nextIndex) {\n"
         "  if (IS_PHONE) {\n"
         "    try { fs.mkdirSync('/workspace', { recursive: true }); } catch { /* ignore */ }\n"
         "    let added = false;\n"
@@ -166,7 +167,7 @@ def build_server():
         "      state.folders.push({ path: dir, addedAt: new Date().toISOString() });\n"
         "      added = true;\n"
         "    }\n"
-        "    if (added) saveState();\n"
+        "    if (added) saveState(false);\n"
         "  }\n"
         "  const folderMap",
         "workspace bootstrap",

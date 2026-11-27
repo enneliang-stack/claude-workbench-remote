@@ -27,6 +27,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.File;
+import java.io.DataInputStream;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -37,9 +38,15 @@ import java.util.Arrays;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.nio.channels.Channels;
+import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
 import java.util.List;
+import java.util.HashSet;
+import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 手机端下载管理：只操作 App 自己的 external files/downloads/shared 目录，
@@ -49,6 +56,10 @@ public class DownloadsBridge {
     private final MainActivity activity;
     // 索引是全局文件，可能同时存在多个 DownloadsBridge 实例（页面桥和更新下载流程）。
     private static final Object INDEX_LOCK = new Object();
+    private static final Object DRAFT_LOCK = new Object();
+    private static final int MAX_DRAFT_BYTES = 8 * 1024 * 1024;
+    private static final Set<String> reservedNames = new HashSet<>();
+    private static final ConcurrentHashMap<String, CompletableFuture<String>> activeDownloads = new ConcurrentHashMap<>();
 
     public DownloadsBridge(MainActivity activity) {
         this.activity = activity;
@@ -71,7 +82,7 @@ public class DownloadsBridge {
         String safe = id == null ? "" : id.replaceAll("[^A-Za-z0-9._-]", "_");
         if (safe.isEmpty()) return null;
         File dir = new File(activity.getFilesDir(), "drafts");
-        if (!dir.isDirectory() && !dir.mkdirs()) return null;
+        if (!dir.isDirectory() && !dir.mkdirs() && !dir.isDirectory()) return null;
         return new File(dir, safe + ".json");
     }
 
@@ -79,13 +90,17 @@ public class DownloadsBridge {
     public String loadDraft(String id) {
         File f = draftFile(id);
         if (f == null || !f.isFile()) return "";
-        try (InputStream in = new FileInputStream(f)) {
-            int max = (int) Math.min(f.length(), 8L * 1024 * 1024);
-            byte[] buf = new byte[max];
-            int n = in.read(buf);
-            return n > 0 ? new String(buf, 0, n, StandardCharsets.UTF_8) : "";
-        } catch (Exception e) {
-            return "";
+        synchronized (DRAFT_LOCK) {
+            try (FileChannel channel = FileChannel.open(f.toPath());
+                 DataInputStream in = new DataInputStream(Channels.newInputStream(channel))) {
+                long length = channel.size();
+                if (length > MAX_DRAFT_BYTES) return "";
+                byte[] buf = new byte[(int) length];
+                in.readFully(buf);
+                return new String(buf, StandardCharsets.UTF_8);
+            } catch (Exception e) {
+                return "";
+            }
         }
     }
 
@@ -94,20 +109,23 @@ public class DownloadsBridge {
         File f = draftFile(id);
         if (f == null || json == null) return false;
         byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
-        if (bytes.length > 8 * 1024 * 1024) return false;
-        File tmp = new File(f.getParentFile(), f.getName() + ".tmp");
-        try (FileOutputStream out = new FileOutputStream(tmp)) {
-            out.write(bytes);
+        if (bytes.length > MAX_DRAFT_BYTES) return false;
+        File tmp = null;
+        try {
+            tmp = File.createTempFile("draft-", ".tmp", f.getParentFile());
+            try (FileOutputStream out = new FileOutputStream(tmp)) {
+                out.write(bytes);
+                out.getFD().sync();
+            }
+            synchronized (DRAFT_LOCK) {
+                Files.move(tmp.toPath(), f.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            }
+            return true;
         } catch (Exception e) {
             return false;
+        } finally {
+            if (tmp != null) tmp.delete();
         }
-        if (!tmp.renameTo(f)) {
-            // 某些文件系统不支持覆盖改名；删掉旧文件再试一次。
-            //noinspection ResultOfMethodCallIgnored
-            f.delete();
-            if (!tmp.renameTo(f)) return false;
-        }
-        return true;
     }
 
     @JavascriptInterface
@@ -449,19 +467,6 @@ public class DownloadsBridge {
         return "";
     }
 
-    private String findPublicBySource(String source) {
-        synchronized (INDEX_LOCK) {
-            JSONArray arr = readIndex();
-            for (int i = 0; i < arr.length(); i++) {
-                JSONObject o = arr.optJSONObject(i);
-                if (o != null && norm(o.optString("source")).equals(norm(source))) {
-                    return o.optString("publicUri", "");
-                }
-            }
-        }
-        return "";
-    }
-
     private String readAll(File f) {
         try (FileInputStream in = new FileInputStream(f)) {
             int len = (int) Math.min(f.length(), 2 * 1024 * 1024);
@@ -516,7 +521,7 @@ public class DownloadsBridge {
         return out;
     }
 
-    private void writeIndex(JSONArray arr) {
+    private boolean writeIndex(JSONArray arr) {
         File f = indexFile();
         File tmp = new File(f.getParentFile(), "_index.json.tmp");
         try (FileOutputStream out = new FileOutputStream(tmp)) {
@@ -529,7 +534,7 @@ public class DownloadsBridge {
         } catch (Exception ignored) {
             //noinspection ResultOfMethodCallIgnored
             tmp.delete();
-            return;
+            return false;
         }
         try {
             Files.move(tmp.toPath(), f.toPath(),
@@ -540,8 +545,10 @@ public class DownloadsBridge {
             } catch (Exception ignored) {
                 //noinspection ResultOfMethodCallIgnored
                 tmp.delete();
+                return false;
             }
         }
+        return true;
     }
 
     private String norm(String p) {
@@ -572,10 +579,29 @@ public class DownloadsBridge {
 
     @JavascriptInterface
     public void download(String url, String source, String name) {
-        new Thread(() -> downloadInternal(url, source, name)).start();
+        String key = norm(source);
+        CompletableFuture<String> result = new CompletableFuture<>();
+        CompletableFuture<String> existing = activeDownloads.putIfAbsent(key, result);
+        (existing == null ? result : existing).thenAccept(error -> notifyPage(source, error.isEmpty(), error));
+        if (existing != null) return;
+        new Thread(() -> {
+            String error = "";
+            try {
+                downloadInternal(url, source, name);
+            } catch (Exception e) {
+                error = e.getMessage() == null || e.getMessage().isEmpty() ? "下载失败" : e.getMessage();
+            } finally {
+                activeDownloads.remove(key, result);
+                result.complete(error);
+            }
+        }, "workbench-download").start();
     }
 
-    private void downloadInternal(String url, String source, String name) {
+    private void downloadInternal(String url, String source, String name) throws Exception {
+        HttpURLConnection conn = null;
+        File part = null;
+        File target = null;
+        String publicUri = "";
         try {
             URL u = new URL(url);
             String host = u.getHost();
@@ -591,11 +617,10 @@ public class DownloadsBridge {
             if (!web || host == null || !(host.endsWith(".ts.net") || host.startsWith("100.")
                     || host.startsWith("192.168.") || host.startsWith("10.")
                     || host.startsWith("172.") || loopback)) {
-                notifyPage(source, false, "不允许的下载地址");
-                return;
+                throw new IOException("不允许的下载地址");
             }
 
-            HttpURLConnection conn = (HttpURLConnection) u.openConnection();
+            conn = (HttpURLConnection) u.openConnection();
             conn.setConnectTimeout(15000);
             conn.setReadTimeout(30000);
             conn.setInstanceFollowRedirects(true);
@@ -610,55 +635,84 @@ public class DownloadsBridge {
                     }
                 } catch (Exception ignored) {
                 }
-                notifyPage(source, false,
-                    "HTTP " + code + (detail.isEmpty() ? "" : "：" + detail));
-                return;
+                throw new IOException("HTTP " + code + (detail.isEmpty() ? "" : "：" + detail));
             }
 
-            File target = uniqueFile(name, source);
-            File part = new File(target.getAbsolutePath() + ".part");
+            File staging = new File(dir(), ".workbench-downloads");
+            Files.createDirectories(staging.toPath());
+            part = File.createTempFile("download-", ".part", staging);
             try (InputStream in = conn.getInputStream();
                  FileOutputStream out = new FileOutputStream(part)) {
                 byte[] buf = new byte[65536];
                 int n;
                 while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
             }
-            if (!part.renameTo(target)) {
-                try (FileInputStream in = new FileInputStream(part);
-                     FileOutputStream out = new FileOutputStream(target)) {
-                    byte[] buf = new byte[65536];
-                    int n;
-                    while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
-                }
-                part.delete();
+            long expected = conn.getContentLengthLong();
+            if (expected >= 0 && part.length() != expected) throw new IOException("下载内容不完整");
+            synchronized (INDEX_LOCK) {
+                target = uniqueFile(name, source);
+                reservedNames.add(norm(target.getAbsolutePath()));
             }
-
-            String oldPublic = findPublicBySource(source);
-            String publicUri = exportToPublic(target, target.getName());
-            if (!publicUri.isEmpty()) deletePublic(oldPublic);
-
+            publicUri = exportToPublic(part, target.getName());
             synchronized (INDEX_LOCK) {
                 JSONArray arr = readIndex();
                 JSONArray next = new JSONArray();
+                String oldPublic = "";
                 for (int i = 0; i < arr.length(); i++) {
                     JSONObject o = arr.optJSONObject(i);
                     if (o == null) continue;
-                    if (norm(o.optString("source")).equals(norm(source))) continue;
+                    if (norm(o.optString("source")).equals(norm(source))) {
+                        oldPublic = o.optString("publicUri");
+                        continue;
+                    }
                     next.put(o);
                 }
                 JSONObject o = new JSONObject();
                 o.put("source", source);
                 o.put("name", target.getName());
                 o.put("path", target.getAbsolutePath());
-                o.put("size", target.length());
+                o.put("size", part.length());
                 o.put("mtime", System.currentTimeMillis());
+                if (!oldPublic.isEmpty() && publicUri.isEmpty()) throw new IOException("无法更新系统下载目录中的旧文件");
                 if (!publicUri.isEmpty()) o.put("publicUri", publicUri);
                 next.put(o);
-                writeIndex(next);
+                File previous = null;
+                if (target.isFile()) {
+                    previous = File.createTempFile("previous-", ".bak", staging);
+                    try {
+                        Files.copy(target.toPath(), previous.toPath(), StandardCopyOption.REPLACE_EXISTING,
+                            StandardCopyOption.COPY_ATTRIBUTES);
+                    } catch (IOException e) {
+                        previous.delete();
+                        throw e;
+                    }
+                }
+                boolean installed = false;
+                try {
+                    Files.move(part.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+                    installed = true;
+                    if (!writeIndex(next)) throw new IOException("无法保存下载记录");
+                } catch (Exception e) {
+                    if (installed && previous != null) {
+                        Files.move(previous.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+                    } else if (installed) {
+                        Files.delete(target.toPath());
+                    } else if (previous != null) {
+                        previous.delete();
+                    }
+                    throw e;
+                }
+                if (previous != null) previous.delete();
+                if (!publicUri.isEmpty()) deletePublic(oldPublic);
+                publicUri = ""; // 索引已提交，保留新的公共副本。
             }
-            notifyPage(source, true, "");
-        } catch (Exception e) {
-            notifyPage(source, false, e.getMessage() == null ? "下载失败" : e.getMessage());
+        } finally {
+            if (conn != null) conn.disconnect();
+            if (part != null) part.delete();
+            deletePublic(publicUri);
+            if (target != null) synchronized (INDEX_LOCK) {
+                reservedNames.remove(norm(target.getAbsolutePath()));
+            }
         }
     }
 
@@ -666,30 +720,29 @@ public class DownloadsBridge {
         File d = dir();
         String safe = name == null ? "download"
             : name.replaceAll("[\\\\/:*?\"<>|]", "_").trim();
-        if (safe.isEmpty()) safe = "download";
-        File f = new File(d, safe);
-        if (!f.exists()) return f;
-
-        // 同一个源重复下载：沿用已有文件名，覆盖
-        synchronized (INDEX_LOCK) {
-            JSONArray arr = readIndex();
-            for (int i = 0; i < arr.length(); i++) {
-                JSONObject o = arr.optJSONObject(i);
-                if (o != null && norm(o.optString("source")).equals(norm(source))) {
-                    File old = new File(o.optString("path"));
-                    if (old.isFile()) return old;
-                }
-            }
+        if (safe.isEmpty() || safe.equals(".") || safe.equals("..")) safe = "download";
+        if (safe.regionMatches(true, 0, "_index.json", 0, 11) || safe.equalsIgnoreCase(".workbench-downloads")) {
+            safe = "download-" + safe;
         }
+        File f = new File(d, safe);
+
+        // 先检查来源：原来分配过 (2) 的文件不会因基础名称空出来而改名。
+        JSONArray arr = readIndex();
+        for (int i = 0; i < arr.length(); i++) {
+            JSONObject o = arr.optJSONObject(i);
+            if (o == null || !norm(o.optString("source")).equals(norm(source))) continue;
+            File old = checkedFile(o.optString("path"));
+            if (old != null && !reservedNames.contains(norm(old.getAbsolutePath()))) return old;
+        }
+        if (!f.exists() && !reservedNames.contains(norm(f.getAbsolutePath()))) return f;
 
         int dot = safe.lastIndexOf('.');
         String base = dot > 0 ? safe.substring(0, dot) : safe;
         String ext = dot > 0 ? safe.substring(dot) : "";
-        for (int i = 2; i < 1000; i++) {
+        for (int i = 2; ; i++) {
             File n = new File(d, base + " (" + i + ")" + ext);
-            if (!n.exists()) return n;
+            if (!n.exists() && !reservedNames.contains(norm(n.getAbsolutePath()))) return n;
         }
-        return new File(d, base + "-" + System.currentTimeMillis() + ext);
     }
 
     private File checkedFile(String path) {
@@ -779,13 +832,13 @@ public class DownloadsBridge {
 
     @JavascriptInterface
     public boolean delete(String path) {
-        File f = checkedFile(path);
-        if (f == null) return false;
-        String publicUri = findPublicByPath(path);
-        boolean ok = f.delete();
-        if (ok) {
-            deletePublic(publicUri);
-            synchronized (INDEX_LOCK) {
+        synchronized (INDEX_LOCK) {
+            File f = checkedFile(path);
+            if (f == null) return false;
+            String publicUri = findPublicByPath(path);
+            boolean ok = f.delete();
+            if (ok) {
+                deletePublic(publicUri);
                 JSONArray arr = readIndex();
                 JSONArray next = new JSONArray();
                 for (int i = 0; i < arr.length(); i++) {
@@ -796,8 +849,8 @@ public class DownloadsBridge {
                 }
                 writeIndex(next);
             }
+            return ok;
         }
-        return ok;
     }
 
     private void notifyPage(String source, boolean ok, String error) {

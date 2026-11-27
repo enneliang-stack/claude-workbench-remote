@@ -11,14 +11,15 @@
 电脑端使用方式：安装 1.2.0+ 的统一客户端，侧栏「手机连接」里开启访问并复制地址；
 手机 App 粘贴地址即可。同一 Wi-Fi 不需要 Tailscale 账号。
 
-## 最新 APK（2.4.150 精简 / 2.4.148 完整）
+## 最新 APK（2.4.156 精简 / 2.4.150 完整）
 
-- 完整包（新用户/未装环境）：`ClaudeWorkbench-full.apk`，2.4.148，202,873,948 字节（约 194 MB）
-  SHA-256：`48da6f4709d5a01a975f8052137d6f832c7efdd0dfc7e83edb5403a43bd83320`
-  下载：`https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.148/ClaudeWorkbench-full.apk`
-- 精简包（已装手机环境）：`ClaudeWorkbench-slim.apk`，2.4.150，8,805,366 字节（约 8.4 MB）
-  SHA-256：`90335761e7576cd3f28208a1803c98fe33ac5ccd27778e2d8be5d69268dd67f6`
-  下载：`https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.150/ClaudeWorkbench-slim.apk`
+- 完整包（新用户/未装环境）：`ClaudeWorkbench-full.apk`，2.4.150，202,873,948 字节。安装手机端环境后可在 App 内更新至本版。
+  SHA-256：`86a6e52c2f2b571a1d1fedd3f20e1a553578c828964ea605c38a8eca84d6695a`
+  下载：[2.4.150 完整包](https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.150/ClaudeWorkbench-full.apk)
+- 精简包（已装手机环境）：`ClaudeWorkbench-slim.apk`，2.4.156，8,809,462 字节。
+  SHA-256：`c60cf0399664f7a89a28b1d33a93dc5233b272fe1409ba3c7d706b6184db4e88`
+  下载：[2.4.156 精简包](https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.156/ClaudeWorkbench-slim.apk)
+- 2.4.156：减少手机页和本机服务的重复请求与扫描，改进会话、下载和输入草稿的保存，以及引擎停止和重试时的资源释放。
 - 2.4.150：手机页「还没有对话」空状态换成星形 logo，去掉背景方框。手机页资源版本 133，对应 PC 客户端 1.2.56。完整包仍为 2.4.148。
 - 2.4.149：手机端配置去掉「推理档位」输入，新增 DeepSeek 获取 API Key 链接；电脑端首次连接页说明改为在电脑客户端点「复制连接地址」后粘贴，并新增电脑客户端 GitHub 链接；手机页「运行中 / 待确认」空状态换成星形 logo，去掉背景方框。手机页资源版本 132，对应 PC 客户端 1.2.55。完整包仍为 2.4.148。
 - 2.4.148：提问弹窗单选再点一次可取消，取消后可直接输入自己的答案，也可以选预设项再补充文字一起提交；输入时不再被实时轮询/断线重连重建，系统输入法不会被收起；点击、输入或滑动提问弹窗时自动继续倒计时重置。手机页过程头像重建时接回旋转、呼吸和射线动画进度，不再闪烁。手机页资源版本 131，对应 PC 客户端 1.2.53。完整包已同步更新到 2.4.148，新用户可直接安装完整包。
@@ -148,7 +149,7 @@ apk/                       双模式 APK 更新清单和安装说明
 1. 安装 **1.2.0 及以上版本的统一客户端**（客户端更新包已包含手机页、远程接口和 APK 下载入口）。
    新用户先装最新的全量客户端，再用客户端内「更新」升级到当前版本。
 2. 电脑端侧栏打开「手机连接」，按弹窗提示开启手机访问；同一 Wi-Fi 不需要 Tailscale 账号。
-3. 手机安装本仓库 Releases 里的最新完整包（新用户）或精简包（已装过手机环境）：
+3. 手机从上方「最新 APK」下载完整包（新用户）或精简包（已装过手机环境）。最新发布记录见
    <https://github.com/enneliang-stack/claude-workbench-remote/releases/latest>
 4. 手机 App 首次打开粘贴电脑端显示的地址；同一 Wi-Fi 或 Tailscale 均可。
 5. 手机本机模式（proot + Alpine）首次安装约 500 MB，需 1.8 GB 空间。

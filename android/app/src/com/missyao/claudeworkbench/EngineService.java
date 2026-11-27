@@ -16,6 +16,8 @@ import android.os.PowerManager;
 import android.util.Log;
 
 import org.json.JSONObject;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * 手机本机服务的前台保活：proot 里跑 Node，任务可能持续很久，
@@ -36,11 +38,22 @@ public class EngineService extends Service {
     private Runnable statusPoll;
     private String lastNotificationText = "";
     private static volatile EngineService instance;
+    // 服务重建也共用队列：旧实例的清理先完成，新实例再启动本机进程。
+    private static final ExecutorService engineQueue = Executors.newSingleThreadExecutor();
+    private final Handler main = new Handler(Looper.getMainLooper());
+    private volatile long generation;
+    private boolean starting;
+    private boolean installing;
+    private boolean stopped;
 
     /** 页面 JS 上报任务状态后，立即刷新通知（不用等 2.5 秒轮询）。 */
     public static void notifyTaskStatusChanged(Context c) {
         EngineService s = instance;
-        if (s != null) s.updateNotification(TaskStatus.notificationText());
+        if (s != null) s.main.post(() -> {
+            if (instance == s && !s.stopped && !s.starting && LocalEngine.isRunning()) {
+                s.updateNotification(TaskStatus.notificationText());
+            }
+        });
     }
 
     public static void start(Context c) {
@@ -76,49 +89,76 @@ public class EngineService extends Service {
     public int onStartCommand(Intent intent, int flags, int startId) {
         String action = intent == null ? ACTION_START : intent.getAction();
         if (ACTION_STOP.equals(action)) {
-            LocalEngine.stopServer(this);
-            LocalEngine.stopTailscaleProxy(this);
-            stopStatusPolling();
-            releaseWakeLock();
+            stopEngine();
             stopForeground(true);
-            stopSelf();
+            stopSelf(startId);
             return START_NOT_STICKY;
         }
 
         final boolean installFirst = ACTION_INSTALL.equals(action);
+        if (starting && (!installFirst || installing)) return START_STICKY;
+        final long attempt = ++generation;
+        starting = true;
+        installing = installFirst || !LocalEngine.isInstalled(this);
+        final boolean needsInstall = installing;
+        stopped = false;
+        stopStatusPolling();
         startInForeground(installFirst ? "正在安装手机端…" : "正在启动手机端…");
         acquireWakeLock();
-        new Thread(() -> {
+        engineQueue.execute(() -> {
+            if (attempt != generation) return;
             try {
-                if (installFirst || !LocalEngine.isInstalled(this)) {
+                if (needsInstall) {
                     LocalEngine.install(this, line -> {
                         Log.i(TAG, line);
-                        updateNotification(line);
+                        main.post(() -> { if (attempt == generation) updateNotification(line); });
                     });
                 }
-                int port = LocalEngine.startServer(this, line -> Log.i(TAG, line));
-                updateNotification(TaskStatus.notificationText());
-                startStatusPolling();
+                if (attempt != generation) return;
+                LocalEngine.startServer(this, line -> Log.i(TAG, line));
+                main.post(() -> {
+                    if (attempt != generation) return;
+                    starting = false;
+                    updateNotification(TaskStatus.notificationText());
+                    startStatusPolling();
+                });
             } catch (Exception e) {
+                if (attempt != generation) return;
                 LocalEngine.log(this, "服务启动失败：" + Log.getStackTraceString(e));
                 String reason = shortText(e.getMessage(), 90);
                 String prefix = LocalEngine.isInstalled(this) ? "启动失败：" : "安装失败：";
-                updateNotification(prefix + reason);
+                boolean serving = LocalEngine.isRunning();
+                if (!serving) LocalEngine.stopServer(this);
+                main.post(() -> {
+                    if (attempt != generation) return;
+                    starting = false;
+                    if (serving && LocalEngine.isRunning()) startStatusPolling();
+                    else releaseWakeLock();
+                    updateNotification(prefix + reason);
+                });
             }
-        }, installFirst ? "phone-engine-install" : "phone-engine-start").start();
+        });
         return START_STICKY;
     }
 
     @Override
     public void onDestroy() {
-        stopStatusPolling();
         if (instance == this) instance = null;
-        if (!LocalEngine.isInstalling()) {
+        stopEngine();
+        super.onDestroy();
+    }
+
+    private void stopEngine() {
+        if (stopped) return;
+        stopped = true;
+        ++generation;
+        starting = false;
+        stopStatusPolling();
+        releaseWakeLock();
+        engineQueue.execute(() -> {
             LocalEngine.stopServer(this);
             LocalEngine.stopTailscaleProxy(this);
-        }
-        releaseWakeLock();
-        super.onDestroy();
+        });
     }
 
     @Override
@@ -137,6 +177,7 @@ public class EngineService extends Service {
     }
 
     private void startInForeground(String text) {
+        lastNotificationText = text;
         Notification n = buildNotification(text);
         if (Build.VERSION.SDK_INT >= 34) {
             startForeground(NOTIFY_ID, n, FGS_TYPE_SPECIAL_USE);
@@ -156,6 +197,7 @@ public class EngineService extends Service {
     private void startStatusPolling() {
         if (statusHandler != null) return;
         statusHandler = new Handler(Looper.getMainLooper());
+        final long attempt = generation;
         statusPoll = () -> {
             new Thread(() -> {
                 int count = 0;
@@ -167,9 +209,12 @@ public class EngineService extends Service {
                     }
                 } catch (Exception ignored) {
                 }
-                TaskStatus.updateLocalRunning(count);
-                String text = TaskStatus.notificationText();
-                if (statusHandler != null) statusHandler.post(() -> updateNotification(text));
+                final int runningCount = count;
+                main.post(() -> {
+                    if (attempt != generation || statusHandler == null) return;
+                    TaskStatus.updateLocalRunning(runningCount);
+                    updateNotification(TaskStatus.notificationText());
+                });
             }, "phone-status").start();
             if (statusHandler != null) statusHandler.postDelayed(statusPoll, 2500);
         };

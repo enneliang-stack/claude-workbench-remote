@@ -64,7 +64,8 @@
     downloadSel: new Set(),
     status: { data: null, open: false, loading: false, timer: 0 },
     loadingOlder: false,
-    sending: false,
+    sends: new Map(),       // 每个会话独立等待发送回执，切换页面不会解除锁
+    get sending() { return this.sends.has(this.convId); },
     liveProcessEl: null,
     liveProcessBody: null,
     liveProcessMeta: null,
@@ -99,6 +100,7 @@
       }
       if (!res.ok) {
         const err = new Error((data && data.error) || `HTTP ${res.status}`);
+        err.status = res.status;
         err.notRunning = !!(data && data.notRunning);
         throw err;
       }
@@ -125,6 +127,13 @@
     clearTimeout(toastTimer);
     const t = $('#toast');
     if (t) t.hidden = true;
+  }
+
+  let lastStateSaveRevision = -1;
+  function showStateSaveWarning(status) {
+    if (!status || !Number.isFinite(status.revision) || status.revision <= lastStateSaveRevision) return;
+    lastStateSaveRevision = status.revision;
+    if (status.message) toast(status.message, 'err');
   }
 
   function fmtTok(n) {
@@ -165,6 +174,7 @@
 
   async function loadBoot() {
     S.boot = await api('/api/bootstrap');
+    showStateSaveWarning(S.boot.stateSaveStatus);
     renderList();
   }
 
@@ -438,6 +448,7 @@
   }
 
   const DRAFT_LS_PREFIX = 'm.draft.';
+  const draftImageSnapshots = new Map();
   let draftTimer = null;
   let draftTimerId = null;
 
@@ -455,8 +466,9 @@
       data: im.data || '',
       name: im.name || '图片'
     })).filter(im => im.data) : [];
-    const files = (d.files || []).filter(f => f && f.source === 'pc').map(f => ({
-      id: f.id, name: f.name, size: f.size || 0, path: f.path, source: 'pc', status: ''
+    // 已上传的手机文件也有工作区路径，重开页面后可直接重试，不必再选文件。
+    const files = (d.files || []).filter(f => f && f.path).map(f => ({
+      id: f.id, name: f.name, size: f.size || 0, path: f.path, source: f.source, status: ''
     }));
     return {
       text: d.text || '',
@@ -498,19 +510,43 @@
 
   function persistDraftNow(id, withImages = false) {
     if (!id) return;
-    clearTimeout(draftTimer);
-    draftTimer = null;
-    draftTimerId = null;
+    if (draftTimerId === id) {
+      clearTimeout(draftTimer);
+      draftTimer = null;
+      draftTimerId = null;
+    }
     const d = S.drafts.get(id);
-    if (!d) { draftRawClear(id); return; }
-    // 图片只在页面隐藏/切换对话/增删图片时序列化，打字时不要反复拼几 MB 的 base64。
-    const imgChars = withImages
-      ? (d.images || []).reduce((n, im) => n + String((im && im.data) || '').length, 0)
-      : 0;
-    const full = withImages && imgChars < 4 * 1024 * 1024;
-    if (!draftRawWrite(id, draftPack(d, full))) {
-      // 图片太大时只存文字/引用/文件路径，别因为图片把整份草稿丢了。
-      draftRawWrite(id, draftPack(d, false));
+    const editId = id + '.edit';
+    if (!d) {
+      draftRawClear(id);
+      draftRawClear(editId);
+      draftImageSnapshots.delete(id);
+      return;
+    }
+    const snapshot = draftImageSnapshots.get(id);
+    const images = (d.images || []).filter(im => im && im.data);
+    // 完整快照保留在原来的键。打字只写文字和仍被选中的图片位置，避免反复读取/编码图片。
+    const writeEdit = () => draftRawWrite(editId, {
+      ...draftPack(d, false), revision: snapshot.revision,
+      imageIndexes: images.map(im => snapshot.indexes.get(im)).filter(Number.isInteger)
+    });
+    if (!withImages && snapshot && images.length && writeEdit()) return;
+    if (images.length && (withImages || snapshot)) {
+      const imgChars = images.reduce((n, im) => n + im.data.length, 0);
+      if (imgChars < 4 * 1024 * 1024) {
+        const revision = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
+        if (draftRawWrite(id, { ...draftPack(d, true), revision })) {
+          draftImageSnapshots.set(id, { revision, indexes: new WeakMap(images.map((im, i) => [im, i])) });
+          draftRawClear(editId);
+          return;
+        }
+      }
+      // 超限时仍可沿用上一份快照中未被移除的图片。
+      if (snapshot && writeEdit()) return;
+    }
+    if (draftRawWrite(id, draftPack(d, false))) {
+      draftImageSnapshots.delete(id);
+      if (snapshot) draftRawClear(editId);
     }
   }
 
@@ -526,38 +562,49 @@
     }, 600);
   }
 
+  function composerDraft() {
+    return {
+      text: $('#input').value, images: S.pendingImages.slice(), refs: S.pendingRefs.slice(),
+      files: S.pendingFiles.slice(), quotes: S.pendingQuotes.slice()
+    };
+  }
+
+  function storeDraft(id, draft) {
+    if (!draft.text.trim() && !draft.images.length && !draft.refs.length && !draft.files.length && !draft.quotes.length) {
+      S.drafts.delete(id);
+    } else S.drafts.set(id, draft);
+  }
+
   function saveDraft(id) {
     if (!id) return;
-    const text = $('#input').value;
-    const images = S.pendingImages.slice();
-    const refs = S.pendingRefs.slice();
-    const files = S.pendingFiles.slice();
-    const quotes = S.pendingQuotes.slice();
-    if (!text.trim() && !images.length && !refs.length && !files.length && !quotes.length) {
-      S.drafts.delete(id);
-      draftRawClear(id);
-      clearTimeout(draftTimer);
-      draftTimer = null;
-      draftTimerId = null;
-      return;
-    }
-    S.drafts.set(id, { text, images, refs, files, quotes });
-    schedulePersistDraft(id);
+    storeDraft(id, composerDraft());
+    if (S.drafts.has(id)) schedulePersistDraft(id);
+    else persistDraftNow(id);
   }
 
   function restoreDraft(id) {
     let d = S.drafts.get(id);
     if (!d) {
-      const p = draftRawRead(id);
+      let p = draftRawRead(id);
       if (p) {
+        let images = (p.images || []).map(im => ({
+          media_type: im.media_type || 'image/jpeg',
+          data: im.data || '',
+          preview: im.data ? 'data:' + (im.media_type || 'image/jpeg') + ';base64,' + im.data : '',
+          name: im.name || '图片'
+        })).filter(im => im.preview);
+        if (images.length) {
+          const revision = p.revision || 'legacy';
+          draftImageSnapshots.set(id, { revision, indexes: new WeakMap(images.map((im, i) => [im, i])) });
+          const edit = draftRawRead(id + '.edit');
+          if (edit && edit.revision === revision && Array.isArray(edit.imageIndexes)) {
+            images = edit.imageIndexes.filter(Number.isInteger).map(i => images[i]).filter(Boolean);
+            p = edit;
+          }
+        }
         d = {
           text: p.text || '',
-          images: (p.images || []).map(im => ({
-            media_type: im.media_type || 'image/jpeg',
-            data: im.data || '',
-            preview: im.data ? 'data:' + (im.media_type || 'image/jpeg') + ';base64,' + im.data : '',
-            name: im.name || '图片'
-          })).filter(im => im.preview),
+          images,
           refs: p.refs || [],
           files: p.files || [],
           quotes: p.quotes || []
@@ -580,6 +627,8 @@
   }
 
   async function openConv(id, push = true) {
+    closeChatSettings();
+    endComposerComposition();
     if (S.convId) {
       saveDraft(S.convId);
       persistDraftNow(S.convId, true);
@@ -599,22 +648,13 @@
     S.askSel = null;
     S.askOther = null;
     S.pendingEcho = null;
-    S.pendingImages = [];
-    S.pendingRefs = [];
-    S.pendingQuotes = [];
-    S.pendingFiles = [];
     S.todos = null;
     S.todoOpen = false;
     S.unread.delete(id);
-    S.refSel = new Map();
-    S.sending = false;
-    $('#input').value = '';
+    // 草稿独立于历史请求；等待期间再次切走或输入，也属于这个会话。
+    restoreDraft(id);
     closeStopConfirm();
     setRunProgress('', '');
-    renderPendingImages();
-    renderPendingRefs();
-    renderPendingQuotes();
-    renderPendingFiles();
     renderTodoBar();
     showChat(true);
     $('#chatTitle').textContent = '加载中…';
@@ -626,7 +666,6 @@
       const data = await api('/api/conversation?id=' + encodeURIComponent(id) + '&limit=30&light=1&compact=1', { timeout: 30000 });
       if (seq !== S.loadSeq || S.convId !== id) return;
       renderConversation(data);
-      restoreDraft(id);
       try {
         if (window.AndroidDownloads && AndroidDownloads.phoneChatEntered) {
           AndroidDownloads.phoneChatEntered(S.convId || '');
@@ -640,6 +679,8 @@
   }
 
   function closeChat(push = true) {
+    closeChatSettings();
+    endComposerComposition();
     S.loadSeq++;
     if (push && history.state && history.state.conv) {
       history.back();
@@ -668,7 +709,6 @@
     S.todos = null;
     S.todoOpen = false;
     S.refSel = new Map();
-    S.sending = false;
     $('#input').value = '';
     closeStopConfirm();
     clearAskTimer();
@@ -785,18 +825,38 @@
     btn.title = '推理档位：' + (EFFORT_LABELS[cur] || cur);
   }
 
+  // 同一会话的多次保存按点击顺序提交，其他会话仍可独立保存。
+  const settingsWrites = new Map();
+  async function patchConversationSettings(id, body) {
+    const send = () => api('/api/conversation?id=' + encodeURIComponent(id), {
+      method: 'PATCH', body: JSON.stringify(body)
+    });
+    const previous = settingsWrites.get(id);
+    const request = previous ? previous.then(send, send) : send();
+    settingsWrites.set(id, request);
+    try {
+      return await request;
+    } finally {
+      if (settingsWrites.get(id) === request) settingsWrites.delete(id);
+    }
+  }
+
+  let quickEffortSeq = 0;
   async function changeQuickEffort(effort) {
     if (!S.convId || !effort) return;
+    const id = S.convId;
+    const view = S.loadSeq;
+    const seq = ++quickEffortSeq;
+    const current = () => seq === quickEffortSeq && view === S.loadSeq && S.convId === id && S.conv;
     try {
-      const data = await api('/api/conversation?id=' + encodeURIComponent(S.convId), {
-        method: 'PATCH',
-        body: JSON.stringify({ effort })
-      });
+      const data = await patchConversationSettings(id, { effort });
+      if (!current()) return;
       const conv = (data && data.conversation) || {};
-      if (S.conv) S.conv.effort = conv.effort != null ? conv.effort : effort;
+      S.conv.effort = conv.effort != null ? conv.effort : effort;
       updateHeader();
       toast('推理档位：' + (EFFORT_LABELS[effort] || effort));
     } catch (e) {
+      if (!current()) return;
       toast(e.message, 'err');
       updateHeader();
     }
@@ -3808,6 +3868,7 @@
 
   function handleEvent(ev) {
     const t = ev.t;
+    if (t === 'state_save_status') { showStateSaveWarning(ev.status); return; }
 
     // 全局事件（没有 convId）
     if (!ev.convId) {
@@ -3953,9 +4014,8 @@
         break;
 
       case 'permission_resolved':
-        S.pendingPerm = null;
-        renderPanels();
-        setRunProgress('正在继续…', 'thinking');
+        if (S.pendingPerm?.requestId !== ev.requestId) break;
+        finishPrompt(false);
         break;
 
       case 'ask': {
@@ -3977,16 +4037,15 @@
       }
 
       case 'ask_resolved':
-        S.pendingAsk = null;
-        S.askSel = null;
-        S.askOther = null;
-        renderPanels();
-        setRunProgress('正在继续…', 'thinking');
+        if (S.pendingAsk?.requestId !== ev.requestId) break;
+        finishPrompt(true);
         if (ev.cancelled) toast('问题已取消');
         else if (ev.auto) toast('已按推荐选项自动继续');
         break;
 
       case 'run_end': {
+        const send = S.sends.get(ev.convId);
+        if (send && send.posting) send.ended = true;
         const msgBox = $('#messages');
         const followLatest = msgBox &&
           (msgBox.scrollHeight - msgBox.scrollTop - msgBox.clientHeight) < msgBox.clientHeight;
@@ -4144,6 +4203,7 @@
     resumeSyncing = true;
     S.lastResumeSyncAt = Date.now();
     const id = S.convId;
+    const seq = S.loadSeq;
     const wasRunning = S.running;
     try {
       const loaded = S.conv && Array.isArray(S.conv.messages) ? S.conv.messages.length : 30;
@@ -4151,7 +4211,7 @@
       const limit = Math.min(200, Math.max(60, loaded + 40));
       const data = await api('/api/conversation?id=' + encodeURIComponent(id) +
         '&limit=' + limit + '&light=1&compact=1', { timeout: 15000 });
-      if (!S.convId || S.convId !== id || S.loadingOlder) return;
+      if (S.convId !== id || seq !== S.loadSeq || S.loadingOlder) return;
       if (!data.running) {
         S.running = false;
         S.live = null;
@@ -4429,6 +4489,7 @@
   function noteAskActivity() {
     if (!S.pendingAsk || !S.convId) return;
     const ev = S.pendingAsk;
+    const id = S.convId;
     const now = Date.now();
     // 由服务端确认后重置倒计时；请求做节流，避免连续打字每个键都发一次。
     if (askExtendBusy || now - askExtendAt < 1200) return;
@@ -4436,10 +4497,10 @@
     askExtendBusy = true;
     api('/api/ask/extend', {
       method: 'POST',
-      body: JSON.stringify({ id: S.convId, requestId: ev.requestId }),
+      body: JSON.stringify({ id, requestId: ev.requestId }),
       timeout: 6000
     }).then(data => {
-      if (!S.pendingAsk || S.pendingAsk.requestId !== ev.requestId) return;
+      if (S.convId !== id || S.pendingAsk?.requestId !== ev.requestId) return;
       const inMs = Number(ev.major ? data.cancelInMs : data.autoInMs);
       if (Number.isFinite(inMs) && inMs > 0) askDeadline = Date.now() + inMs;
     }).catch(() => { /* 下次操作再试 */ })
@@ -4571,21 +4632,37 @@
     S.askTimer = setInterval(tick, 1000);
   }
 
+  function finishPrompt(ask) {
+    if (ask) {
+      S.pendingAsk = null;
+      S.askSel = null;
+      S.askOther = null;
+    } else {
+      S.pendingPerm = null;
+    }
+    renderPanels();
+    if (S.pendingAsk || S.pendingPerm) syncProgressFromLive();
+    else setRunProgress('正在继续…', 'thinking');
+  }
+
   async function respondPermission(allow, message) {
     const ev = S.pendingPerm;
-    if (!ev) return;
+    const id = S.convId;
+    if (!ev || !id) return;
+    const isCurrent = () => S.convId === id && S.pendingPerm?.requestId === ev.requestId;
     const buttons = [...$('#panels').querySelectorAll('button')];
     buttons.forEach(b => { b.disabled = true; });
     try {
       await api('/api/permission', {
         method: 'POST',
         body: JSON.stringify({
-          id: S.convId, requestId: ev.requestId, allow, message
+          id, requestId: ev.requestId, allow, message
         })
       });
-      S.pendingPerm = null;
-      renderPanels();
+      if (!isCurrent()) return;
+      finishPrompt(false);
     } catch (e) {
+      if (!isCurrent()) return;
       buttons.forEach(b => { b.disabled = false; });
       toast(e.message, 'err');
     }
@@ -4593,7 +4670,9 @@
 
   async function submitAsk(cancel) {
     const ev = S.pendingAsk;
-    if (!ev) return;
+    const id = S.convId;
+    if (!ev || !id) return;
+    const isCurrent = () => S.convId === id && S.pendingAsk?.requestId === ev.requestId;
 
     let answers = null;
     if (!cancel) {
@@ -4618,14 +4697,14 @@
       await api('/api/ask', {
         method: 'POST',
         body: JSON.stringify({
-          id: S.convId, requestId: ev.requestId, answers, cancel: !!cancel
+          id, requestId: ev.requestId, answers, cancel: !!cancel
         })
       });
-      S.pendingAsk = null;
-      S.askSel = null;
-      S.askOther = null;
-      renderPanels();
+      if (!isCurrent()) return;
+      finishPrompt(true);
+      if (cancel) toast('问题已取消');
     } catch (e) {
+      if (!isCurrent()) return;
       buttons.forEach(b => { b.disabled = false; });
       toast(e.message, 'err');
     }
@@ -4920,6 +4999,7 @@
       if (tag === 'textarea' || tag === 'input') {
         const start = el.selectionStart == null ? el.value.length : el.selectionStart;
         const end = el.selectionEnd == null ? start : el.selectionEnd;
+        if (el === $('#input')) rememberDraftEdit(el, 'insertFromPaste');
         try {
           el.setRangeText(text, start, end, 'end');
         } catch (e) {
@@ -5015,6 +5095,13 @@
     });
   }
 
+  function phoneFileDraft(file) {
+    return {
+      id: 'f' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+      name: file.name || '文件', size: file.size || 0, file, source: 'phone', status: ''
+    };
+  }
+
   function addPhoneFiles(files) {
     const list = [...(files || [])].filter(Boolean);
     const room = MAX_PENDING_FILES - S.pendingFiles.length;
@@ -5023,14 +5110,7 @@
       return;
     }
     for (const file of list.slice(0, room)) {
-      S.pendingFiles.push({
-        id: 'f' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
-        name: file.name || '文件',
-        size: file.size || 0,
-        file,
-        source: 'phone',
-        status: ''
-      });
+      S.pendingFiles.push(phoneFileDraft(file));
     }
     renderPendingFiles();
     updateSendState();
@@ -5060,10 +5140,10 @@
     if (added) toast(`已引用 ${added} 个电脑文件`);
   }
 
-  function uploadPendingFile(f) {
+  function uploadPendingFile(f, convId) {
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
-      xhr.open('POST', '/api/upload?id=' + encodeURIComponent(S.convId));
+      xhr.open('POST', '/api/upload?id=' + encodeURIComponent(convId));
       xhr.timeout = 120000;
       xhr.ontimeout = () => reject(new Error('上传超时，网络太慢'));
       xhr.setRequestHeader('x-gui-token', TOKEN);
@@ -5071,7 +5151,7 @@
       xhr.upload.onprogress = e => {
         if (!e.lengthComputable) return;
         f.status = '上传 ' + Math.round(e.loaded / e.total * 100) + '%';
-        renderPendingFiles();
+        if (S.convId === convId && S.pendingFiles.includes(f)) renderPendingFiles();
       };
       xhr.onload = () => {
         let data = null;
@@ -5196,30 +5276,50 @@
   }
 
   async function addImageFiles(files) {
+    const convId = S.convId;
     const list = [...(files || [])].filter(f => f && /^image\//.test(f.type));
-    if (!list.length) return;
+    if (!convId || !list.length) return;
     let skipped = 0;
     for (const file of list) {
       try {
         // 太长的截图不在手机 WebView 里切图（容易解码成白图/丢内容）；
         // 直接走文件通道原样上传，模型用 Read 读原图。
         const dims = await readImageDimensions(file);
-        if (dims && dims.w > 0 && dims.h > 3000 && dims.h / dims.w > 3) {
-          addPhoneFiles([file]);
-          toast(`长截图 ${dims.w}×${dims.h}：已按文件发送，模型会直接读取原图`);
+        const long = dims && dims.w > 0 && dims.h > 3000 && dims.h / dims.w > 3;
+        if (!long && S.convId === convId && S.pendingImages.length >= MAX_PENDING_IMAGES) {
+          skipped++;
           continue;
         }
-        if (S.pendingImages.length >= MAX_PENDING_IMAGES) { skipped++; continue; }
-        const img = await readImageFile(file);
-        S.pendingImages.push(img);
-        renderPendingImages();
+        const item = long ? phoneFileDraft(file) : await readImageFile(file);
+        const visible = S.convId === convId;
+        const draft = visible ? composerDraft() : (S.drafts.get(convId) ||
+          { text: '', images: [], refs: [], files: [], quotes: [] });
+        const target = long ? draft.files : draft.images;
+        if (target.length >= (long ? MAX_PENDING_FILES : MAX_PENDING_IMAGES)) {
+          if (long && visible) toast(`最多 ${MAX_PENDING_FILES} 个文件`, 'err');
+          if (!long) skipped++;
+          continue;
+        }
+        target.push(item);
+        storeDraft(convId, draft);
+        if (visible) {
+          if (long) {
+            S.pendingFiles = draft.files;
+            renderPendingFiles();
+            toast(`长截图 ${dims.w}×${dims.h}：已按文件发送，模型会直接读取原图`);
+          } else {
+            S.pendingImages = draft.images;
+            renderPendingImages();
+          }
+          updateSendState();
+        }
       } catch (e) {
-        toast('图片读取失败：' + (file.name || '未知文件'), 'err');
+        if (S.convId === convId) toast('图片读取失败：' + (file.name || '未知文件'), 'err');
       }
     }
-    if (skipped) toast(`最多 ${MAX_PENDING_IMAGES} 张图片，多余的已忽略`, 'err');
-    updateSendState();
-    if (S.convId) { saveDraft(S.convId); persistDraftNow(S.convId, true); }
+    if (skipped && S.convId === convId) toast(`最多 ${MAX_PENDING_IMAGES} 张图片，多余的已忽略`, 'err');
+    if (S.convId === convId) storeDraft(convId, composerDraft());
+    persistDraftNow(convId, true);
   }
 
   // ---------------------------------------------------------------- 发送
@@ -5246,34 +5346,104 @@
     return block ? (text ? text + '\n\n' : '') + block : text;
   }
 
-  async function sendMessage() {
-    const input = $('#input');
-    const text = input.value.trim();
-    const images = S.pendingImages.map(x => ({ media_type: x.media_type, data: x.data }));
-    const refs = S.pendingRefs.slice();
-    const files = S.pendingFiles.slice();
-    const quotes = S.pendingQuotes.slice();
-    if ((!text && !images.length && !refs.length && !files.length && !quotes.length) ||
-        !S.convId || S.sending) return;
+  // Android 输入法可能先报 compositionend，再提交最后一次 input。
+  let composerComposition = null;
+  function endComposerComposition() {
+    const active = composerComposition;
+    if (!active) return;
+    setTimeout(() => {
+      if (composerComposition === active) composerComposition = null;
+      active.finish();
+    }, 0);
+  }
 
-    S.sending = true;
-    const btn = $('#sendBtn');
-    btn.disabled = true;
-    // 从后台回来直接发消息：先对一次服务器状态，避免把新消息当成旧任务的插话。
-    if (S.needsResumeSync) await resumeSync(true);
-    // 之前在看历史时暂缓了历史重建，发送前先对齐，避免新任务接在旧流式内容后面
-    if (S.needsHistoryRender) {
-      S.needsHistoryRender = false;
-      renderMessages(true);
+  function rememberDraftEdit(input, kind) {
+    const send = S.sends.get(S.convId);
+    if (!send || !send.prefixIntact) return;
+    send.edit = input.value === send.observedText
+      ? { kind, start: input.selectionStart, end: input.selectionEnd } : null;
+  }
+
+  function observeDraftEdit(input) {
+    const send = S.sends.get(S.convId);
+    if (!send || !send.prefixIntact) return;
+    const edit = send.edit;
+    send.edit = null;
+    // 全选重输、撤销和未知输入即使结果与旧前缀相同，也要保留整份新稿。
+    let start = edit && edit.start;
+    if (edit && edit.start === edit.end && /Backward$/.test(edit.kind)) {
+      start -= Math.max(0, send.observedText.length - input.value.length);
     }
-    let wasRunning = S.running;
-    let sentSteer = wasRunning;
+    send.prefixIntact = !!edit && start >= send.prefix.length && input.value.startsWith(send.prefix) &&
+      /^(insert(Text|CompositionText|FromComposition|LineBreak|FromPaste)|delete(Content|Word)(Backward|Forward)|deleteByCut)$/.test(edit.kind);
+    send.observedText = input.value;
+  }
+
+  function consumeSentDraft(id, sent, send) {
+    const visible = S.convId === id;
+    const draft = visible ? composerDraft() : S.drafts.get(id);
+    if (!draft) return;
+    if (send.prefixIntact && draft.text === send.observedText && draft.text.startsWith(sent.text)) {
+      draft.text = draft.text.slice(sent.text.length);
+    }
+    for (const key of ['images', 'refs', 'files', 'quotes']) {
+      draft[key] = draft[key].filter(item => !sent[key].includes(item));
+    }
+    storeDraft(id, draft);
+    persistDraftNow(id, true);
+    if (!visible) return;
+    const input = $('#input');
+    if (input.value !== draft.text) {
+      const start = Math.max(0, input.selectionStart - sent.text.length);
+      const end = Math.max(0, input.selectionEnd - sent.text.length);
+      const direction = input.selectionDirection;
+      input.value = draft.text;
+      input.setSelectionRange(start, end, direction);
+    }
+    S.pendingImages = draft.images;
+    S.pendingRefs = draft.refs;
+    S.pendingFiles = draft.files;
+    S.pendingQuotes = draft.quotes;
+    for (const ref of sent.refs) {
+      if (S.refSel.get(ref.id) === ref) S.refSel.delete(ref.id);
+    }
+    renderPendingImages();
+    renderPendingRefs();
+    renderPendingQuotes();
+    renderPendingFiles();
+    autoGrow();
+  }
+
+  async function sendMessage() {
     const sendConvId = S.convId;
+    if (!sendConvId || S.sending) return;
+    const sent = composerDraft();
+    const { refs, files, quotes } = sent;
+    const text = sent.text.trim();
+    const images = sent.images.map(x => ({ media_type: x.media_type, data: x.data }));
+    if (!text && !images.length && !refs.length && !files.length && !quotes.length) return;
+    const seq = S.loadSeq;
+    const sameView = () => S.convId === sendConvId && S.loadSeq === seq;
+    const send = {
+      prefix: sent.text, observedText: sent.text, prefixIntact: true, edit: null,
+      posting: false, ended: false
+    };
+    let accepted = false;
+    S.sends.set(sendConvId, send);
+    updateSendState();
     try {
+      if (S.needsResumeSync) await resumeSync(true);
+      if (!sameView()) return;
+      if (S.needsHistoryRender) {
+        S.needsHistoryRender = false;
+        renderMessages(true);
+      }
+      let sentSteer = S.running;
       let finalText = text;
       if (refs.length) {
         toast('正在整理引用…');
         finalText = await composeWithRefs(text, refs);
+        if (!sameView()) return;
       }
       if (quotes.length) finalText = withQuoteBlocks(finalText, quotes);
 
@@ -5288,18 +5458,17 @@
         if (!f.file) continue;
         f.status = '准备上传…';
         renderPendingFiles();
-        const data = await uploadPendingFile(f);
+        const data = await uploadPendingFile(f, sendConvId);
         f.path = data.path;
         f.name = data.name || f.name;
         f.status = '已上传';
+        if (S.convId === sendConvId) storeDraft(sendConvId, composerDraft());
+        persistDraftNow(sendConvId, true);
+        if (!sameView()) return;
         renderPendingFiles();
         filePaths.push(data.path);
       }
 
-      if (S.convId !== sendConvId) {
-        toast('已切换对话，这条消息没有发送');
-        return;
-      }
       if (filePaths.length) {
         const block = '[引用的文件/文件夹，请按需读取]\n' +
           filePaths.map(p => '- [文件] ' + p).join('\n');
@@ -5309,60 +5478,41 @@
       const payload = { id: sendConvId, text: finalText };
       if (images.length) payload.images = images;
       const body = JSON.stringify(payload);
-      if (wasRunning) {
+      send.posting = true;
+      const post = route => api(route, { method: 'POST', body, timeout: 120000 });
+      // 只有服务端明确拒绝本次提交，才按另一种状态重试；同一消息最多 chat → steer → chat。
+      if (!sentSteer) {
         try {
-          await api('/api/steer', { method: 'POST', body, timeout: 120000 });
+          await post('/api/chat');
         } catch (e) {
-          if (e.notRunning || /刚刚结束/.test(e.message)) {
-            // 后台期间旧 run_end 丢了：先把旧 live 清掉并补回历史，再按新消息发送，
-            // 否则新气泡会被挂到已完成任务的 liveTurn 底部。
-            await resumeSync(true);
-            S.running = false;
-            S.live = null;
-            S.needsResumeSync = false;
-            renderMessages(true);
-            await api('/api/chat', { method: 'POST', body, timeout: 120000 });
-            sentSteer = false;
-            S.running = true;
-            updateComposer();
-          } else {
-            throw e;
-          }
+          if (e.status !== 409 || !/还在处理中/.test(e.message)) throw e;
+          if (!sameView()) return;
+          send.ended = false;
+          sentSteer = true;
         }
-      } else {
-        try {
-          await api('/api/chat', { method: 'POST', body, timeout: 120000 });
-        } catch (e) {
-          // 状态显示没在跑、但服务端其实还在跑：退化成插话，避免消息丢失
-          if (/还在处理中/.test(e.message)) {
-            await api('/api/steer', { method: 'POST', body, timeout: 120000 });
-            sentSteer = true;
-          } else {
-            throw e;
-          }
-        }
-        S.running = true;
-        updateComposer();
       }
+      if (sentSteer) {
+        try {
+          await post('/api/steer');
+        } catch (e) {
+          if (e.status !== 409 || !(e.notRunning || /刚刚结束/.test(e.message))) throw e;
+          if (!sameView()) return;
+          await resumeSync(true);
+          if (!sameView()) return;
+          S.running = false;
+          S.live = null;
+          S.needsResumeSync = false;
+          renderMessages(true);
+          send.ended = false;
+          await post('/api/chat');
+          sentSteer = false;
+        }
+      }
+      accepted = true;
+      if (!sameView() || send.ended) return;
+      S.running = true;
+      updateComposer();
       notifyPageTask(true);
-      input.value = '';
-      S.pendingImages = [];
-      S.pendingRefs = [];
-      S.pendingQuotes = [];
-      S.pendingFiles = [];
-      S.refSel = new Map();
-      S.drafts.delete(sendConvId);
-      draftRawClear(sendConvId);
-      if (draftTimerId === sendConvId) {
-        clearTimeout(draftTimer);
-        draftTimer = null;
-        draftTimerId = null;
-      }
-      renderPendingImages();
-      renderPendingRefs();
-      renderPendingQuotes();
-      renderPendingFiles();
-      autoGrow();
       forceScrollBottom();
       startLivePolling();
       // SSE 可能正在重连；发送成功后先在本地画出这条消息，回显到了会去重
@@ -5376,22 +5526,32 @@
       });
       forceScrollBottom();
       // 输入框高度、键盘和运行状态栏可能稍后才变，补两次贴底
-      setTimeout(forceScrollBottom, 120);
-      setTimeout(forceScrollBottom, 400);
+      const adjustScroll = () => { if (sameView()) forceScrollBottom(); };
+      setTimeout(adjustScroll, 120);
+      setTimeout(adjustScroll, 400);
       // 悬浮窗插话时 App 会先暂停手机操作；消息发出后通知 App 继续。
       try {
         if (window.AndroidDownloads && AndroidDownloads.phoneSent) AndroidDownloads.phoneSent();
       } catch { /* 非 App 环境 */ }
     } catch (e) {
       // 让未上传成功的文件回到可重试状态
-      for (const f of S.pendingFiles) {
+      for (const f of files) {
         if (!f.path) f.status = '';
       }
-      renderPendingFiles();
-      toast(e.message || '发送失败', 'err');
+      if (S.convId === sendConvId) {
+        renderPendingFiles();
+        toast(e.message || '发送失败', 'err');
+      }
     } finally {
-      S.sending = false;
-      updateSendState();
+      // 状态和回显可立即更新，修改文字要等原会话正在组的词提交完成。
+      if (accepted) {
+        while (composerComposition && composerComposition.id === sendConvId) {
+          await composerComposition.done;
+        }
+        consumeSentDraft(sendConvId, sent, send);
+      }
+      S.sends.delete(sendConvId);
+      if (S.convId === sendConvId) updateSendState();
     }
   }
 
@@ -6042,8 +6202,10 @@
     }
   }
 
+  let chatSettingsSeq = 0;
   function openChatSettings() {
     if (!S.conv) return;
+    chatSettingsSeq++;
     const settings = (S.boot && S.boot.settings) || {};
     const app = (S.boot && S.boot.app) || {};
 
@@ -6076,36 +6238,42 @@
   }
 
   function closeChatSettings() {
+    chatSettingsSeq++;
     $('#chatSettings').hidden = true;
     closeOptionPicker();
   }
 
   async function saveChatSettings() {
-    if (!S.convId) return;
+    if (!S.convId || !S.conv) return;
+    const id = S.convId;
+    const view = S.loadSeq;
+    const seq = ++chatSettingsSeq;
+    const current = () => seq === chatSettingsSeq && view === S.loadSeq &&
+      S.convId === id && S.conv && !$('#chatSettings').hidden;
+    const fontSize = $('#setFontSize').value;
     const body = {
       title: $('#setTitle').value.trim(),
       model: $('#setModel').value,
       permissionMode: $('#setMode').value
     };
     try {
-      const data = await api('/api/conversation?id=' + encodeURIComponent(S.convId), {
-        method: 'PATCH',
-        body: JSON.stringify(body)
-      });
+      const data = await patchConversationSettings(id, body);
+      if (!current()) return;
       const conv = (data && data.conversation) || {};
       S.conv.title = conv.title != null ? conv.title : (body.title || null);
       S.conv.model = conv.model != null ? conv.model : body.model;
-      S.conv.effort = conv.effort || '';
       S.conv.permissionMode = conv.permissionMode || body.permissionMode;
-      const fontSize = $('#setFontSize');
-      if (fontSize) applyFontScale(fontSize.value);
+      applyFontScale(fontSize);
       $('#chatTitle').textContent = S.conv.title || '未命名对话';
-      closeChatSettings();
+      if ($('#setTitle').value.trim() === body.title && $('#setModel').value === body.model &&
+          $('#setMode').value === body.permissionMode && $('#setFontSize').value === fontSize) {
+        closeChatSettings();
+      }
       updateHeader();
       toast('已保存，下一条消息生效');
       loadBoot().catch(() => {});
     } catch (e) {
-      toast(e.message, 'err');
+      if (current()) toast(e.message, 'err');
     }
   }
 
@@ -6346,7 +6514,16 @@
         sendMessage();
       }
     });
-    $('#input').addEventListener('input', () => {
+    $('#input').addEventListener('compositionstart', () => {
+      endComposerComposition();
+      const active = { id: S.convId };
+      active.done = new Promise(resolve => { active.finish = resolve; });
+      composerComposition = active;
+    });
+    $('#input').addEventListener('compositionend', endComposerComposition);
+    $('#input').addEventListener('beforeinput', e => rememberDraftEdit(e.currentTarget, e.inputType));
+    $('#input').addEventListener('input', e => {
+      observeDraftEdit(e.currentTarget);
       autoGrow();
       updateSendState();
       if (S.convId) saveDraft(S.convId);

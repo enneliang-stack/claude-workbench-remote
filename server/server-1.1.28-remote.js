@@ -148,22 +148,66 @@ const DEFAULT_STATE = {
 };
 
 let state = null;
+let stateWritable = false;
+let stateDirty = false;
+let bootstrapRevision = 0;
+let stateSaveStatus = { revision: Date.now(), message: '' };
 
-function loadState() {
-  try {
-    const raw = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
-    return {
-      ...DEFAULT_STATE,
-      ...raw,
-      settings: { ...DEFAULT_STATE.settings, ...(raw.settings || {}) },
-      conversations: raw.conversations || {},
-      folders: raw.folders || [],
-      createdFolders: Array.isArray(raw.createdFolders) ? raw.createdFolders : [],
-      cwdCache: raw.cwdCache || {}
-    };
-  } catch {
-    return JSON.parse(JSON.stringify(DEFAULT_STATE));
+function setStateSaveWarning(message) {
+  if (stateSaveStatus.message === message) return;
+  stateSaveStatus = { revision: Math.max(Date.now(), stateSaveStatus.revision + 1), message };
+  broadcast({ t: 'state_save_status', status: stateSaveStatus });
+}
+
+async function loadState() {
+  let lastError;
+  let invalidBytes;
+  let lastReadSucceeded = false;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt) await new Promise(resolve => setTimeout(resolve, 75));
+    let bytes;
+    try {
+      bytes = await fsp.readFile(STATE_FILE);
+      const raw = JSON.parse(bytes.toString('utf8').replace(/^\uFEFF/, ''));
+      const isRecord = v => v != null && typeof v === 'object' && !Array.isArray(v);
+      if (!isRecord(raw) || (raw.folders != null && !Array.isArray(raw.folders)) ||
+          ['settings', 'conversations', 'cwdCache'].some(k => raw[k] != null && !isRecord(raw[k]))) {
+        throw new Error('state.json 的数据结构无效');
+      }
+      stateWritable = true;
+      return {
+        ...DEFAULT_STATE,
+        ...raw,
+        settings: { ...DEFAULT_STATE.settings, ...(raw.settings || {}) },
+        conversations: raw.conversations || {},
+        folders: raw.folders || [],
+        createdFolders: Array.isArray(raw.createdFolders) ? raw.createdFolders : [],
+        cwdCache: raw.cwdCache || {}
+      };
+    } catch (e) {
+      if (!attempt && e.code === 'ENOENT') {
+        stateWritable = true;
+        break;
+      }
+      lastError = e;
+      lastReadSucceeded = bytes !== undefined;
+      if (lastReadSucceeded) invalidBytes = bytes;
+    }
   }
+  if (lastError && invalidBytes) {
+    const backup = STATE_FILE + '.corrupt-' + Date.now() + '-' + crypto.randomUUID();
+    try {
+      await fsp.writeFile(backup, invalidBytes, { flag: 'wx', flush: true });
+      // 备份可能来自早一次读取；末次连文件都没能读到时，现有文件仍应受保护。
+      stateWritable = lastReadSucceeded;
+      console.error('[state] 已保留损坏的设置文件：', backup);
+    } catch (e) { lastError = e; }
+  }
+  if (!stateWritable) {
+    console.error('[state] 本次运行暂停写入 state.json：', lastError?.message);
+    setStateSaveWarning('工作台设置已暂停保存。本次设置更改仅在当前运行期间生效，请检查设置文件后重启工作台。');
+  }
+  return structuredClone(DEFAULT_STATE);
 }
 
 // 每轮的耗时 / 用量 / 费用，按该轮最后一条 assistant 消息 id 记录，供历史回显
@@ -213,23 +257,36 @@ function dropTurnMeta(convId) {
 }
 
 let saveTimer = null;
-function saveState() {
-  if (saveTimer) return;
+function writeDirtyState() {
+  if (!stateWritable || !stateDirty) return;
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  const tmp = STATE_FILE + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(state, null, 2), 'utf8');
+  fs.renameSync(tmp, STATE_FILE);
+  stateDirty = false;
+  setStateSaveWarning('');
+}
+
+function scheduleStateWrite(delay) {
   saveTimer = setTimeout(() => {
     saveTimer = null;
     try {
-      fs.mkdirSync(DATA_DIR, { recursive: true });
-      const tmp = STATE_FILE + '.tmp';
-      fs.writeFileSync(tmp, JSON.stringify(state, null, 2), 'utf8');
-      fs.renameSync(tmp, STATE_FILE);
+      writeDirtyState();
     } catch (e) {
-      console.error('[state] 保存失败', e.message);
+      if (!stateSaveStatus.message) console.error('[state] 保存失败', e.message);
+      setStateSaveWarning('工作台设置暂未保存，正在自动重试。请检查磁盘空间和设置文件的写入权限。');
+      scheduleStateWrite(Math.min(30000, Math.max(1000, delay * 2)));
     }
-  }, 250);
+  }, delay);
+  saveTimer.unref?.();
 }
 
-state = loadState();
-migrateLegacyCreatedFolders();
+function saveState(refreshSidebar = true) {
+  if (refreshSidebar) bootstrapRevision++;
+  if (!stateWritable) return;
+  stateDirty = true;
+  if (!saveTimer) scheduleStateWrite(250);
+}
 
 // ---------------------------------------------------------------- 小工具
 
@@ -441,7 +498,7 @@ function migrateLegacyCreatedFolders() {
     let born = 0;
     try { born = fs.statSync(f.path).birthtimeMs || 0; } catch { /* ignore */ }
     if (!born || Math.abs(added - born) > 15000) continue;
-    const hit = convs.some(c => c && c.cwd && normKey(c.cwd) === normKey(f.path)
+    const hit = convs.some(c => hasConversationCwd(c) && normKey(c.cwd) === normKey(f.path)
       && Math.abs(Date.parse(c.createdAt || '') - born) < 15000);
     if (!hit) continue;
     state.createdFolders.push(f.path);
@@ -717,6 +774,9 @@ function buildUserContent(text, images = []) {
 let CLAUDE_BIN = IS_WIN ? 'claude.exe' : 'claude';
 let CLAUDE_VERSION = '';
 const sessionFileCache = new Map();
+const pollSessionSearches = new Map();
+const POLL_SESSION_MISS_MS = 8000;
+const POLL_SESSION_SEARCH_MAX = 128;
 
 function resolveClaude() {
   return new Promise(resolve => {
@@ -753,11 +813,41 @@ function spawnClaude(args, cwd) {
   });
 }
 
-async function findSessionFile(id) {
+async function findSessionFile(id, cwd, polling = false) {
   const cached = sessionFileCache.get(id);
   if (cached && fs.existsSync(cached)) return cached;
 
-  // 先在已知文件夹里找
+  // 每次轮询都直接检查当前项目；第一条消息刚产生的转录能立即被发现。
+  if (cwd) {
+    const p = path.join(projectDirFor(cwd), id + '.jsonl');
+    if (fs.existsSync(p)) {
+      sessionFileCache.set(id, p);
+      return p;
+    }
+  }
+
+  if (!polling) return searchSessionProjects(id);
+  const previous = pollSessionSearches.get(id);
+  if (previous && previous.expiresAt > Date.now()) return previous.search;
+  pollSessionSearches.delete(id);
+  const entry = { search: searchSessionProjects(id), expiresAt: Infinity };
+  pollSessionSearches.set(id, entry);
+  if (pollSessionSearches.size > POLL_SESSION_SEARCH_MAX) {
+    pollSessionSearches.delete(pollSessionSearches.keys().next().value);
+  }
+  try {
+    const file = await entry.search;
+    if (!file) entry.expiresAt = Date.now() + POLL_SESSION_MISS_MS;
+    return file;
+  } finally {
+    if (entry.expiresAt === Infinity && pollSessionSearches.get(id) === entry) {
+      pollSessionSearches.delete(id);
+    }
+  }
+}
+
+async function searchSessionProjects(id) {
+  // 再在已知文件夹里找
   for (const f of state.folders) {
     const p = path.join(projectDirFor(f.path), id + '.jsonl');
     if (fs.existsSync(p)) {
@@ -783,7 +873,7 @@ async function deleteConversationsUnder(target) {
   const prefix = key.endsWith(path.sep) ? key : key + path.sep;
   const ids = Object.keys(state.conversations || {}).filter(id => {
     const c = state.conversations[id];
-    if (!c || !c.cwd) return false;
+    if (!hasConversationCwd(c)) return false;
     const ck = normKey(c.cwd);
     return ck === key || ck.startsWith(prefix);
   });
@@ -799,8 +889,10 @@ async function deleteConversationsUnder(target) {
     }
     delete state.conversations[id];
     convIndex.delete(id);
+    bootstrapRevision++;
     if (state.lastConversation === id) state.lastConversation = null;
     sessionFileCache.delete(id);
+    pollSessionSearches.delete(id);
     dropTurnMeta(id);
     titleAttempts.delete(id);
     titleSkipped.delete(id);
@@ -827,7 +919,7 @@ async function cwdOfProjectDir(dirName) {
           const o = JSON.parse(line);
           if (o.cwd) {
             state.cwdCache[dirName] = o.cwd;
-            saveState();
+            saveState(false);
             return o.cwd;
           }
         } catch { /* 截断的行，跳过 */ }
@@ -1177,7 +1269,7 @@ async function requestConversationTitle(text) {
 
 async function generateAutoTitle(convId, fallbackText) {
   let conv = state.conversations[convId];
-  if (!conv || conv.title || titleSkipped.has(convId)) return null;
+  if (!hasConversationCwd(conv) || conv.title || titleSkipped.has(convId)) return null;
   if ((titleAttempts.get(convId) || 0) >= TITLE_MAX_ATTEMPTS) return null;
 
   let firstUser = String(fallbackText || '').trim();
@@ -1223,7 +1315,7 @@ function scheduleAutoTitle(convId, fallbackText) {
 /** 启动后给已有的、还没有标题的会话补上标题（只补界面上可见的这些） */
 async function backfillTitles() {
   const ids = Object.entries(state.conversations)
-    .filter(([, c]) => c && !c.title)
+    .filter(([, c]) => hasConversationCwd(c) && !c.title)
     .map(([id]) => id)
     .slice(0, 20);
   for (const id of ids) {
@@ -2004,7 +2096,7 @@ function extensionCwdList(cwdParam) {
   const set = new Set();
   if (cwdParam) set.add(path.resolve(cwdParam));
   for (const f of state.folders || []) { if (f.path) set.add(path.resolve(f.path)); }
-  for (const c of Object.values(state.conversations || {})) { if (c.cwd) set.add(path.resolve(c.cwd)); }
+  for (const c of Object.values(state.conversations || {})) { if (hasConversationCwd(c)) set.add(path.resolve(c.cwd)); }
   return [...set].slice(0, 60);
 }
 
@@ -2192,7 +2284,8 @@ async function pluginAction(action, id, scope) {
 
 // ---------------------------------------------------------------- 会话索引
 
-const convIndex = new Map(); // id -> { cwd, title, updatedAt, ... }
+let convIndex = new Map(); // id -> { cwd, title, updatedAt, ... }
+let bootstrapJob = null;
 
 async function listFolderSessions(folderPath) {
   const dir = projectDirFor(folderPath);
@@ -3147,6 +3240,7 @@ class Runner {
     // 计划批准后退出 plan 模式：切到“自动接受编辑”，下一条消息按新模式重启
     if (allow && meta.toolName === 'ExitPlanMode') {
       const st = ensureConvState(this.id);
+      if (!st) return true;
       const mode = 'acceptEdits';
       st.permissionMode = mode;
       st.updatedAt = new Date().toISOString();
@@ -3321,9 +3415,13 @@ function runnerFor(conv) {
 
 // ---------------------------------------------------------------- 会话查找
 
+function hasConversationCwd(c) {
+  return typeof c?.cwd === 'string' && c.cwd.trim() !== '';
+}
+
 function lookupConv(id) {
   const s = state.conversations[id];
-  if (s) {
+  if (hasConversationCwd(s)) {
     return {
       id,
       cwd: s.cwd,
@@ -3347,11 +3445,17 @@ function lookupConv(id) {
   return null;
 }
 
-function ensureConvState(id, extra = {}) {
-  if (!state.conversations[id]) {
-    const i = convIndex.get(id);
+function ensureConvState(id) {
+  const record = state.conversations[id];
+  if (hasConversationCwd(record)) return record;
+  const i = convIndex.get(id);
+  if (!hasConversationCwd(i)) return null;
+  if (record != null) {
+    if (typeof record !== 'object' || Array.isArray(record)) return null;
+    record.cwd = i.cwd;
+  } else {
     state.conversations[id] = {
-      cwd: (i && i.cwd) || extra.cwd,
+      cwd: i.cwd,
       title: null,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -3434,7 +3538,35 @@ async function browseDir(dir, includeFiles = false) {
 
 // ---------------------------------------------------------------- 启动数据
 
-async function buildBootstrap() {
+function buildBootstrap() {
+  if (!bootstrapJob) {
+    bootstrapJob = refreshBootstrap().finally(() => { bootstrapJob = null; });
+  }
+  return bootstrapJob;
+}
+
+async function refreshBootstrap() {
+  // 扫描时继续使用上一次完整的索引。期间有会话增删或改名时，重新读取后再一起发布。
+  for (;;) {
+    const revision = bootstrapRevision;
+    const nextIndex = new Map();
+    const result = await scanBootstrap(nextIndex);
+    if (revision !== bootstrapRevision) continue;
+    convIndex = nextIndex;
+    // 已删除的旧记录保留原状；只有在已发布的索引中找到真实会话才补写目录。
+    let repaired = false;
+    for (const [id, c] of Object.entries(state.conversations)) {
+      if (c && typeof c === 'object' && !Array.isArray(c) && !hasConversationCwd(c) && nextIndex.has(id)) {
+        c.cwd = nextIndex.get(id).cwd;
+        repaired = true;
+      }
+    }
+    if (repaired) saveState(false);
+    return result;
+  }
+}
+
+async function scanBootstrap(nextIndex) {
   const folderMap = new Map(); // norm -> {path, addedAt, auto}
 
   for (const f of state.folders) {
@@ -3450,17 +3582,16 @@ async function buildBootstrap() {
   }
 
   const folders = [];
-  convIndex.clear();
 
   for (const info of folderMap.values()) {
     const exists = fs.existsSync(info.path);
     const sessions = exists ? await listFolderSessions(info.path) : [];
     const sessionIds = new Set(sessions.map(s => s.id));
-    for (const c of sessions) convIndex.set(c.id, c);
+    for (const c of sessions) nextIndex.set(c.id, c);
 
     // 占位会话（还没产生任何消息）
     for (const [id, c] of Object.entries(state.conversations)) {
-      if (normKey(c.cwd) !== normKey(info.path)) continue;
+      if (!hasConversationCwd(c) || normKey(c.cwd) !== normKey(info.path)) continue;
       if (sessionIds.has(id)) continue;
       sessionIds.add(id);
       sessions.push({
@@ -3473,7 +3604,7 @@ async function buildBootstrap() {
         turns: 0,
         placeholder: true
       });
-      convIndex.set(id, { id, cwd: info.path, title: c.title });
+      nextIndex.set(id, { id, cwd: info.path, title: c.title });
     }
 
     // 排序规则：未发过消息的新对话永远排在最前面（最新的在前）；
@@ -3515,6 +3646,7 @@ async function buildBootstrap() {
 
   return {
     folders,
+    stateSaveStatus,
     settings: {
       ...state.settings,
       // defaultModel 是“实际生效”的默认模型；Choice 是用户显式选过的全局默认（可能为空）
@@ -3670,7 +3802,7 @@ function conversationsWithScheduledTasks() {
   const now = Date.now();
   const ids = new Set();
   for (const [id, c] of Object.entries(state.conversations || {})) {
-    if (!c || !c.cwd) continue;
+    if (!hasConversationCwd(c)) continue;
     const data = readJsonFile(path.join(c.cwd, '.claude', 'scheduled_tasks.json'));
     const list = data && Array.isArray(data.tasks) ? data.tasks : [];
     if (list.some(t => isActiveScheduledTask(t, id, now))) ids.add(id);
@@ -4231,6 +4363,7 @@ async function handleApi(req, res, url) {
       compact: url.searchParams.get('compact') === '1',
       thinking: new Map()
     });
+    res.write('data: ' + JSON.stringify({ t: 'state_save_status', status: stateSaveStatus }) + '\n\n');
     const ping = setInterval(() => {
       try { res.write(': ping\n\n'); } catch { /* ignore */ }
     }, 15000);
@@ -4246,7 +4379,11 @@ async function handleApi(req, res, url) {
     const conv = lookupConv(id);
     if (!conv) return json(res, { error: '会话不存在' }, 404);
     const handoff = url.searchParams.get('handoff') === '1';
-    const file = await findSessionFile(id);
+    const light = url.searchParams.get('light') === '1';
+    const compact = url.searchParams.get('compact') === '1';
+    const limitParam = url.searchParams.get('limit');
+    const polling = !handoff && limitParam === '1' && (light || compact) && !url.searchParams.has('before');
+    const file = await findSessionFile(id, conv.cwd, polling);
     let messages = [];
     let contextTokens = -1;
     let compacted = false;
@@ -4262,9 +4399,6 @@ async function handleApi(req, res, url) {
     // 手机端分页：默认不传 limit 保持电脑端行为（返回全部）。
     // 手机传 limit + light + compact，只返回最后一页并只带摘要。
     // 先按原始条数切片，再只压缩当前页；否则 limit=1 的轮询也会为整份历史建对象。
-    const light = url.searchParams.get('light') === '1';
-    const compact = url.searchParams.get('compact') === '1';
-    const limitParam = url.searchParams.get('limit');
     const total = messages.length;
     let start = 0;
     let end = total;
@@ -4339,6 +4473,7 @@ async function handleApi(req, res, url) {
     const id = url.searchParams.get('id');
     const body = await readJson(req);
     const s = ensureConvState(id);
+    if (!s) return json(res, { error: '会话不存在' }, 404);
     if (typeof body.title === 'string') {
       s.title = body.title.trim() || null;
       const cached = convIndex.get(id);
@@ -4375,8 +4510,10 @@ async function handleApi(req, res, url) {
     if (file) { try { await fsp.unlink(file); } catch (e) { return json(res, { error: '删除失败：' + e.message }, 500); } }
     delete state.conversations[id];
     convIndex.delete(id);
+    bootstrapRevision++;
     if (state.lastConversation === id) state.lastConversation = null;
     sessionFileCache.delete(id);
+    pollSessionSearches.delete(id);
     dropTurnMeta(id);
     saveState();
     broadcast({ t: 'conv_removed', id });
@@ -4569,7 +4706,7 @@ async function handleApi(req, res, url) {
     const prefix = key.endsWith(path.sep) ? key : key + path.sep;
     for (const [id, r] of runners) {
       const c = state.conversations[id];
-      if (!c || !c.cwd) continue;
+      if (!hasConversationCwd(c)) continue;
       const ck = normKey(c.cwd);
       if (ck !== key && !ck.startsWith(prefix)) continue;
       try { r.kill(); } catch { /* ignore */ }
@@ -4868,6 +5005,8 @@ function openChromeBrowser() {
 }
 
 async function main() {
+  state = await loadState();
+  migrateLegacyCreatedFolders();
   ensurePlaywrightSkill();
   await resolveClaude();
   fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -4939,6 +5078,7 @@ process.on('SIGTERM', () => {
   process.exit(0);
 });
 process.on('exit', () => {
+  try { writeDirtyState(); } catch (e) { console.error('[state] 退出保存失败', e.message); }
   for (const r of runners.values()) {
     try { r.kill(); } catch { /* ignore */ }
   }

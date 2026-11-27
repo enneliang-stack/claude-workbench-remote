@@ -1,12 +1,12 @@
 {
-  "versionCode": 196,
-  "versionName": "2.4.155",
+  "versionCode": 197,
+  "versionName": "2.4.156",
   "apk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.150/ClaudeWorkbench-full.apk",
   "sha256": "86a6e52c2f2b571a1d1fedd3f20e1a553578c828964ea605c38a8eca84d6695a",
   "fullVersionCode": 191,
   "fullVersionName": "2.4.150",
   "slimApk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/latest/download/ClaudeWorkbench-slim.apk",
-  "slimSha256": "43cb04aad1b7c2fb9176bee29ec2176fed3684343e914a16f1f111815f71b10b",
+  "slimSha256": "c60cf0399664f7a89a28b1d33a93dc5233b272fe1409ba3c7d706b6184db4e88",
   "important": false,
-  "notes": "2.4.155 更新（精简包）\n\n- 过程/聊天头像去掉中心圆，避免小尺寸下出现“涂上去的点 + 浅色环”。\n- 手机页资源版本 158，对应 PC 客户端 1.2.65。\n- 已装环境的用户走精简更新，不需要重装环境。"
+  "notes": "2.4.156 更新（精简包）\n\n- 修复带图草稿在输入或重开后恢复不完整、已删除图片再次出现的问题。快速切换对话时，迟到的设置响应只更新原对话。\n- 手机本机服务复用会话索引并合并重复扫描。读取设置文件遇到异常时保留原文件或备份，写入失败时自动重试。\n- 同一文件被重复点击下载时共用一次请求；不同来源的同名文件可分别保存。下载或草稿保存中断时保留原文件。\n- 改善手机引擎启动、停止和重试时的后台资源释放。\n- 已安装手机端环境的用户可直接在 App 内检查更新。首次安装可使用 2.4.150 完整包，安装手机端环境后再更新至本版。"
 }
