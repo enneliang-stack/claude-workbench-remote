@@ -1,12 +1,12 @@
 {
-  "versionCode": 194,
-  "versionName": "2.4.153",
+  "versionCode": 195,
+  "versionName": "2.4.154",
   "apk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.150/ClaudeWorkbench-full.apk",
   "sha256": "86a6e52c2f2b571a1d1fedd3f20e1a553578c828964ea605c38a8eca84d6695a",
   "fullVersionCode": 191,
   "fullVersionName": "2.4.150",
   "slimApk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/latest/download/ClaudeWorkbench-slim.apk",
-  "slimSha256": "c8e2d1d15884568fa1ab76cb5c5de5c0ff29e791961119c5ec0d118d00ebe7be",
+  "slimSha256": "c5294e337bc8a94b49ca1df7bbf1141a1e7a450479da9573a04c9a8719407d19",
   "important": false,
-  "notes": "2.4.153 更新（精简包）\n\n- 星形 logo 动画：9 点方向 L6 只外伸，9 点上 P11 只内缩，两者共用周期和相位。\n- 3 点方向 P7 花瓣加长 5%，峰值从 1.12 收到 1.10，避免右侧裁切。\n- 3 点方向 P7 靠近中心的一端加宽到和外围一致。\n- 9 点方向 L6 加长 7%。\n- 静态图标、悬浮状态星标、通知大图标和手机页同步更新。\n- 手机页资源版本 156，对应 PC 客户端 1.2.63。\n- 已装环境的用户走精简更新，不需要重装环境。"
+  "notes": "2.4.154 更新（精简包）\n\n- 过程/聊天头像中心改为和射线融合的实心中间色，去掉小尺寸下的亮点。\n- 手机页资源版本 157，对应 PC 客户端 1.2.64。\n- 已装环境的用户走精简更新，不需要重装环境。"
 }
