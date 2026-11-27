@@ -62,13 +62,13 @@ public final class ProcessStarView extends View {
             new Ray(true, 69.54f, 75.34f, 16.54f, null, 222.02f, 2.001f, -0.521f, 0.9090f, 0.07f),
             new Ray(false, 0, 0, 0, taperL1(), -35.62f, 3.407f, -2.229f, 0.8241f, 0.15f),
             new Ray(false, 0, 0, 0, taperL3(), 52.93f, 3.420f, -2.530f, 0.8310f, 0.15f),
-            new Ray(false, 0, 0, 0, taperL6(), 173.74f, 2.576f, -1.484f, 1.0780f, 0.07f),
+            new Ray(false, 0, 0, 0, taperL6(), 173.74f, 3.416f, -3.368f, 1.0780f, 0.07f),
             new Ray(false, 0, 0, 0, petal6(), -74.22f, 2.546f, -2.086f, 1.0260f, 0.07f),
-            new Ray(false, 0, 0, 0, petal7(), 1.50f, 2.217f, -0.717f, 1.1200f, 0.07f),
+            new Ray(false, 0, 0, 0, petal7(), 1.50f, 2.217f, -0.717f, 1.1000f, 0.07f),
             new Ray(false, 0, 0, 0, petal8(), 122.69f, 3.233f, -1.337f, 0.8960f, 0.07f),
             new Ray(false, 0, 0, 0, petal9(), 149.85f, 4.123f, -0.663f, 0.7895f, 0.15f),
             new Ray(false, 0, 0, 0, petal10(), 255.56f, 2.669f, -2.480f, 0.8000f, 0.07f),
-            new Ray(false, 0, 0, 0, petal11(), 191.24f, 3.416f, -3.368f, 1.2340f, 0.12f),
+            new Ray(false, 0, 0, 0, petal11(), 191.24f, 3.416f, -3.368f, 0.7660f, 0.12f),
     };
 
     private final Paint strokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -213,8 +213,8 @@ public final class ProcessStarView extends View {
     private static Path taperL6() {
         Path p = new Path();
         p.moveTo(127.08f, 119.62f);
-        p.lineTo(49.47f, 130.96f);
-        p.quadTo(44.50f, 137.16f, 50.70f, 142.13f);
+        p.lineTo(44.02f, 131.56f);
+        p.quadTo(38.65f, 137.80f, 45.25f, 142.73f);
         p.lineTo(128.92f, 136.38f);
         p.close();
         return p;
@@ -232,10 +232,10 @@ public final class ProcessStarView extends View {
 
     private static Path petal7() {
         Path p = new Path();
-        p.moveTo(127.94f, 130.56f);
-        p.lineTo(210.05f, 135.20f);
-        p.quadTo(217.75f, 130.35f, 210.30f, 125.10f);
-        p.lineTo(128.06f, 125.44f);
+        p.moveTo(127.88f, 133.05f);
+        p.lineTo(214.16f, 135.31f);
+        p.quadTo(222.24f, 130.47f, 214.41f, 125.21f);
+        p.lineTo(128.12f, 122.95f);
         p.close();
         return p;
     }
