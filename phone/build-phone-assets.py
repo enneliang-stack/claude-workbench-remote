@@ -411,7 +411,7 @@ def build_public():
         # 资源版本参数：升级后 WebView 不会继续用缓存里的旧 m.js/m.css。
         html = re.sub(r'(href="/m\.css)(?:\?[^"]*)?(")',
                       rf'\1?v={ASSET_TAG}\2', html)
-        html = re.sub(r'(src="/m\.js)(?:\?[^"]*)?(")',
+        html = re.sub(r'(src="/(?:m|ref-digest)\.js)(?:\?[^"]*)?(")',
                       rf'\1?v={ASSET_TAG}\2', html)
         # 必须用 LF，避免 Windows 上 write_text 把整个 m.js/m.html 变成 CRLF。
         f.write_bytes(html.encode("utf-8"))

@@ -272,8 +272,7 @@ public final class FloatingControl {
         panel.setOnClickListener(v -> {
             if (!inputMode && PhoneControlServer.isCompletionPending()) {
                 // 先移除悬浮窗，再清完成状态/打开 App，避免窗口在移除前重排一下。
-                String conv = PhoneControlServer.isPageTaskRemote()
-                    ? "" : PhoneControlServer.completionConvId();
+                String conv = PhoneControlServer.completionConvId();
                 hideAll();
                 PhoneControlServer.dismissCompletion();
                 openAppAtConversation(conv);
@@ -778,8 +777,8 @@ public final class FloatingControl {
             // 任务完成用可点击面板，用户要点「发消息」或绿色 ✓。
             hideStatusBar();
             hideEdge();
-            // 远程电脑页任务不能通过本机 /api/phone/send 发消息，只保留 ✓。
-            messageBtn.setVisibility(PhoneControlServer.isPageTaskRemote() ? View.GONE : View.VISIBLE);
+            // 被删除的对话只有结束提示，不再提供发消息入口。
+            messageBtn.setVisibility(PhoneControlServer.completionConvId().isEmpty() ? View.GONE : View.VISIBLE);
             doneBtn.setVisibility(View.VISIBLE);
             String text = PhoneControlServer.overlayStatus();
             status.setText(text.isEmpty() ? "任务已完成" : text);
@@ -803,10 +802,6 @@ public final class FloatingControl {
         boolean active = PhoneControlServer.isClaudeRunning()
             || PhoneControlServer.isPaused()
             || PhoneControlServer.isToolBusy();
-        if (PhoneControlServer.isPageTaskRemote()) {
-            // 远程电脑页任务只显示状态，不给停止/插话边缘按钮（那些只作用于本机引擎）。
-            active = PhoneControlServer.isPaused() || PhoneControlServer.isToolBusy();
-        }
         if (active) {
             resumeBtn.setVisibility(PhoneControlServer.isPaused() ? View.VISIBLE : View.GONE);
             showEdge();

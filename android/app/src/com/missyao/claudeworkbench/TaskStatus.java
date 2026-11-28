@@ -1,104 +1,129 @@
 package com.missyao.claudeworkbench;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
+import java.util.ArrayList;
+import java.util.List;
 
-/**
- * 手机 App 的任务状态：页面 JS 桥上报当前对话是否在跑，本机 /api/phone/current
- * 提供本机运行中的任务数。通知栏和悬浮窗共用这一份状态。
- */
+/** 手机本机网页与两个后台轮询共用任务状态，按服务进程与事件序号去重。 */
 public final class TaskStatus {
-    private static volatile boolean pageRunning = false;
-    private static volatile boolean pageRemote = false;
-    private static volatile String pageConv = "";
-    private static volatile int pageCompleted = 0;
-    private static volatile int localRunning = 0;
-    private static volatile long pageRunningAt = 0;
-    private static volatile long lastPageCompletedAt = 0;
+    private static int localRunning;
+    private static boolean legacyPageRunning;
+    private static String legacyPageId = "";
+    private static long epoch, revision = -1;
+    private static boolean awaitBaselineLiveEnd;
+    private static int completed, failed, stopped;
+    private static String lastOutcome = "", lastConv = "";
 
-    private TaskStatus() {
-    }
+    private TaskStatus() {}
 
     public static synchronized void onPageState(JSONObject o) {
-        if (o == null) return;
-        boolean running = o.optBoolean("running", false);
-        String conv = o.optString("id", "");
-        boolean remote = o.optBoolean("remote", false);
-        if (running) {
-            pageRunning = true;
-            pageRunningAt = System.currentTimeMillis();
-            pageConv = conv;
-            pageRemote = remote;
-        } else if (pageRunning) {
-            pageRunning = false;
-            pageConv = conv;
-            pageRemote = remote;
-            pageCompleted++;
-            lastPageCompletedAt = System.currentTimeMillis();
-        } else {
-            pageConv = conv;
-            pageRemote = remote;
+        if (o == null || o.optBoolean("remote")) return;
+        JSONObject snapshot = o.optJSONObject("snapshot");
+        if (snapshot != null) {
+            applySnapshot(snapshot, !o.optBoolean("running"));
+            return;
+        }
+        if (epoch != 0) return;
+        String id = o.optString("id", "");
+        if (o.optBoolean("running")) {
+            legacyPageRunning = true;
+            legacyPageId = id;
+        } else if (!id.isEmpty() && legacyPageId.equals(id)) {
+            legacyPageRunning = false;
+            // 老服务只有明确的网页结束事件带有结果，计数降到零无法证明成功。
+            String outcome = o.optString("outcome", "");
+            if (!outcome.isEmpty()) {
+                recordEnd(id, outcome);
+                legacyPageId = "";
+            }
         }
     }
 
-    /** 本机 /api/phone/current 的运行中数量；只用于“运行中”状态，完成数由页面桥上报。 */
-    public static synchronized void updateLocalRunning(int count) {
-        int prev = localRunning;
-        localRunning = Math.max(0, count);
-        if (localRunning > 0 && pageRunning) pageRunningAt = System.currentTimeMillis();
-        if (localRunning < prev) {
-            // 本机任务完成：页面在本机对话上时由页面 run_end 计数；
-            // 页面不在该对话上时，用本机计数补上，并避开刚由页面记过的 5 秒。
-            boolean pageOwnsTask = pageRunning && !pageRemote;
-            boolean justCountedByPage = System.currentTimeMillis() - lastPageCompletedAt < 5000;
-            if (!pageOwnsTask && !justCountedByPage) pageCompleted += prev - localRunning;
+    public static synchronized void onLocalSnapshot(JSONObject snapshot) {
+        applySnapshot(snapshot, false);
+    }
+
+    private static void applySnapshot(JSONObject snapshot, boolean liveEnd) {
+        if (snapshot == null || !snapshot.optBoolean("ok")) return;
+        long incomingEpoch = snapshot.optLong("epoch");
+        long incomingRevision = snapshot.optLong("revision", -1);
+        if (incomingEpoch == 0) {
+            if (epoch == 0) {
+                localRunning = Math.max(0, snapshot.optInt("count", snapshot.optBoolean("running") ? 1 : 0));
+                if (localRunning == 0) legacyPageRunning = false;
+            }
+            return;
         }
-        // 页面切到别的对话后可能收不到旧任务的 run_end；本机计数已归零且
-        // 页面超过 5 秒没有再次上报运行时，把旧任务按完成处理。
-        if (localRunning == 0 && pageRunning && pageRunningAt > 0
-                && System.currentTimeMillis() - pageRunningAt > 5000) {
-            pageRunning = false;
-            pageRunningAt = 0;
-            pageCompleted++;
-            pageConv = "";
-            pageRemote = false;
+        if (incomingRevision < 0 || incomingEpoch < epoch) return;
+        long floor = revision;
+        if (incomingEpoch != epoch) {
+            // 首次轮询仅建立基线。若此序号的实时结束随后才送达，仍可接收一次。
+            clearCompleted();
+            epoch = incomingEpoch;
+            awaitBaselineLiveEnd = !liveEnd;
+            floor = liveEnd ? incomingRevision - 1 : incomingRevision;
+        } else if (incomingRevision == revision && liveEnd && awaitBaselineLiveEnd) {
+            floor = revision - 1;
+            awaitBaselineLiveEnd = false;
+        } else {
+            if (incomingRevision <= revision) return;
+            awaitBaselineLiveEnd = false;
         }
+        legacyPageRunning = false;
+        localRunning = Math.max(0, snapshot.optInt("count"));
+        JSONArray ends = snapshot.optJSONArray("ends");
+        for (int i = 0; ends != null && i < ends.length(); i++) {
+            JSONObject end = ends.optJSONObject(i);
+            if (end != null && end.optLong("revision") > floor && end.optLong("revision") <= incomingRevision) {
+                recordEnd(end.optString("id"), end.optString("outcome"));
+            }
+        }
+        revision = incomingRevision;
+    }
+
+    private static void recordEnd(String id, String outcome) {
+        switch (outcome) {
+            case "failed": failed++; break;
+            case "stopped": stopped++; break;
+            case "completed": completed++; break;
+            default: return;
+        }
+        lastOutcome = outcome;
+        lastConv = id;
     }
 
     public static synchronized void clearCompleted() {
-        pageCompleted = 0;
+        awaitBaselineLiveEnd = false;
+        completed = failed = stopped = 0;
+        lastOutcome = lastConv = "";
     }
 
     public static synchronized boolean isRunning() {
-        return pageRunning || localRunning > 0;
-    }
-
-    public static synchronized boolean isPageTaskRemote() {
-        return pageRemote;
+        return localRunning > 0 || legacyPageRunning;
     }
 
     public static synchronized boolean isCompletionPending() {
-        return pageCompleted > 0 && !isRunning();
+        return !lastOutcome.isEmpty() && !isRunning();
+    }
+
+    public static synchronized String completionText() {
+        if ("failed".equals(lastOutcome)) return "任务出错";
+        if ("stopped".equals(lastOutcome)) return "任务已停止";
+        return "任务已完成";
     }
 
     public static synchronized String completionConv() {
-        return pageConv;
+        return lastConv;
     }
 
     public static synchronized String notificationText() {
-        int running;
-        if (pageRunning) {
-            // 本机页面和 localRunning 会指向同一个任务，取较大值避免重复计数；
-            // 远程电脑页任务和本机任务是两件事，要相加。
-            running = pageRemote ? 1 + localRunning : Math.max(1, localRunning);
-        } else {
-            running = localRunning;
-        }
-        if (running > 0) {
-            String s = running == 1 ? "任务运行中" : running + " 个任务运行中";
-            if (pageCompleted > 0) s += " · " + pageCompleted + " 个已完成";
-            return s;
-        }
-        if (pageCompleted > 0) return pageCompleted + " 个任务已完成";
-        return "空闲中";
+        int running = Math.max(localRunning, legacyPageRunning ? 1 : 0);
+        List<String> parts = new ArrayList<>();
+        if (running > 0) parts.add(running == 1 ? "任务运行中" : running + " 个任务运行中");
+        if (completed > 0) parts.add(completed + " 个任务已完成");
+        if (failed > 0) parts.add(failed + " 个任务出错");
+        if (stopped > 0) parts.add(stopped + " 个任务已停止");
+        return parts.isEmpty() ? "空闲中" : String.join(" · ", parts);
     }
 }

@@ -16,6 +16,7 @@ const os = require('os');
 const crypto = require('crypto');
 const { fileURLToPath } = require('url');
 const { spawn, execFile } = require('child_process');
+const refDigest = require('./public/ref-digest.js');
 
 const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, 'public');
@@ -124,7 +125,8 @@ const ASK_GUIDE = [
   '（方向性/不可逆决策，必须等用户回答）或【次要】（小问题，用户未及时回答就按第一个选项继续）。',
   '只要本轮需要调用工具，就在第一次调用工具前用正文（用户可见）写一句不超过 20 字的中文说明要做什么；',
   '之后每完成一个关键阶段或准备收尾时再说一句，不要每个工具调用都说，也不要把进度只写进思考；',
-  '不需要工具的纯问答不用写。子代理直接返回结果，不用写这类短话。'
+  '不需要工具的纯问答不用写。子代理直接返回结果，不用写这类短话。',
+  '审查代码或排查故障时，确认问题须指出触发条件和对应证据；证据不足标为待验证，若影响修法再做最小核验。'
 ].join('');
 
 // 聊天图片（粘贴的截图）限制。Claude API 的 5MB 限制算的是 base64 之后的大小。
@@ -880,7 +882,7 @@ async function deleteConversationsUnder(target) {
   for (const id of ids) {
     const r = runners.get(id);
     if (r) {
-      try { r.kill(); } catch { /* ignore */ }
+      try { r.kill({ removing: true }); } catch { /* ignore */ }
       runners.delete(id);
     }
     const file = await findSessionFile(id);
@@ -953,6 +955,16 @@ function loadMetaDisk() {
   } catch { /* 首次运行或文件损坏，忽略 */ }
   return metaDisk;
 }
+
+// 从旧版索引恢复历史标记，使遗留标题与真正的新草稿可以区分。
+function hadTranscript(id, record) {
+  if (!hasConversationCwd(record)) return false;
+  if (record.hadTranscript) return true;
+  const file = path.join(projectDirFor(record.cwd), id + '.jsonl');
+  return loadMetaDisk()[file]?.state?.userTurns > 0;
+}
+
+const MISSING_HISTORY = '对话历史文件不存在。恢复原记录后可重新打开。';
 
 function saveMetaDiskSoon() {
   if (metaDiskTimer) return;
@@ -1538,8 +1550,7 @@ function parseTranscript(text) {
       imageCardBlk = null;
       imageLastTs = 0;
       imageBreak = false;
-      const compactSummary = !hasRefContextBlock(textPart) &&
-        (!!o.isCompactSummary || looksLikeCompactSummaryText(textPart));
+      const compactSummary = !!o.isCompactSummary || looksLikeCompactSummaryText(textPart);
       messages.push({
         id: o.uuid, role: 'user', text: textPart,
         images: images.length ? images : undefined,
@@ -1595,7 +1606,7 @@ function parseTranscript(text) {
   for (const m of messages) {
     if (m.role === 'assistant') {
       m.blocks = m.blocks.filter(b => b.type !== 'text' || b.text.trim());
-      if (!m.blocks.length) m.blocks.push({ type: 'text', text: '（无内容）' });
+      if (!m.blocks.length) m.blocks.push({ type: 'text', text: '（无内容）', placeholder: true });
     }
   }
   return {
@@ -1613,40 +1624,55 @@ function parseTranscript(text) {
  * 只回传文本和工具标签，不带工具结果，避免把几十 MB 长转录整个发给浏览器。
  */
 function handoffMessages(messages, maxMessages = 40, maxChars = 20000) {
-  const clip = (s, n) => {
-    const t = String(s == null ? '' : s);
-    return t.length > n ? t.slice(0, Math.max(0, n - 1)) + '…' : t;
-  };
-  const out = [];
-  let total = 0;
-  let summary = null;
+  let summaryIndex = -1;
+  let latestUser = -1;
+  let latestReply = -1;
+  const first = Math.max(0, messages.length - maxMessages);
+  const owners = new Map();
+  const awaitingOwner = [];
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i];
-    if (m.role === 'user' && looksLikeCompactSummaryText(m.text)) {
-      summary = m;
-      break;
-    }
-  }
-  if (summary) {
-    const text = clip(summary.text, 8000);
-    out.push({ role: 'user', text, ts: summary.ts, compactSummary: true });
-    total += text.length;
-  }
-  const tail = messages.slice(Math.max(0, messages.length - maxMessages));
-  for (const m of tail) {
-    if (m === summary) continue;
     if (m.role === 'user') {
-      const text = clip(m.text, 3000);
-      if (!text.trim()) continue;
-      if (total + text.length > maxChars) break;
-      out.push({ role: 'user', text, ts: m.ts });
-      total += text.length;
+      if (m.compactSummary || looksLikeCompactSummaryText(m.text)) {
+        if (summaryIndex < 0) summaryIndex = i;
+      } else if ((latestUser < 0 || awaitingOwner.length) && refDigest.userExcerpt(m)) {
+        if (latestUser < 0) latestUser = i;
+        for (const index of awaitingOwner) owners.set(index, i);
+        awaitingOwner.length = 0;
+      }
+    } else if (m.role === 'assistant') {
+      if (latestReply < 0 && m.blocks?.some(b => b.type === 'text' && !b.placeholder && b.text?.trim())) {
+        latestReply = i;
+      }
+      if (i >= first || i === latestReply) awaitingOwner.push(i);
+    }
+    if (i <= first && summaryIndex >= 0 && latestUser >= 0 && latestReply >= 0 && !awaitingOwner.length) break;
+  }
+  const summary = messages[summaryIndex];
+  const summaryText = summary
+    ? refDigest.excerpt(refDigest.stripBlock(summary.text), Math.min(8000, Math.floor(maxChars / 2)))
+    : '';
+  let remaining = maxChars - summaryText.length;
+  const tail = [];
+  // 最后一个问题可能还未获答；优先保留它，以及最近文字回复和对应的原问题。
+  const indexes = new Set([latestUser, owners.get(latestReply) ?? -1, latestReply]);
+  for (let i = messages.length - 1; i >= first; i--) indexes.add(i);
+  for (const i of indexes) {
+    if (i < 0) continue;
+    if (remaining <= 0 || tail.length >= maxMessages) break;
+    const m = messages[i];
+    if (m.role === 'user' && (m.compactSummary || looksLikeCompactSummaryText(m.text))) continue;
+    if (m.role === 'user') {
+      const text = refDigest.excerpt(refDigest.userExcerpt(m), Math.min(3000, remaining));
+      if (!text) continue;
+      tail.push({ index: i, message: { role: 'user', text, ts: m.ts, turnKey: i } });
+      remaining -= text.length;
     } else if (m.role === 'assistant') {
       const blocks = [];
       let text = '';
       for (const b of m.blocks || []) {
         if (!b) continue;
-        if (b.type === 'text' && b.text && b.text.trim()) {
+        if (b.type === 'text' && !b.placeholder && b.text && b.text.trim()) {
           text += (text ? '\n' : '') + b.text.trim();
         } else if (b.type === 'tool_use' && b.name) {
           const inp = b.input || {};
@@ -1658,15 +1684,25 @@ function handoffMessages(messages, maxMessages = 40, maxChars = 20000) {
           blocks.push({ type: 'tool_use', name: b.name, input: { description: arg || b.name } });
         }
       }
-      const t = clip(text, 3000);
+      const t = refDigest.excerpt(text, Math.min(3000, remaining));
+      remaining -= t.length;
+      let toolCount = 0;
+      for (const b of blocks) {
+        const size = b.name.length + b.input.description.length;
+        if (size > remaining) break;
+        remaining -= size;
+        toolCount++;
+      }
+      blocks.length = toolCount;
       if (t) blocks.unshift({ type: 'text', text: t });
       if (!blocks.length) continue;
-      if (total + t.length > maxChars) break;
-      out.push({ role: 'assistant', blocks, ts: m.ts });
-      total += t.length;
+      tail.push({ index: i, message: { role: 'assistant', blocks, ts: m.ts, turnKey: owners.get(i) ?? -1 } });
     }
   }
-  return out;
+  if (summaryText) tail.push({ index: summaryIndex, message: {
+    role: 'user', text: summaryText, ts: summary.ts, compactSummary: true
+  } });
+  return tail.sort((a, b) => a.index - b.index).map(entry => entry.message);
 }
 
 // 解析结果按文件 mtime/size 缓存：手机分页时不用每次重新解析整份长转录
@@ -2324,6 +2360,17 @@ async function addFolderIfNeeded(p) {
 // res -> { compact, thinking: Map<key, chars> }
 const sseClients = new Map();
 let runners = new Map(); // convId -> Runner
+// 手机通知的网页回调与后台轮询共享同一版本。只保留设备内最近的结束状态，不传对话内容。
+const phoneTaskEpoch = Number(process.hrtime.bigint() / 1000n);
+let phoneTaskRevision = 0;
+const phoneTaskEnds = [];
+function phoneTaskSnapshot() {
+  const active = [...runners.values()].filter(r => r.busy);
+  return {
+    ok: true, id: active[0]?.id || '', running: !!active.length, count: active.length,
+    epoch: phoneTaskEpoch, revision: phoneTaskRevision, ends: phoneTaskEnds
+  };
+}
 
 function broadcast(ev) {
   if (sseClients.size === 0) return;
@@ -2535,6 +2582,15 @@ class Runner {
   }
 
   emit(ev) {
+    if (IS_PHONE && (ev.t === 'run_start' || ev.t === 'run_end')) {
+      phoneTaskRevision++;
+      if (ev.t === 'run_end') {
+        const outcome = ev.stopped ? 'stopped' : (ev.error || ev.isError) ? 'failed' : 'completed';
+        phoneTaskEnds.push({ revision: phoneTaskRevision, id: ev.removing ? '' : this.id, outcome });
+        if (phoneTaskEnds.length > 32) phoneTaskEnds.shift();
+      }
+      ev.taskSnapshot = phoneTaskSnapshot();
+    }
     this.seq += 1;
     broadcast({ convId: this.id, seq: this.seq, ...ev });
   }
@@ -2652,7 +2708,10 @@ class Runner {
       else return;
     }
 
-    const file = await findSessionFile(this.id);
+    const file = await findSessionFile(this.id, conv.cwd);
+    if (!file && hadTranscript(this.id, state.conversations[this.id])) {
+      throw Object.assign(new Error(MISSING_HISTORY), { code: 'HISTORY_NOT_FOUND' });
+    }
     const uiMode = conv.permissionMode || state.settings.defaultPermissionMode;
     // bypassPermissions 会让 CLI 跳过 canUseTool，导致 AskUserQuestion/ExitPlanMode 不可用；
     // 改用 manual + 下面自动 allow 非交互类请求，界面上的“全部放行”语义不变。
@@ -2691,6 +2750,7 @@ class Runner {
     child.stdout.setEncoding('utf8');
     let buf = '';
     child.stdout.on('data', chunk => {
+      if (this.child !== child) return;
       buf += chunk;
       let i;
       while ((i = buf.indexOf('\n')) >= 0) {
@@ -2705,6 +2765,7 @@ class Runner {
 
     child.stderr.setEncoding('utf8');
     child.stderr.on('data', d => {
+      if (this.child !== child) return;
       this.stderr = (this.stderr + d).slice(-4000);
     });
 
@@ -2712,9 +2773,14 @@ class Runner {
 
     child.on('error', err => {
       if (this.child !== child) return;
-      this.emit({ t: 'error', message: `无法启动 Claude：${err.message}` });
+      const wasBusy = this.busy;
       this.busy = false;
       this.child = null;
+      const message = `无法启动 Claude：${err.message}`;
+      if (wasBusy) {
+        this.live = null;
+        this.emit({ t: 'run_end', stopped: this.stopping, error: this.stopping ? null : message, cost: null });
+      } else this.emit({ t: 'error', message });
     });
 
     child.on('exit', (code) => {
@@ -2943,6 +3009,7 @@ class Runner {
     }
 
     if (t === 'result') {
+      if (IS_PHONE && !this.busy) return;
       this.busy = false;
 
       // usage 是每次 API 调用的，这里用本轮累加值；total_cost_usd 是进程累计，
@@ -2967,11 +3034,21 @@ class Runner {
       this.lastAssistantId = null;
       this.runUsage = null;
 
+      const setupFailed = ev.terminal_reason === 'turn_setup_failed';
+      const isError = !this.stopping && (setupFailed || !!ev.is_error || (typeof ev.subtype === 'string' && ev.subtype !== 'success'));
+      let error = null;
+      if (isError) {
+        const detail = typeof ev.result === 'string' ? ev.result.trim() : '';
+        const messages = Array.isArray(ev.errors) ? ev.errors.filter(s => typeof s === 'string' && s.trim()) : [];
+        const fallback = setupFailed ? 'Claude 启动准备失败' : (ev.subtype && ev.subtype !== 'success' ? ev.subtype : 'Claude 执行失败');
+        error = detail || messages.join('\n') || fallback;
+      }
       this.emit({
         t: 'run_end',
         subtype: ev.subtype,
-        isError: !!ev.is_error || ev.subtype !== 'success',
-        error: ev.is_error ? (ev.result || ev.subtype) : null,
+        isError,
+        error,
+        stopped: this.stopping,
         cost: turnCost,
         duration: ev.duration_ms,
         usage: turnUsage,
@@ -3356,13 +3433,15 @@ class Runner {
     try { this.child.kill(); } catch { /* ignore */ }
   }
 
-  kill() {
+  kill({ removing = false } = {}) {
+    const wasBusy = this.busy;
     this.stopping = true;
     if (this.child) {
       try { this.child.kill(); } catch { /* ignore */ }
     }
     this.child = null;
     this.busy = false;
+    if (IS_PHONE && wasBusy) this.emit({ t: 'run_end', stopped: true, removing, cost: null });
     this.live = null;
     this.pendingSteers = [];
     this.clearPerms();
@@ -3553,11 +3632,17 @@ async function refreshBootstrap() {
     const result = await scanBootstrap(nextIndex);
     if (revision !== bootstrapRevision) continue;
     convIndex = nextIndex;
-    // 已删除的旧记录保留原状；只有在已发布的索引中找到真实会话才补写目录。
+    // 记录已确认的历史，索引缓存淘汰后仍能识别遗留标题。
     let repaired = false;
     for (const [id, c] of Object.entries(state.conversations)) {
-      if (c && typeof c === 'object' && !Array.isArray(c) && !hasConversationCwd(c) && nextIndex.has(id)) {
-        c.cwd = nextIndex.get(id).cwd;
+      if (!c || typeof c !== 'object' || Array.isArray(c)) continue;
+      const indexed = nextIndex.get(id);
+      if (!hasConversationCwd(c) && indexed) {
+        c.cwd = indexed.cwd;
+        repaired = true;
+      }
+      if (!c.hadTranscript && (indexed?.turns > 0 || hadTranscript(id, c))) {
+        c.hadTranscript = true;
         repaired = true;
       }
     }
@@ -3593,6 +3678,7 @@ async function scanBootstrap(nextIndex) {
     for (const [id, c] of Object.entries(state.conversations)) {
       if (!hasConversationCwd(c) || normKey(c.cwd) !== normKey(info.path)) continue;
       if (sessionIds.has(id)) continue;
+      if (!runners.get(id)?.busy && hadTranscript(id, c)) continue;
       sessionIds.add(id);
       sessions.push({
         id,
@@ -3656,7 +3742,7 @@ async function scanBootstrap(nextIndex) {
       envEffort: envEffort(),
       effortLevels: EFFORT_LEVELS
     },
-    lastConversation: state.lastConversation,
+    lastConversation: nextIndex.has(state.lastConversation) ? state.lastConversation : null,
     app: {
       version: CLAUDE_VERSION,
       claude: CLAUDE_BIN,
@@ -4384,6 +4470,9 @@ async function handleApi(req, res, url) {
     const limitParam = url.searchParams.get('limit');
     const polling = !handoff && limitParam === '1' && (light || compact) && !url.searchParams.has('before');
     const file = await findSessionFile(id, conv.cwd, polling);
+    if (!file && !runners.get(id)?.busy && hadTranscript(id, state.conversations[id])) {
+      return json(res, { error: MISSING_HISTORY }, 404);
+    }
     let messages = [];
     let contextTokens = -1;
     let compacted = false;
@@ -4393,7 +4482,10 @@ async function handleApi(req, res, url) {
         messages = handoff ? handoffMessages(r.messages) : r.messages;
         contextTokens = r.contextTokens;
         compacted = r.compacted;
-      } catch (e) { console.error('[read]', e.message); }
+      } catch (e) {
+        console.error('[read]', e.message);
+        return json(res, { error: '无法读取对话历史，请稍后重试。' }, 503);
+      }
     }
 
     // 手机端分页：默认不传 limit 保持电脑端行为（返回全部）。
@@ -4505,7 +4597,7 @@ async function handleApi(req, res, url) {
   if (p === '/api/conversation' && req.method === 'DELETE') {
     const id = url.searchParams.get('id');
     const r = runners.get(id);
-    if (r) { r.kill(); runners.delete(id); }
+    if (r) { r.kill({ removing: true }); runners.delete(id); }
     const file = await findSessionFile(id);
     if (file) { try { await fsp.unlink(file); } catch (e) { return json(res, { error: '删除失败：' + e.message }, 500); } }
     delete state.conversations[id];
@@ -4547,7 +4639,7 @@ async function handleApi(req, res, url) {
       await r.start(conv, text, images);
     } catch (e) {
       broadcast({ convId: id, t: 'error', message: e.message });
-      return json(res, { error: e.message }, 500);
+      return json(res, { error: e.message }, e.code === 'HISTORY_NOT_FOUND' ? 404 : 500);
     }
     return json(res, { ok: true });
   }
@@ -4587,17 +4679,7 @@ async function handleApi(req, res, url) {
 
   if (p === '/api/phone/current' && req.method === 'GET') {
     if (!IS_PHONE) return json(res, { error: '仅手机端可用' }, 404);
-    // runners 里可能还留着已经结束的 Runner；必须看 busy，不能只看 key 是否存在。
-    const active = [];
-    for (const [id, r] of runners) {
-      if (r && r.busy) active.push(id);
-    }
-    return json(res, {
-      ok: true,
-      id: active[0] || '',
-      running: active.length > 0,
-      count: active.length
-    });
+    return json(res, phoneTaskSnapshot());
   }
 
   if (p === '/api/stop' && req.method === 'POST') {
@@ -4709,7 +4791,7 @@ async function handleApi(req, res, url) {
       if (!hasConversationCwd(c)) continue;
       const ck = normKey(c.cwd);
       if (ck !== key && !ck.startsWith(prefix)) continue;
-      try { r.kill(); } catch { /* ignore */ }
+      try { r.kill({ removing: true }); } catch { /* ignore */ }
       runners.delete(id);
     }
     try {

@@ -1,12 +1,12 @@
 {
-  "versionCode": 197,
-  "versionName": "2.4.156",
+  "versionCode": 198,
+  "versionName": "2.4.157",
   "apk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.150/ClaudeWorkbench-full.apk",
   "sha256": "86a6e52c2f2b571a1d1fedd3f20e1a553578c828964ea605c38a8eca84d6695a",
   "fullVersionCode": 191,
   "fullVersionName": "2.4.150",
   "slimApk": "https://github.com/enneliang-stack/claude-workbench-remote/releases/latest/download/ClaudeWorkbench-slim.apk",
-  "slimSha256": "c60cf0399664f7a89a28b1d33a93dc5233b272fe1409ba3c7d706b6184db4e88",
+  "slimSha256": "3996945b81893f9d0488a1034fd52443afee6a493b37954815572fc32ecf965d",
   "important": false,
-  "notes": "2.4.156 更新（精简包）\n\n- 修复带图草稿在输入或重开后恢复不完整、已删除图片再次出现的问题。快速切换对话时，迟到的设置响应只更新原对话。\n- 手机本机服务复用会话索引并合并重复扫描。读取设置文件遇到异常时保留原文件或备份，写入失败时自动重试。\n- 同一文件被重复点击下载时共用一次请求；不同来源的同名文件可分别保存。下载或草稿保存中断时保留原文件。\n- 改善手机引擎启动、停止和重试时的后台资源释放。\n- 已安装手机端环境的用户可直接在 App 内检查更新。首次安装可使用 2.4.150 完整包，安装手机端环境后再更新至本版。"
+  "notes": "2.4.157 更新（精简包）\n\n- 手机本机运行任务时，聊天页、通知栏和悬浮窗区分成功、失败和手动停止。CLI 启动准备失败时会显示错误，同一轮的结束通知只计一次。\n- 手机本机列表会隐藏历史文件已丢失的旧对话，保留真正的新草稿。补回历史文件后可继续原对话。\n- 引用其他对话时，优先保留最近未答的问题以及上一条文字回复对应的原问题。按现有预算截取，避免重复带入嵌套引用。代码审查和故障排查共用一条简短的证据提示。\n- 修复部分 Android 输入法按回车确认候选词时可能提前发送消息的问题。\n\n已安装手机端环境，可在 App 的「设置与日志 → 检查更新」安装精简包。首次安装可使用 2.4.150 完整包安装环境，再更新至本版。"
 }

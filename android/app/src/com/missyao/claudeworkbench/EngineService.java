@@ -200,19 +200,18 @@ public class EngineService extends Service {
         final long attempt = generation;
         statusPoll = () -> {
             new Thread(() -> {
-                int count = 0;
+                JSONObject state = null;
                 try {
                     if (LocalEngine.currentPort() > 0) {
-                        JSONObject r = LocalEngine.phoneServerCall(
+                        state = LocalEngine.phoneServerCall(
                             this, "GET", "/api/phone/current", null, 1800);
-                        count = r != null ? r.optInt("count", r.optBoolean("running", false) ? 1 : 0) : 0;
                     }
                 } catch (Exception ignored) {
                 }
-                final int runningCount = count;
+                final JSONObject snapshot = state;
                 main.post(() -> {
                     if (attempt != generation || statusHandler == null) return;
-                    TaskStatus.updateLocalRunning(runningCount);
+                    TaskStatus.onLocalSnapshot(snapshot);
                     updateNotification(TaskStatus.notificationText());
                 });
             }, "phone-status").start();

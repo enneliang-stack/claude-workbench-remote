@@ -92,12 +92,9 @@ public final class PhoneControlServer {
     private static volatile String lastText = "";
     private static volatile boolean toolBusy = false;
     private static volatile boolean paused = false;
-    private static volatile boolean claudeRunning = false;
     private static volatile long lastActionAt = 0;
     private static volatile boolean refreshingRun = false;
     // 任务结束后的完成提示：不自动过期，直到用户打开 App 里对应的对话。
-    private static volatile boolean completionPending = false;
-    private static volatile String completionConv = "";
     private static volatile String activeConv = "";
     // App 手机页当前是否停在一个对话上（由 WebView 的 JS 桥接上报）。
     private static volatile String phoneChatConv = "";
@@ -127,8 +124,6 @@ public final class PhoneControlServer {
             toolBusy = false;
             lastText = "";
             lastActionAt = 0;
-            completionPending = false;
-            completionConv = "";
             activeConv = "";
             phoneChatConv = "";
             if (service != null) start(service);
@@ -199,19 +194,15 @@ public final class PhoneControlServer {
     }
 
     public static boolean isClaudeRunning() {
-        return claudeRunning || TaskStatus.isRunning();
-    }
-
-    public static boolean isPageTaskRemote() {
-        return TaskStatus.isPageTaskRemote();
+        return TaskStatus.isRunning();
     }
 
     public static boolean isCompletionPending() {
-        return completionPending || TaskStatus.isCompletionPending();
+        return TaskStatus.isCompletionPending();
     }
 
     public static String completionConvId() {
-        return completionPending ? completionConv : TaskStatus.completionConv();
+        return TaskStatus.completionConv();
     }
 
     public static boolean isPhoneChatVisible() {
@@ -241,8 +232,9 @@ public final class PhoneControlServer {
     /** 用户主动打开/切回对应对话时，完成提示才算已看到。 */
     public static void onPhoneChatEntered(String id) {
         phoneChatConv = id == null ? "" : id.trim();
-        if (appForeground && phoneModeVisible && completionPending && !phoneChatConv.isEmpty()
-                && (completionConv.isEmpty() || completionConv.equals(phoneChatConv))) {
+        String ended = completionConvId();
+        if (appForeground && phoneModeVisible && isCompletionPending() && !phoneChatConv.isEmpty()
+                && (ended.isEmpty() || ended.equals(phoneChatConv))) {
             dismissCompletion();
         }
     }
@@ -253,8 +245,6 @@ public final class PhoneControlServer {
 
     /** 悬浮窗绿色 ✓：只收起「任务已完成」提示，不打开 App。 */
     public static void dismissCompletion() {
-        completionPending = false;
-        completionConv = "";
         lastText = "";
         lastActionAt = 0;
         TaskStatus.clearCompleted();
@@ -278,56 +268,32 @@ public final class PhoneControlServer {
         if (paused) return toolBusy ? "手机操作已暂停（等当前步骤收尾）" : "手机操作已暂停";
         if (toolBusy) return "正在" + actionText + "…";
         // 运行中统一显示通用状态，不再拼接对话标题或上一次动作。
-        if (TaskStatus.isRunning() || claudeRunning) return "任务进行中";
-        if (completionPending || TaskStatus.isCompletionPending()) return "任务已完成";
+        if (TaskStatus.isRunning()) return "任务进行中";
+        if (TaskStatus.isCompletionPending()) return TaskStatus.completionText();
         if (lastActionAt > 0 && System.currentTimeMillis() - lastActionAt < 12000) return lastText;
         return "";
     }
 
     public static boolean shouldShowOverlay(Context c) {
         if (c == null || !isEnabled(c) || !isAccessibilityConnected() || !isRunning()) return false;
-        if (completionPending && !claudeRunning) return true; // 常驻，直到用户打开对应对话
         if (TaskStatus.isRunning() || TaskStatus.isCompletionPending()) return true;
-        if (paused || toolBusy || claudeRunning) return true;
+        if (paused || toolBusy) return true;
         return lastActionAt > 0 && System.currentTimeMillis() - lastActionAt < 12000;
     }
 
     /** 悬浮窗每秒查一次 Claude 是否还在跑，用来区分「进行中」和「已完成」。 */
     public static void refreshRunState() {
         final Context c = appContext;
-        if (c == null || refreshingRun || !isRunning()) {
-            if (!isRunning()) claudeRunning = false;
-            return;
-        }
-        if (LocalEngine.currentPort() <= 0) {
-            claudeRunning = false;
-            return;
-        }
+        if (c == null || refreshingRun || !isRunning() || LocalEngine.currentPort() <= 0) return;
         refreshingRun = true;
         new Thread(() -> {
             try {
                 JSONObject r = LocalEngine.phoneServerCall(c, "GET", "/api/phone/current", null, 1800);
-                boolean running = r != null && r.optBoolean("running", false);
-                TaskStatus.updateLocalRunning(r != null ? r.optInt("count", running ? 1 : 0) : 0);
+                TaskStatus.onLocalSnapshot(r);
                 String id = r != null ? r.optString("id", "") : "";
                 if (!id.isEmpty()) activeConv = id;
-                boolean was = claudeRunning;
-                claudeRunning = running;
-                if (!was && running) {
-                    completionPending = false;
-                    completionConv = "";
-                }
-                if (was && !running) {
-                    // 任务结束一定进入完成态。是否清掉由用户点 ✓、点完成面板
-                    // 或主动打开/切回对应对话决定，不能因为页面刚好在渲染就吞掉。
-                    completionPending = true;
-                    completionConv = activeConv;
-                    lastActionAt = System.currentTimeMillis();
-                    lastText = "任务已完成";
-                }
             } catch (Exception ignored) {
-                claudeRunning = false;
-                TaskStatus.updateLocalRunning(0);
+                // 没有收到有效快照时保留上次状态。
             } finally {
                 refreshingRun = false;
             }
@@ -416,7 +382,7 @@ public final class PhoneControlServer {
                 JSONObject cur = LocalEngine.phoneServerCall(c, "GET", "/api/phone/current", null, 2000);
                 boolean running = cur != null && cur.optBoolean("running", false);
                 String activeId = cur != null ? cur.optString("id", "") : "";
-                String target = !activeId.isEmpty() ? activeId : completionConv;
+                String target = !activeId.isEmpty() ? activeId : completionConvId();
                 if (target == null || target.isEmpty()) target = activeConv;
                 if (target == null || target.isEmpty()) target = phoneChatConv;
                 if (target == null || target.isEmpty()) {
@@ -445,10 +411,7 @@ public final class PhoneControlServer {
                 }
                 if (r != null && r.optBoolean("ok", false)) {
                     paused = false;
-                    completionPending = false;
-                    completionConv = "";
                     activeConv = target;
-                    claudeRunning = true;
                     lastText = running ? "已插话" : "已发送";
                     lastActionAt = System.currentTimeMillis();
                     callback.onResult(true, running ? "已插话" : "已发送");
@@ -833,7 +796,7 @@ public final class PhoneControlServer {
         o.put("port", port);
         o.put("paused", paused);
         o.put("toolBusy", toolBusy);
-        o.put("claudeRunning", claudeRunning);
+        o.put("claudeRunning", isClaudeRunning());
         o.put("action", actionText);
         DisplayMetrics dm = screenMetrics();
         JSONObject screen = new JSONObject();

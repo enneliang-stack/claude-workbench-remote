@@ -3886,6 +3886,10 @@
       return;
     }
 
+    // 任务状态是本机引擎的全局快照。即使前台切到另一对话，也要把结束原因交给通知栏。
+    if ((t === 'run_start' || t === 'run_end') && ev.taskSnapshot) {
+      notifyPageTask(t === 'run_start', ev.taskSnapshot);
+    }
     // 列表页 / 其他对话：只刷新徽标
     if (!S.convId || ev.convId !== S.convId) {
       if (t === 'run_end' && ev.convId) S.unread.add(ev.convId);
@@ -3903,7 +3907,7 @@
           S.todos = null;
           renderTodoBar();
         }
-        notifyPageTask(true);
+        if (!ev.taskSnapshot) notifyPageTask(true);
         // 新消息的 user_echo 通常先到，先记下来，重建实时区时不能把它弄丢
         const pending = S.pendingEcho;
         S.pendingEcho = null;
@@ -4058,7 +4062,8 @@
             box.querySelectorAll(':scope > .image-view').forEach(card => S.liveProcessBody.appendChild(card));
           }
         }
-        notifyPageTask(false);
+        if (!ev.taskSnapshot) notifyPageTask(false, null, ev.stopped ? 'stopped' :
+          (ev.error || ev.isError ? 'failed' : ev.subtype === 'success' ? 'completed' : undefined));
         stopLivePolling();
         syncLiveCursor();
         closeStopConfirm();
@@ -4071,8 +4076,8 @@
             if (m) m.scrollTop = m.scrollHeight;
           });
         }
-        if (ev.error) toast(ev.error, 'err');
-        else if (ev.stopped) toast('已停止');
+        if (ev.stopped) toast('已停止');
+        else if (ev.error) toast(ev.error, 'err');
         setTimeout(() => { if (S.convId) refreshConversation(); }, 700);
         scheduleBootRefresh();
         break;
@@ -6509,7 +6514,9 @@
       sendMessage();
     });
     $('#input').addEventListener('keydown', e => {
-      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+      // WebView 提交候选词时，Enter 的 isComposing 有时已变回 false。
+      if (e.isComposing || e.keyCode === 229 || composerComposition?.id === S.convId) return;
+      if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
         sendMessage();
       }
@@ -6783,14 +6790,15 @@
   }
 
   /** 只把手机本机页的任务状态报给 App，用于通知栏和悬浮窗；远程电脑页不参与。 */
-  function notifyPageTask(running) {
+  function notifyPageTask(running, snapshot, outcome) {
     try {
       if (!IS_PHONE_LOCAL) return;
       if (window.AndroidDownloads && AndroidDownloads.taskState) {
         AndroidDownloads.taskState(JSON.stringify({
           running: !!running,
           title: (S.conv && S.conv.title) || '',
-          id: S.convId || ''
+          id: S.convId || '',
+          snapshot, outcome
         }));
       }
     } catch { /* 非 App 环境 */ }
