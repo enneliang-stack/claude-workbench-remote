@@ -6,6 +6,7 @@
  */
 (() => {
   const TOKEN = window.__GUI_TOKEN__ || '';
+  const MOBILE_COMPACT = '&compact=1&lazyEdits=1';
   const IS_APP = new URLSearchParams(location.search).get('app') === '1';
   const IS_PHONE_LOCAL = !!document.querySelector('meta[name="workbench-phone"]');
 
@@ -81,8 +82,11 @@
     const headers = { 'x-gui-token': TOKEN };
     if (opts.body != null) headers['content-type'] = 'application/json';
     const timeout = Number(opts.timeout) > 0 ? Number(opts.timeout) : 20000;
-    const { timeout: _timeout, ...fetchOpts } = opts;
+    const { timeout: _timeout, signal, ...fetchOpts } = opts;
     const ctrl = new AbortController();
+    const cancel = () => ctrl.abort();
+    if (signal?.aborted) cancel();
+    else signal?.addEventListener('abort', cancel, { once: true });
     const timer = setTimeout(() => ctrl.abort(), timeout);
     try {
       const res = await fetch(path, {
@@ -110,6 +114,7 @@
       throw e;
     } finally {
       clearTimeout(timer);
+      signal?.removeEventListener('abort', cancel);
     }
   }
 
@@ -627,6 +632,7 @@
   }
 
   async function openConv(id, push = true) {
+    if (S.convId !== id) closeDiffSheet();
     closeChatSettings();
     endComposerComposition();
     if (S.convId) {
@@ -663,7 +669,7 @@
     $('#panels').innerHTML = '';
     updateComposer();
     try {
-      const data = await api('/api/conversation?id=' + encodeURIComponent(id) + '&limit=30&light=1&compact=1', { timeout: 30000 });
+      const data = await api('/api/conversation?id=' + encodeURIComponent(id) + '&limit=30&light=1' + MOBILE_COMPACT, { timeout: 30000 });
       if (seq !== S.loadSeq || S.convId !== id) return;
       renderConversation(data);
       try {
@@ -679,6 +685,7 @@
   }
 
   function closeChat(push = true) {
+    closeDiffSheet();
     closeChatSettings();
     endComposerComposition();
     S.loadSeq++;
@@ -1553,26 +1560,36 @@
   /** 按路径聚合本轮/本条消息里的编辑记录 */
   function aggregateEdits(blocks) {
     const map = new Map();
+    const seen = new Set();
     for (const b of blocks || []) {
       if (!b || b.type !== 'tool_use') continue;
-      if (b.result != null && b.isError) continue;
-      const info = editToolInfo(b.name, b.input);
+      if (b.isError) continue;
+      const summary = b.editSummary;
+      const info = summary || editToolInfo(b.name, b.input);
       if (!info) continue;
-      const key = info.path.replace(/\\/g, '/').toLowerCase();
+      const id = b.id || b.toolUseId;
+      if (id && seen.has(id)) continue;
+      if (id) seen.add(id);
+      const key = /^(?:[a-z]:|\\\\)/i.test(info.path) ? info.path.replace(/\\/g, '/').toLowerCase() : info.path;
       let cur = map.get(key);
       if (!cur) {
-        cur = { path: info.path, added: 0, removed: 0, edits: 0, changes: [] };
+        cur = { path: info.path, added: 0, removed: 0, edits: 0, records: [] };
         map.set(key, cur);
       }
       cur.added += info.added;
       cur.removed += info.removed;
       cur.edits += 1;
-      cur.changes.push(...editChanges(b.name, b.input));
+      if (summary) {
+        if (summary.hasDetails && id) cur.records.push({ id });
+      } else {
+        // 老服务已随工具块发送截断的正文；仅在打开这一行时整理这些改动。
+        cur.records.push({ legacy: b });
+      }
     }
     return [...map.values()];
   }
 
-  function diffRows(oldText, newText) {
+  function diffRows(oldText, newText, limit) {
     const a = splitLines(oldText);
     const b = splitLines(newText);
     let pre = 0;
@@ -1583,11 +1600,12 @@
     const aa = a.slice(pre, a.length - suf);
     const bb = b.slice(pre, b.length - suf);
     const rows = [];
-    for (let i = 0; i < pre; i++) rows.push({ type: 'same', text: a[i], oldNo: i + 1, newNo: i + 1 });
+    for (let i = 0; i < Math.min(pre, limit); i++) rows.push({ type: 'same', text: a[i], oldNo: i + 1, newNo: i + 1 });
+    if (rows.length >= limit) return rows;
     const mid = [];
     if (aa.length * bb.length > 160000 || aa.length + bb.length > 4000) {
-      for (let i = 0; i < aa.length; i++) mid.push({ type: 'del', text: aa[i], oldNo: pre + i + 1, newNo: null });
-      for (let j = 0; j < bb.length; j++) mid.push({ type: 'add', text: bb[j], oldNo: null, newNo: pre + j + 1 });
+      for (let i = 0; i < aa.length && rows.length + mid.length < limit; i++) mid.push({ type: 'del', text: aa[i], oldNo: pre + i + 1, newNo: null });
+      for (let j = 0; j < bb.length && rows.length + mid.length < limit; j++) mid.push({ type: 'add', text: bb[j], oldNo: null, newNo: pre + j + 1 });
     } else {
       const n = aa.length;
       const m = bb.length;
@@ -1616,7 +1634,7 @@
       while (j < m) mid.push({ type: 'add', text: bb[j], oldNo: null, newNo: pre + j + 1 }), j++;
     }
     rows.push(...mid);
-    for (let k = 0; k < suf; k++) {
+    for (let k = 0; k < suf && rows.length < limit; k++) {
       rows.push({
         type: 'same', text: a[a.length - suf + k],
         oldNo: a.length - suf + k + 1, newNo: b.length - suf + k + 1
@@ -1625,22 +1643,53 @@
     return rows;
   }
 
-  function openDiffSheet(f) {
-    const parts = artifactSplit(f.path);
-    $('#diffTitle').textContent = parts.name || '改动';
-    $('#diffMeta').textContent = `${f.path} · ${f.edits} 次修改 · +${f.added} -${f.removed}`;
-    const body = $('#diffBody');
-    body.innerHTML = '';
-    const changes = f.changes || [];
+  const editDetailCache = new Map();
+  let activeDiff;
+
+  async function readEditDetails(id, records, signal) {
+    const changes = [];
+    let remaining = 256 * 1024;
+    let truncated = false;
+    for (let i = 0; i < records.length && !truncated;) {
+      let batch;
+      if (records[i].legacy) {
+        const block = records[i++].legacy;
+        batch = editChanges(block.name, block.input);
+      } else {
+        const toolIds = [];
+        while (i < records.length && records[i].id && toolIds.length < 128) toolIds.push(records[i++].id);
+        const data = await api('/api/edit-diff', { method: 'POST', signal,
+          body: JSON.stringify({ id, toolIds }) });
+        if (!Array.isArray(data.changes)) throw new Error('服务未返回改动详情');
+        truncated = !!data.truncated;
+        batch = data.changes;
+      }
+      for (const c of batch) {
+        if (typeof c?.oldText !== 'string' || typeof c?.newText !== 'string') continue;
+        if (changes.length >= 200 || remaining <= 0) { truncated = true; break; }
+        const oldText = c.oldText.slice(0, remaining);
+        remaining -= oldText.length;
+        const newText = c.newText.slice(0, remaining);
+        remaining -= newText.length;
+        changes.push({ oldText, newText });
+        if (oldText.length < c.oldText.length || newText.length < c.newText.length) { truncated = true; break; }
+      }
+      if (i < records.length && (!remaining || changes.length >= 200)) truncated = true;
+    }
+    return { changes, truncated };
+  }
+
+  function renderEditDetails(body, { changes, truncated }) {
+    body.replaceChildren();
     if (!changes.length) {
       body.innerHTML = '<div class="diff-empty">没有可展示的行级改动</div>';
     } else {
       let left = 1500;
-      changes.forEach((c, idx) => {
+      for (const [idx, c] of changes.entries()) {
+        if (left <= 0) { truncated = true; break; }
         const head = el('div', 'diff-hunk', changes.length > 1 ? `第 ${idx + 1} 次修改` : '改动');
         body.appendChild(head);
-        if (left <= 0) return;
-        const rows = diffRows(c.oldText, c.newText);
+        const rows = diffRows(c.oldText, c.newText, left + 1);
         const shown = rows.slice(0, left);
         left -= shown.length;
         const html = shown.map(r => {
@@ -1653,16 +1702,51 @@
         }).join('');
         body.insertAdjacentHTML('beforeend', html);
         if (rows.length > shown.length) {
-          body.insertAdjacentHTML('beforeend', '<div class="diff-more">改动太长，只显示前 1500 行</div>');
+          truncated = true;
           left = 0;
         }
-      });
+      }
     }
+    if (truncated) body.appendChild(el('div', 'diff-more', '改动较长，当前显示部分内容'));
+  }
+
+  async function openDiffSheet(f, id) {
+    if (!id || id !== S.convId || activeDiff?.file === f) return;
+    activeDiff?.controller.abort();
+    const controller = new AbortController();
+    activeDiff = { controller, file: f };
+    const parts = artifactSplit(f.path);
+    $('#diffTitle').textContent = parts.name || '改动';
+    $('#diffMeta').textContent = `${f.path} · ${f.edits} 次修改 · +${f.added} -${f.removed}`;
+    const body = $('#diffBody');
+    body.replaceChildren(el('div', 'diff-empty', '正在加载改动…'));
     $('#diffSheet').hidden = false;
+    const cacheable = f.records.length && f.records.every(r => r.id);
+    const cacheKey = cacheable && JSON.stringify([id, ...f.records.map(r => r.id)]);
+    try {
+      const data = (cacheKey && editDetailCache.get(cacheKey)) || await readEditDetails(id, f.records, controller.signal);
+      if (controller.signal.aborted || S.convId !== id) return;
+      if (cacheKey && data.changes.length) {
+        editDetailCache.delete(cacheKey);
+        editDetailCache.set(cacheKey, data);
+        if (editDetailCache.size > 8) editDetailCache.delete(editDetailCache.keys().next().value);
+      }
+      renderEditDetails(body, data);
+    } catch (e) {
+      if (controller.signal.aborted || S.convId !== id) return;
+      activeDiff = null;
+      const retry = el('button', 'btn', '重试');
+      retry.type = 'button';
+      retry.onclick = () => openDiffSheet(f, id);
+      body.replaceChildren(el('div', 'diff-empty', '读取改动失败：' + e.message), retry);
+    }
   }
 
   function closeDiffSheet() {
+    activeDiff?.controller.abort();
+    activeDiff = null;
     $('#diffSheet').hidden = true;
+    $('#diffBody').replaceChildren();
   }
 
   function artifactSplit(p) {
@@ -2210,7 +2294,8 @@
     else toast('下载失败：' + (error || '未知错误'), 'err');
   };
 
-  function editCardNode(files) {
+  function editCardNode(files, expanded = false) {
+    const convId = S.convId;
     let add = 0;
     let del = 0;
     for (const f of files) {
@@ -2228,12 +2313,13 @@
     const list = el('div', 'edit-list');
     const hiddenRows = [];
     files.forEach((f, i) => {
-      const row = el('div', 'edit-row');
+      const row = el('button', 'edit-row');
+      row.type = 'button';
       if (i >= 3) {
-        row.hidden = true;
+        row.hidden = !expanded;
         hiddenRows.push(row);
       }
-      const p = el('div', 'edit-path');
+      const p = el('span', 'edit-path');
       const parts = artifactSplit(f.path);
       if (parts.dir) {
         const sep = /[\\/]$/.test(parts.dir) ? '' : '/';
@@ -2244,39 +2330,19 @@
       const stat = el('span', 'edit-stat');
       stat.innerHTML = `<span class="edit-add">+${f.added}</span> <span class="edit-del">-${f.removed}</span>`;
       row.appendChild(stat);
-      const hasDiff = Array.isArray(f.changes) && f.changes.length > 0;
-      row.title = hasDiff ? '查看改动' : '打开 ' + f.path;
-      row.style.cursor = 'pointer';
-      if (hasDiff) row.classList.add('has-diff');
-      row.onclick = () => {
-        if (hasDiff) {
-          openDiffSheet(f);
-          return;
-        }
-        if (!openLocalFile({ path: f.path, name: parts.name, dir: parts.dir })) {
-          startDownload({ path: f.path, name: parts.name, dir: parts.dir }, null);
-        }
-      };
-      const open = el('button', 'edit-open', '打开');
-      open.type = 'button';
-      open.title = '打开 ' + f.path;
-      open.onclick = e => {
-        e.preventDefault();
-        e.stopPropagation();
-        if (!openLocalFile({ path: f.path, name: parts.name, dir: parts.dir })) {
-          startDownload({ path: f.path, name: parts.name, dir: parts.dir }, null);
-        }
-      };
-      row.appendChild(open);
+      row.title = '查看改动：' + f.path;
+      row.onclick = () => openDiffSheet(f, convId);
       list.appendChild(row);
     });
 
     if (hiddenRows.length) {
-      const more = el('button', 'edit-more', `展开全部 ${files.length} 个文件`);
+      const more = el('button', 'edit-more', expanded ? '收起' : `展开全部 ${files.length} 个文件`);
       more.type = 'button';
-      let open = false;
+      let open = expanded;
+      more.setAttribute('aria-expanded', String(open));
       more.onclick = () => {
         open = !open;
+        more.setAttribute('aria-expanded', String(open));
         for (const row of hiddenRows) row.hidden = !open;
         more.textContent = open ? '收起' : `展开全部 ${files.length} 个文件`;
       };
@@ -3646,6 +3712,7 @@
     const box = $('#liveTurn');
     if (!box || !S.live) return;
     const avatarState = liveAvatarAnims(box);
+    const editsExpanded = !!box.querySelector('.live-edits .edit-more[aria-expanded="true"]');
     box.innerHTML = '';
     S.liveEls.clear();
     resetLiveProcess();
@@ -3689,6 +3756,7 @@
       }
     }
 
+    updateLiveEdits(box, editsExpanded);
     const last = blocks[blocks.length - 1];
     if (last && last.type === 'tool_use') {
       setLiveProcessState(last.result != null ? (last.isError ? '失败' : '完成') : '运行中…');
@@ -3800,6 +3868,9 @@
       liveBlock.result = ev.content;
       liveBlock.isError = !!ev.isError;
       liveBlock.done = true;
+      if (liveBlock.editSummary || ['Edit', 'MultiEdit', 'Write', 'NotebookEdit'].includes(liveBlock.name)) {
+        updateLiveEdits($('#liveTurn'));
+      }
     }
     if (Array.isArray(ev.images) && ev.images.length) {
       // 连续读图会合并到同一张卡（imageCardKey 可能是更早的工具调用）
@@ -3809,6 +3880,17 @@
       upsertLiveImageCard(cardKey, ev.images);
     }
     setLiveProcessState(ev.isError ? '失败' : '完成');
+  }
+
+  function updateLiveEdits(box, expanded) {
+    if (!box || !S.live) return;
+    const old = box.querySelector('.live-edits');
+    const files = aggregateEdits(S.live.blocks.filter(b => b.done || b.result != null));
+    if (!files.length) { old?.remove(); return; }
+    const card = editCardNode(files, expanded ?? !!old?.querySelector('.edit-more[aria-expanded="true"]'));
+    card.classList.add('live-edits');
+    if (old) old.replaceWith(card);
+    else box.appendChild(card);
   }
 
   // ---------------------------------------------------------------- 运行状态行
@@ -4148,7 +4230,7 @@
       const loaded = S.conv && Array.isArray(S.conv.messages) ? S.conv.messages.length : 30;
       const limit = Math.max(30, Math.min(200, loaded + 10));
       const data = await api('/api/conversation?id=' + encodeURIComponent(id) +
-        '&limit=' + limit + '&light=1&compact=1', { timeout: 30000 });
+        '&limit=' + limit + '&light=1' + MOBILE_COMPACT, { timeout: 30000 });
       if (S.convId !== id || S.loadingOlder) return;
       mergeRefreshedConversation(data);
       renderConversation(data, true);
@@ -4183,7 +4265,7 @@
     convSyncBusy = true;
     try {
       const data = await api('/api/conversation?id=' + encodeURIComponent(id) +
-        '&limit=1&light=1&compact=1', { timeout: 8000 });
+        '&limit=1&light=1' + MOBILE_COMPACT, { timeout: 8000 });
       if (!S.convId || S.convId !== id) return;
       const remoteRunning = !!data.running;
       const localRunning = !!S.running;
@@ -4215,7 +4297,7 @@
       // 后台期间可能完成了一整轮任务，多拉一些历史，避免回前台只看到半截。
       const limit = Math.min(200, Math.max(60, loaded + 40));
       const data = await api('/api/conversation?id=' + encodeURIComponent(id) +
-        '&limit=' + limit + '&light=1&compact=1', { timeout: 15000 });
+        '&limit=' + limit + '&light=1' + MOBILE_COMPACT, { timeout: 15000 });
       if (S.convId !== id || seq !== S.loadSeq || S.loadingOlder) return;
       if (!data.running) {
         S.running = false;
@@ -4260,7 +4342,7 @@
     const wantId = S.convId;
     try {
       const data = await api('/api/conversation?id=' + encodeURIComponent(wantId) +
-        '&limit=1&light=1&compact=1', { timeout: 8000 });
+        '&limit=1&light=1' + MOBILE_COMPACT, { timeout: 8000 });
       if (!S.convId || S.convId !== wantId) return;
       if (!data.running) {
         if (S.running) {
@@ -4370,7 +4452,7 @@
     try {
       const data = await api('/api/conversation?id=' + encodeURIComponent(convId) +
         '&limit=' + OLDER_PAGE_LIMIT + '&before=' + encodeURIComponent(startAt) +
-        '&light=1&compact=1', { timeout: 30000 });
+        '&light=1' + MOBILE_COMPACT, { timeout: 30000 });
       // 加载期间切了对话、重新打开了同一对话，或已有更新的一次加载：丢弃旧结果，避免串页/重复。
       if (seq !== olderLoadSeq || S.convId !== convId || !S.conv
           || (S.conv.start || 0) !== startAt) return;
@@ -6335,7 +6417,7 @@
 
   function connect() {
     try { if (S.es) S.es.close(); } catch { /* ignore */ }
-    const es = new EventSource('/api/stream?token=' + encodeURIComponent(TOKEN) + '&compact=1');
+    const es = new EventSource('/api/stream?token=' + encodeURIComponent(TOKEN) + MOBILE_COMPACT);
     S.es = es;
     es.onopen = () => {
       clearTimeout(reconnectTimer);

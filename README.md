@@ -11,14 +11,15 @@
 电脑端使用方式：安装 1.2.0+ 的统一客户端，侧栏「手机连接」里开启访问并复制地址；
 手机 App 粘贴地址即可。同一 Wi-Fi 不需要 Tailscale 账号。
 
-## 最新 APK（2.4.157 精简 / 2.4.150 完整）
+## 最新 APK（2.4.158 精简 / 2.4.150 完整）
 
 - 完整包（新用户/未装环境）：`ClaudeWorkbench-full.apk`，2.4.150，202,873,948 字节。安装手机端环境后可在 App 内更新至本版。
   SHA-256：`86a6e52c2f2b571a1d1fedd3f20e1a553578c828964ea605c38a8eca84d6695a`
   下载：[2.4.150 完整包](https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.150/ClaudeWorkbench-full.apk)
-- 精简包（已装手机环境）：`ClaudeWorkbench-slim.apk`，2.4.157，8,813,558 字节。
-  SHA-256：`3996945b81893f9d0488a1034fd52443afee6a493b37954815572fc32ecf965d`
-  下载：[2.4.157 精简包](https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.157/ClaudeWorkbench-slim.apk)
+- 精简包（已装手机环境）：`ClaudeWorkbench-slim.apk`，2.4.158，8,817,728 字节。
+  SHA-256：`d981eb8818f3f2da056d8d4d671bf740cb8eadd7b8cdc98473c46ca8c251db37`
+  下载：[2.4.158 精简包](https://github.com/enneliang-stack/claude-workbench-remote/releases/download/v2.4.158/ClaudeWorkbench-slim.apk)
+- 2.4.158：打开对话时仅传输编辑摘要，点按「已编辑文件」中的某个文件才加载行级改动，支持目录外的文件和历史记录。
 - 2.4.157：手机本机区分任务成功、失败和停止，隐藏历史已丢失的空会话，保留真正的草稿。优化跨对话引用，修复部分输入法回车选词时提前发送的问题。
 - 2.4.156：减少手机页和本机服务的重复请求与扫描，改进会话、下载和输入草稿的保存，以及引擎停止和重试时的资源释放。
 - 2.4.150：手机页「还没有对话」空状态换成星形 logo，去掉背景方框。手机页资源版本 133，对应 PC 客户端 1.2.56。完整包仍为 2.4.148。

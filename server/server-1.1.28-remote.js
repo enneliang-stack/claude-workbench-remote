@@ -17,6 +17,7 @@ const crypto = require('crypto');
 const { fileURLToPath } = require('url');
 const { spawn, execFile } = require('child_process');
 const refDigest = require('./public/ref-digest.js');
+const { compactEdit, validToolIds, readEditDiff } = require('./edit-preview.js');
 
 const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, 'public');
@@ -2374,10 +2375,11 @@ function phoneTaskSnapshot() {
 
 function broadcast(ev) {
   if (sseClients.size === 0) return;
-  const payload = 'data: ' + JSON.stringify(ev) + '\n\n';
+  let payload;
   for (const [res, state] of sseClients) {
     try {
       if (!state.compact) {
+        if (!payload) payload = 'data: ' + JSON.stringify(ev) + '\n\n';
         res.write(payload);
         continue;
       }
@@ -2437,7 +2439,7 @@ function compactToolInput(input) {
   return out;
 }
 
-function compactToolBlock(b) {
+function compactToolBlock(b, lazyEdits) {
   if (!b || typeof b !== 'object') return b;
   const out = {
     key: b.key,
@@ -2448,28 +2450,30 @@ function compactToolBlock(b) {
     status: b.status,
     isError: b.isError
   };
-  if (b.input != null) out.input = compactToolInput(b.input);
+  const edit = lazyEdits && compactEdit(b);
+  if (edit) Object.assign(out, edit);
+  else if (b.input != null) out.input = compactToolInput(b.input);
   if (b.result != null) out.done = true;
   if (Array.isArray(b.images) && b.images.length) out.images = b.images;
   // 手机端过程只展示一行摘要，不接收工具输出。
   return out;
 }
 
-function compactBlock(b) {
+function compactBlock(b, lazyEdits) {
   if (!b || typeof b !== 'object') return b;
   if (b.type === 'thinking') {
     const t = b.thinking || b.text || '';
     const short = t.length > COMPACT_THINK_CHARS ? t.slice(0, COMPACT_THINK_CHARS) + '…' : t;
     return { type: 'thinking', thinking: short, text: short };
   }
-  if (b.type === 'tool_use') return compactToolBlock(b);
+  if (b.type === 'tool_use') return compactToolBlock(b, lazyEdits);
   return b;
 }
 
-function compactMessages(messages) {
+function compactMessages(messages, lazyEdits) {
   return (messages || []).map(m => {
     if (!m || m.role !== 'assistant' || !Array.isArray(m.blocks)) return m;
-    return { ...m, blocks: m.blocks.map(compactBlock).filter(Boolean) };
+    return { ...m, blocks: m.blocks.map(b => compactBlock(b, lazyEdits)).filter(Boolean) };
   });
 }
 
@@ -2478,6 +2482,7 @@ function compactEvent(ev, state) {
   const t = ev.t;
   if (t === 'run_start' || t === 'run_end') state.thinking.clear();
   if (t === 'delta') {
+    if (state.lazyEdits && ev.kind === 'input_json') return null;
     if (ev.kind !== 'thinking') return ev;
     const key = ev.key || '';
     const seen = state.thinking.get(key) || 0;
@@ -2495,11 +2500,11 @@ function compactEvent(ev, state) {
       state.thinking.set(ev.key || '', text.length);
       return { ...ev, block: { type: 'thinking', thinking: text, text } };
     }
-    if (b && b.type === 'tool_use') return { ...ev, block: compactToolBlock(b) };
+    if (b && b.type === 'tool_use') return { ...ev, block: compactToolBlock(b, state.lazyEdits) };
     return ev;
   }
   if (t === 'block_set') {
-    if (ev.block && ev.block.type === 'tool_use') return { ...ev, block: compactToolBlock(ev.block) };
+    if (ev.block && ev.block.type === 'tool_use') return { ...ev, block: compactToolBlock(ev.block, state.lazyEdits) };
     return ev;
   }
   if (t === 'tool_result') {
@@ -2508,9 +2513,9 @@ function compactEvent(ev, state) {
   return ev;
 }
 
-function compactLive(live) {
+function compactLive(live, lazyEdits) {
   if (!live) return live;
-  return { ...live, blocks: (live.blocks || []).map(compactBlock) };
+  return { ...live, blocks: (live.blocks || []).map(b => compactBlock(b, lazyEdits)) };
 }
 
 /** 计划任务是否还需要保持 CLI 进程存活（与状态面板、托盘提醒共用同一口径）。 */
@@ -4447,6 +4452,7 @@ async function handleApi(req, res, url) {
     res.write('retry: 3000\n\n');
     sseClients.set(res, {
       compact: url.searchParams.get('compact') === '1',
+      lazyEdits: url.searchParams.get('lazyEdits') === '1',
       thinking: new Map()
     });
     res.write('data: ' + JSON.stringify({ t: 'state_save_status', status: stateSaveStatus }) + '\n\n');
@@ -4460,6 +4466,28 @@ async function handleApi(req, res, url) {
     return;
   }
 
+  if (p === '/api/edit-diff' && req.method === 'POST') {
+    let body;
+    try { body = await readJson(req, 40 * 1024); }
+    catch (err) { return json(res, { error: err.message }, 400); }
+    if (typeof body?.id !== 'string' || !validToolIds(body.toolIds)) {
+      return json(res, { error: '无效的改动请求' }, 400);
+    }
+    const conv = lookupConv(body.id);
+    if (!conv) return json(res, { error: '会话不存在' }, 404);
+    let diff;
+    try {
+      diff = await readEditDiff(body.toolIds, runners.get(body.id)?.live?.blocks, async () => {
+        const file = await findSessionFile(body.id, conv.cwd);
+        return file ? (await readTranscript(file)).messages : [];
+      });
+    } catch (err) {
+      console.error('[edit-diff]', err.message);
+      return json(res, { error: '无法读取改动，请稍后重试。' }, 503);
+    }
+    return diff ? json(res, diff) : json(res, { error: '找不到这次改动' }, 404);
+  }
+
   if (p === '/api/conversation' && req.method === 'GET') {
     const id = url.searchParams.get('id');
     const conv = lookupConv(id);
@@ -4467,6 +4495,7 @@ async function handleApi(req, res, url) {
     const handoff = url.searchParams.get('handoff') === '1';
     const light = url.searchParams.get('light') === '1';
     const compact = url.searchParams.get('compact') === '1';
+    const lazyEdits = url.searchParams.get('lazyEdits') === '1';
     const limitParam = url.searchParams.get('limit');
     const polling = !handoff && limitParam === '1' && (light || compact) && !url.searchParams.has('before');
     const file = await findSessionFile(id, conv.cwd, polling);
@@ -4505,7 +4534,7 @@ async function handleApi(req, res, url) {
       hasMore = start > 0;
       messages = messages.slice(start, end);
     }
-    if (compact) messages = compactMessages(messages);
+    if (compact) messages = compactMessages(messages, lazyEdits);
     else if (light) messages = lightenMessages(messages);
 
     const s = state.conversations[id];
@@ -4528,7 +4557,7 @@ async function handleApi(req, res, url) {
       compacted,
       running,
       live: running && liveRunner
-        ? (compact ? compactLive(liveRunner.liveSnapshot()) : liveRunner.liveSnapshot())
+        ? (compact ? compactLive(liveRunner.liveSnapshot(), lazyEdits) : liveRunner.liveSnapshot())
         : null,
       file
     });

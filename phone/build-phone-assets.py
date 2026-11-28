@@ -344,6 +344,7 @@ def build_server():
 
     OUT.mkdir(parents=True, exist_ok=True)
     (OUT / "server.js").write_bytes(text.encode("utf-8"))
+    shutil.copyfile(SRC_SERVER.with_name("edit-preview.js"), OUT / "edit-preview.js")
     print(f"[patch] {OUT / 'server.js'} ({len(text)} bytes)")
 
 

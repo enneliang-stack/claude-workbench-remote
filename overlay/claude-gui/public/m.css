@@ -517,7 +517,10 @@ details.process[open] > summary::before { content: "▾"; }
 }
 .edit-title { font-weight: 600; }
 .edit-total { margin-left: auto; font: 11px ui-monospace, Consolas, monospace; }
-.edit-row { display: flex; align-items: center; gap: 8px; padding: 7px 11px; }
+.edit-row {
+  display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 11px;
+  border: 0; background: transparent; text-align: left; cursor: pointer;
+}
 .edit-row + .edit-row { border-top: 1px solid var(--line); }
 .edit-path {
   flex: 1; min-width: 0; font-size: 11.5px; white-space: nowrap;
@@ -672,6 +675,7 @@ details.process[open] > summary::before { content: "▾"; }
 
 .live-turn { display: flex; flex-direction: column; gap: 12px; }
 .live-turn:empty { display: none; }
+.live-turn > .live-edits { order: 1; }
 .load-older {
   align-self: center; border: 0; background: transparent;
   color: var(--muted); font-size: 12px; padding: 8px 12px;
@@ -1367,13 +1371,6 @@ body { line-height: 1.58; }
 .diff-row.del { background: rgba(224, 118, 107, .10); }
 .diff-row.del .diff-sign { color: var(--red); }
 .diff-more, .diff-empty { padding: 12px; color: var(--faint); font-size: 12px; }
-.edit-open {
-  flex: 0 0 auto; border: 1px solid var(--line); background: transparent;
-  color: var(--muted); border-radius: 6px; padding: 2px 7px;
-  font-size: 10.5px; cursor: pointer;
-}
-.edit-open:active { background: #1b2028; }
-.edit-row.has-diff { cursor: pointer; }
 @media (min-width: 720px) {
   .diff-card { max-width: 900px; }
 }
